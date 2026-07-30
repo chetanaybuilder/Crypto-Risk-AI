@@ -164,6 +164,17 @@ python app.py
 
 ---
 
+⚠️ Demo Environment
+
+This project is deployed on Render's free tier using SQLite.
+
+• Registration and login are fully functional.
+• AI cryptocurrency analysis works normally.
+• Prediction history and user accounts may reset after server restarts.
+
+Production deployments should use PostgreSQL.
+
+
 # 📜 License
 
 This project is licensed under the MIT License.
