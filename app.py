@@ -49,7 +49,11 @@ logging.basicConfig(
 # Database
 # ----------------------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DATABASE = os.path.join(BASE_DIR,"instance", "crypto.db")
+
+INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
+os.makedirs(INSTANCE_DIR, exist_ok=True)
+
+DATABASE = os.path.join(INSTANCE_DIR, "crypto.db")
 
 
 def get_db():
