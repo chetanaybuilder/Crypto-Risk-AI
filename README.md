@@ -8,7 +8,7 @@ CryptoRisk AI enables users to securely analyze cryptocurrency assets, receive A
 
 ## 🌐 Live Demo
 
-> Coming Soon (Render)
+https://crypto-risk-ai.onrender.com
 
 ---
 
