@@ -1,0 +1,391 @@
+"""Flask application for AI-powered cryptocurrency risk analysis.
+
+The app manages user authentication, stores prediction history in SQLite,
+and generates AI-based market insights with Gemini.
+"""
+
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from werkzeug.security import generate_password_hash, check_password_hash
+from google import genai
+from dotenv import load_dotenv
+import sqlite3
+import os
+import logging
+
+# ----------------------------
+# Load Environment Variables
+# ----------------------------
+# Load secrets and local settings from a .env file so sensitive values
+# remain out of the source code.
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY is missing. Please create a .env file.")
+
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+# ----------------------------
+# Flask App
+# ----------------------------
+app = Flask(__name__)
+app.secret_key = SECRET_KEY
+
+# Session Security
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+# ----------------------------
+# Logging
+# ----------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+# ----------------------------
+# Database
+# ----------------------------
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+DATABASE = os.path.join(BASE_DIR,"instance", "crypto.db")
+
+
+def get_db():
+    """Create and return a SQLite database connection with row access."""
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """Initialize the SQLite schema for users and predictions if missing."""
+    with get_db() as conn:
+
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
+        )
+        """)
+
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS predictions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_symbol TEXT NOT NULL,
+            trend TEXT NOT NULL,
+            risk_score TEXT NOT NULL,
+            predicted_price TEXT,
+            summary TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """)
+
+        conn.commit()
+
+
+init_db()
+
+# ----------------------------
+# Helper Functions
+# ----------------------------
+
+def validate_password(password):
+    """Ensure the password meets the minimum security requirements."""
+    return len(password) >= 8
+
+
+def validate_username(username):
+    """Ensure the username meets the minimum length requirement."""
+    return len(username) >= 3
+
+
+# ----------------------------
+# Home
+# ----------------------------
+@app.route("/")
+def home():
+    """Render the landing page and redirect logged-in users to the dashboard."""
+
+    if "user_id" in session:
+        return redirect(url_for("dashboard"))
+
+    return render_template("index.html")
+
+
+# ----------------------------
+# Register
+# ----------------------------
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """Handle user registration and create a new account in the database."""
+
+    if request.method == "POST":
+
+        username = request.form.get("username", "").strip()
+
+        email = request.form.get("email", "").strip().lower()
+
+        password = request.form.get("password", "")
+
+        if not username or not email or not password:
+
+            flash("Please fill all fields.", "danger")
+
+            return render_template("register.html")
+
+        if not validate_username(username):
+
+            flash("Username must be at least 3 characters.", "danger")
+
+            return render_template("register.html")
+
+        if not validate_password(password):
+
+            flash("Password must contain at least 8 characters.", "danger")
+
+            return render_template("register.html")
+
+        hashed_password = generate_password_hash(password)
+
+        try:
+
+            with get_db() as conn:
+
+                conn.execute(
+                    """
+                    INSERT INTO users(username,email,password)
+                    VALUES(?,?,?)
+                    """,
+                    (username, email, hashed_password)
+                )
+
+                conn.commit()
+
+            flash("Account created successfully. Please login.", "success")
+
+            return redirect(url_for("login"))
+
+        except sqlite3.IntegrityError:
+
+            flash("Email already exists.", "danger")
+
+        except Exception:
+
+            logging.exception("Register Error")
+
+            flash("Something went wrong.", "danger")
+
+    return render_template("register.html")
+
+
+# ----------------------------
+# Login
+# ----------------------------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """Authenticate users and establish their session on successful login."""
+
+    if request.method == "POST":
+
+        email = request.form.get("email", "").strip().lower()
+
+        password = request.form.get("password", "")
+
+        if not email or not password:
+
+            flash("Please fill all fields.", "danger")
+
+            return render_template("login.html")
+
+        with get_db() as conn:
+
+            user = conn.execute(
+                "SELECT * FROM users WHERE email=?",
+                (email,)
+            ).fetchone()
+
+        if user and check_password_hash(user["password"], password):
+
+            session["user_id"] = user["id"]
+
+            session["username"] = user["username"]
+
+            flash(f"Welcome back, {user['username']}!", "success")
+
+            return redirect(url_for("dashboard"))
+
+        flash("Invalid email or password.", "danger")
+
+    return render_template("login.html")
+
+# ----------------------------
+# Dashboard
+# ----------------------------
+@app.route("/dashboard", methods=["GET", "POST"])
+def dashboard():
+    """Render the dashboard and generate AI-powered crypto analysis for the user."""
+
+    if "user_id" not in session:
+        flash("Please login first.", "warning")
+        return redirect(url_for("login"))
+
+    latest_analysis = None
+
+    if request.method == "POST":
+
+        token_symbol = request.form.get("token_symbol", "").strip().upper()
+
+        if not token_symbol:
+
+            flash("Please enter a token symbol.", "danger")
+            return redirect(url_for("dashboard"))
+
+        if len(token_symbol) > 15:
+
+            flash("Invalid token symbol.", "danger")
+            return redirect(url_for("dashboard"))
+
+        if not client:
+
+            flash("Gemini API is not configured.", "danger")
+            return redirect(url_for("dashboard"))
+
+        prompt = f"""
+You are an institutional cryptocurrency analyst.
+
+Analyze the cryptocurrency ticker:
+
+{token_symbol}
+
+Respond ONLY in this exact format.
+
+Trend: Bullish/Bearish/Neutral
+
+Risk Score: Low/Medium/High/Extreme
+
+Predicted Price: $0.00
+
+Summary:
+Write only two professional sentences explaining the outlook.
+"""
+
+        try:
+
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+
+            result = response.text.strip()
+
+            trend = "Unknown"
+            risk = "Unknown"
+            predicted_price = "N/A"
+            summary = ""
+
+            for line in result.split("\n"):
+
+                if line.startswith("Trend:"):
+                    trend = line.replace("Trend:", "").strip()
+
+                elif line.startswith("Risk Score:"):
+                    risk = line.replace("Risk Score:", "").strip()
+
+                elif line.startswith("Predicted Price:"):
+                    predicted_price = line.replace("Predicted Price:", "").strip()
+
+                elif line.startswith("Summary:"):
+                    summary = line.replace("Summary:", "").strip()
+
+            if not summary:
+                summary = result
+
+            with get_db() as conn:
+
+                conn.execute(
+                    """
+                    INSERT INTO predictions
+                    (
+                        user_id,
+                        token_symbol,
+                        trend,
+                        risk_score,
+                        predicted_price,
+                        summary
+                    )
+                    VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        session["user_id"],
+                        token_symbol,
+                        trend,
+                        risk,
+                        predicted_price,
+                        summary
+                    )
+                )
+
+                conn.commit()
+
+            latest_analysis = {
+                "token": token_symbol,
+                "trend": trend,
+                "risk": risk,
+                "price": predicted_price,
+                "summary": summary
+            }
+
+        except Exception:
+
+            logging.exception("Gemini Error")
+
+            flash("Unable to generate analysis.", "danger")
+
+    with get_db() as conn:
+
+        history = conn.execute(
+            """
+            SELECT *
+            FROM predictions
+            WHERE user_id=?
+            ORDER BY created_at DESC
+            """,
+            (session["user_id"],)
+        ).fetchall()
+
+    return render_template(
+        "dashboard.html",
+        username=session["username"],
+        latest=latest_analysis,
+        history=history
+    )
+
+
+# ----------------------------
+# Logout
+# ----------------------------
+@app.route("/logout")
+def logout():
+    """Clear the active session and return the user to the login page."""
+
+    session.clear()
+
+    flash("Logged out successfully.", "success")
+
+    return redirect(url_for("login"))
+
+
+
+
+# ----------------------------
+# Run App
+# ----------------------------
+if __name__ == "__main__":
+
+    app.run(debug=False)
