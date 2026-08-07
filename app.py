@@ -91,7 +91,9 @@ def init_db():
     conn.close()
 
 
-init_db()
+# Defer DB initialization until the app is running to avoid import-time
+# connection attempts (useful on hosting platforms without a local Postgres).
+# The real initialization will run before the first request is handled.
 
 # ----------------------------
 # Helper Functions
@@ -387,5 +389,13 @@ def logout():
 # ----------------------------
 # Run App
 # ----------------------------
+# Initialize DB on first request (avoids failing at import time)
+@app.before_first_request
+def initialize_database():
+    try:
+        init_db()
+    except Exception:
+        logging.exception("Database initialization skipped due to connection error.")
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
