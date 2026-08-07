@@ -1,6 +1,6 @@
 # 🚀 CryptoRisk AI
 
-AI-powered cryptocurrency risk intelligence platform built with **Python, Flask, SQLite, and Google Gemini AI**.
+AI-powered cryptocurrency risk intelligence platform built with **Python, Flask, PostgreSQL, and Google Gemini AI**.
 
 CryptoRisk AI enables users to securely analyze cryptocurrency assets, receive AI-generated market insights, and maintain a personal history of predictions through a clean web dashboard.
 
@@ -51,7 +51,7 @@ soon
 - 📝 Professional Market Summary
 - 📊 Prediction History Dashboard
 - 🔒 Password Hashing
-- 💾 SQLite Database Storage
+- 💾 PostgreSQL Database Storage
 - 🔑 Environment Variable Security
 - 📱 Responsive Dark UI
 
@@ -75,7 +75,7 @@ soon
 
 ## Database
 
-- postgreSql
+- PostgreSQL
 
 ## Authentication
 
@@ -139,6 +139,7 @@ Create a `.env` file
 ```env
 SECRET_KEY=your_secret_key
 GEMINI_API_KEY=your_gemini_api_key
+DATABASE_URL=postgresql://username:password@host:port/database
 ```
 
 Run the application
@@ -148,6 +149,16 @@ python app.py
 ```
 
 ---
+
+## Render Deployment
+
+This project includes `render.yaml` and `Procfile` for deployment on Render.
+
+1. Create a new Python Web Service on Render.
+2. Connect your GitHub repository and choose the `main` branch.
+3. Add environment variables: `SECRET_KEY`, `GEMINI_API_KEY`, and `DATABASE_URL`.
+4. Render will build with `pip install -r requirements.txt` and start with `gunicorn app:app --bind 0.0.0.0:$PORT`.
+
 
 # 🚀 Future Improvements
 
@@ -166,13 +177,11 @@ python app.py
 
 ⚠️ Demo Environment
 
-This project is deployed on Render's free tier using SQLite.
+This project is built for Render with PostgreSQL. Use a managed PostgreSQL service or Render Postgres database and set `DATABASE_URL` to keep users and history persistent.
 
 • Registration and login are fully functional.
 • AI cryptocurrency analysis works normally.
-• Prediction history and user accounts may reset after server restarts.
-
-Production deployments should use PostgreSQL.
+• Prediction history and user accounts are stored in PostgreSQL.
 
 
 # 📜 License
