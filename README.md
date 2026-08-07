@@ -142,6 +142,15 @@ GEMINI_API_KEY=your_gemini_api_key
 DATABASE_URL=postgresql://username:password@host:port/database
 ```
 
+Instead of creating `.env` from scratch, copy the example and fill values:
+
+```bash
+cp .env.example .env
+# then edit `.env` and DO NOT commit it to Git
+```
+
+Ensure `.env` is listed in `.gitignore` so secrets are not pushed to GitHub.
+
 Run the application
 
 ```bash
