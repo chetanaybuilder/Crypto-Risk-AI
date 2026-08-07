@@ -8,7 +8,7 @@ CryptoRisk AI enables users to securely analyze cryptocurrency assets, receive A
 
 ## 🌐 Live Demo
 
-https://crypto-risk-ai.onrender.com
+soon
 
 ---
 
@@ -75,7 +75,7 @@ https://crypto-risk-ai.onrender.com
 
 ## Database
 
-- SQLite
+- postgreSql
 
 ## Authentication
 
