@@ -1,6 +1,6 @@
 """Flask application for AI-powered cryptocurrency risk analysis.
 
-The app manages user authentication, stores prediction history in SQLite,
+The app manages user authentication, stores prediction history in PostgreSQL,
 and generates AI-based market insights with Gemini.
 """
 
@@ -8,22 +8,25 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.security import generate_password_hash, check_password_hash
 from google import genai
 from dotenv import load_dotenv
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import os
 import logging
 
 # ----------------------------
 # Load Environment Variables
 # ----------------------------
-# Load secrets and local settings from a .env file so sensitive values
-# remain out of the source code.
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not SECRET_KEY:
     raise ValueError("SECRET_KEY is missing. Please create a .env file.")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL is missing. Please create a .env file.")
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
@@ -48,49 +51,44 @@ logging.basicConfig(
 # ----------------------------
 # Database
 # ----------------------------
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-
-INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
-os.makedirs(INSTANCE_DIR, exist_ok=True)
-
-DATABASE = os.path.join(INSTANCE_DIR, "crypto.db")
-
 
 def get_db():
-    """Create and return a SQLite database connection with row access."""
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
+    """Create and return a PostgreSQL database connection with dict-style row access."""
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
 
 
 def init_db():
-    """Initialize the SQLite schema for users and predictions if missing."""
-    with get_db() as conn:
+    """Initialize the PostgreSQL schema for users and predictions if missing."""
+    conn = get_db()
+    cur = conn.cursor()
 
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS users(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        )
-        """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users(
+        id SERIAL PRIMARY KEY,
+        username TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL
+    )
+    """)
 
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS predictions(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            token_symbol TEXT NOT NULL,
-            trend TEXT NOT NULL,
-            risk_score TEXT NOT NULL,
-            predicted_price TEXT,
-            summary TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )
-        """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS predictions(
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        token_symbol TEXT NOT NULL,
+        trend TEXT NOT NULL,
+        risk_score TEXT NOT NULL,
+        predicted_price TEXT,
+        summary TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+    """)
 
-        conn.commit()
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 init_db()
@@ -132,58 +130,57 @@ def register():
     if request.method == "POST":
 
         username = request.form.get("username", "").strip()
-
         email = request.form.get("email", "").strip().lower()
-
         password = request.form.get("password", "")
 
         if not username or not email or not password:
-
             flash("Please fill all fields.", "danger")
-
             return render_template("register.html")
 
         if not validate_username(username):
-
             flash("Username must be at least 3 characters.", "danger")
-
             return render_template("register.html")
 
         if not validate_password(password):
-
             flash("Password must contain at least 8 characters.", "danger")
-
             return render_template("register.html")
 
         hashed_password = generate_password_hash(password)
 
+        conn = None
+
         try:
+            conn = get_db()
+            cur = conn.cursor()
 
-            with get_db() as conn:
+            cur.execute(
+                """
+                INSERT INTO users(username, email, password)
+                VALUES(%s, %s, %s)
+                """,
+                (username, email, hashed_password)
+            )
 
-                conn.execute(
-                    """
-                    INSERT INTO users(username,email,password)
-                    VALUES(?,?,?)
-                    """,
-                    (username, email, hashed_password)
-                )
-
-                conn.commit()
+            conn.commit()
+            cur.close()
 
             flash("Account created successfully. Please login.", "success")
-
             return redirect(url_for("login"))
 
-        except sqlite3.IntegrityError:
-
+        except psycopg2.errors.UniqueViolation:
+            if conn:
+                conn.rollback()
             flash("Email already exists.", "danger")
 
         except Exception:
-
+            if conn:
+                conn.rollback()
             logging.exception("Register Error")
-
             flash("Something went wrong.", "danger")
+
+        finally:
+            if conn:
+                conn.close()
 
     return render_template("register.html")
 
@@ -198,30 +195,30 @@ def login():
     if request.method == "POST":
 
         email = request.form.get("email", "").strip().lower()
-
         password = request.form.get("password", "")
 
         if not email or not password:
-
             flash("Please fill all fields.", "danger")
-
             return render_template("login.html")
 
-        with get_db() as conn:
+        conn = get_db()
+        cur = conn.cursor()
 
-            user = conn.execute(
-                "SELECT * FROM users WHERE email=?",
-                (email,)
-            ).fetchone()
+        cur.execute(
+            "SELECT * FROM users WHERE email=%s",
+            (email,)
+        )
+        user = cur.fetchone()
+
+        cur.close()
+        conn.close()
 
         if user and check_password_hash(user["password"], password):
 
             session["user_id"] = user["id"]
-
             session["username"] = user["username"]
 
             flash(f"Welcome back, {user['username']}!", "success")
-
             return redirect(url_for("dashboard"))
 
         flash("Invalid email or password.", "danger")
@@ -246,17 +243,14 @@ def dashboard():
         token_symbol = request.form.get("token_symbol", "").strip().upper()
 
         if not token_symbol:
-
             flash("Please enter a token symbol.", "danger")
             return redirect(url_for("dashboard"))
 
         if len(token_symbol) > 15:
-
             flash("Invalid token symbol.", "danger")
             return redirect(url_for("dashboard"))
 
         if not client:
-
             flash("Gemini API is not configured.", "danger")
             return redirect(url_for("dashboard"))
 
@@ -310,32 +304,35 @@ Write only two professional sentences explaining the outlook.
             if not summary:
                 summary = result
 
-            with get_db() as conn:
+            conn = get_db()
+            cur = conn.cursor()
 
-                conn.execute(
-                    """
-                    INSERT INTO predictions
-                    (
-                        user_id,
-                        token_symbol,
-                        trend,
-                        risk_score,
-                        predicted_price,
-                        summary
-                    )
-                    VALUES(?,?,?,?,?,?)
-                    """,
-                    (
-                        session["user_id"],
-                        token_symbol,
-                        trend,
-                        risk,
-                        predicted_price,
-                        summary
-                    )
+            cur.execute(
+                """
+                INSERT INTO predictions
+                (
+                    user_id,
+                    token_symbol,
+                    trend,
+                    risk_score,
+                    predicted_price,
+                    summary
                 )
+                VALUES(%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    session["user_id"],
+                    token_symbol,
+                    trend,
+                    risk,
+                    predicted_price,
+                    summary
+                )
+            )
 
-                conn.commit()
+            conn.commit()
+            cur.close()
+            conn.close()
 
             latest_analysis = {
                 "token": token_symbol,
@@ -348,20 +345,24 @@ Write only two professional sentences explaining the outlook.
         except Exception:
 
             logging.exception("Gemini Error")
-
             flash("Unable to generate analysis.", "danger")
 
-    with get_db() as conn:
+    conn = get_db()
+    cur = conn.cursor()
 
-        history = conn.execute(
-            """
-            SELECT *
-            FROM predictions
-            WHERE user_id=?
-            ORDER BY created_at DESC
-            """,
-            (session["user_id"],)
-        ).fetchall()
+    cur.execute(
+        """
+        SELECT *
+        FROM predictions
+        WHERE user_id=%s
+        ORDER BY created_at DESC
+        """,
+        (session["user_id"],)
+    )
+    history = cur.fetchall()
+
+    cur.close()
+    conn.close()
 
     return render_template(
         "dashboard.html",
@@ -379,17 +380,12 @@ def logout():
     """Clear the active session and return the user to the login page."""
 
     session.clear()
-
     flash("Logged out successfully.", "success")
-
     return redirect(url_for("login"))
-
-
 
 
 # ----------------------------
 # Run App
 # ----------------------------
 if __name__ == "__main__":
-
-    app.run(host="0.0.0.0",port=500)
+    app.run(host="0.0.0.0", port=5000)

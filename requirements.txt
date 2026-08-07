@@ -3,3 +3,4 @@ Werkzeug
 google-genai
 python-dotenv
 gunicorn
+psycopg2-binary
