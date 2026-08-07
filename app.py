@@ -54,13 +54,20 @@ logging.basicConfig(
 
 def get_db():
     """Create and return a PostgreSQL database connection with dict-style row access."""
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn
+    try:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        return conn
+    except Exception:
+        logging.exception("Database connection failed")
+        return None
 
 
 def init_db():
     """Initialize the PostgreSQL schema for users and predictions if missing."""
     conn = get_db()
+    if not conn:
+        logging.warning("Skipping DB init because no DB connection is available.")
+        return
     cur = conn.cursor()
 
     cur.execute("""
@@ -149,10 +156,12 @@ def register():
 
         hashed_password = generate_password_hash(password)
 
-        conn = None
+        conn = get_db()
+        if not conn:
+            flash("Database is currently unreachable. Try again later.", "danger")
+            return render_template("register.html")
 
         try:
-            conn = get_db()
             cur = conn.cursor()
 
             cur.execute(
@@ -170,19 +179,16 @@ def register():
             return redirect(url_for("login"))
 
         except psycopg2.errors.UniqueViolation:
-            if conn:
-                conn.rollback()
+            conn.rollback()
             flash("Email already exists.", "danger")
 
         except Exception:
-            if conn:
-                conn.rollback()
+            conn.rollback()
             logging.exception("Register Error")
             flash("Something went wrong.", "danger")
 
         finally:
-            if conn:
-                conn.close()
+            conn.close()
 
     return render_template("register.html")
 
@@ -204,6 +210,10 @@ def login():
             return render_template("login.html")
 
         conn = get_db()
+        if not conn:
+            flash("Database is currently unreachable. Try again later.", "danger")
+            return render_template("login.html")
+
         cur = conn.cursor()
 
         cur.execute(
@@ -350,21 +360,23 @@ Write only two professional sentences explaining the outlook.
             flash("Unable to generate analysis.", "danger")
 
     conn = get_db()
-    cur = conn.cursor()
+    history = []
+    if conn:
+        cur = conn.cursor()
 
-    cur.execute(
-        """
-        SELECT *
-        FROM predictions
-        WHERE user_id=%s
-        ORDER BY created_at DESC
-        """,
-        (session["user_id"],)
-    )
-    history = cur.fetchall()
+        cur.execute(
+            """
+            SELECT *
+            FROM predictions
+            WHERE user_id=%s
+            ORDER BY created_at DESC
+            """,
+            (session["user_id"],)
+        )
+        history = cur.fetchall()
 
-    cur.close()
-    conn.close()
+        cur.close()
+        conn.close()
 
     return render_template(
         "dashboard.html",
