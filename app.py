@@ -389,13 +389,28 @@ def logout():
 # ----------------------------
 # Run App
 # ----------------------------
-# Initialize DB on first request (avoids failing at import time)
-@app.before_first_request
-def initialize_database():
-    try:
-        init_db()
-    except Exception:
-        logging.exception("Database initialization skipped due to connection error.")
+# Initialize DB on first request using a before_request fallback
+# Some Flask builds (or minimal WSGI wrappers) may not expose
+# `before_first_request`, so use `before_request` with a lock to
+# perform one-time initialization safely.
+_db_initialized = False
+from threading import Lock
+_db_init_lock = Lock()
+
+
+@app.before_request
+def _ensure_db_initialized():
+    global _db_initialized
+    if _db_initialized:
+        return
+    with _db_init_lock:
+        if _db_initialized:
+            return
+        try:
+            init_db()
+            _db_initialized = True
+        except Exception:
+            logging.exception("Database initialization skipped due to connection error.")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
