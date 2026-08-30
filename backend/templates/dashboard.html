@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+    <meta
+        name="description"
+        content="CryptoRisk AI — AI-powered cryptocurrency risk intelligence terminal."
+    >
+    <title>CryptoRisk AI — Intelligence Terminal</title>
+    <!-- =====================================================
+         FONTS
+    ====================================================== -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap"
+        rel="stylesheet"
+    >
+    <!-- =====================================================
+         MAIN CSS
+    ====================================================== -->
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+</head>
+<body class="dashboard-page">
+    <!-- =====================================================
+         3D AMBIENT SPACE
+    ====================================================== -->
+    <div class="scene">
+        <div class="scene-glow scene-glow-one"></div>
+        <div class="scene-glow scene-glow-two"></div>
+        <div class="scene-glow scene-glow-three"></div>
+        <div class="floating-object object-one"></div>
+        <div class="floating-object object-two"></div>
+        <div class="floating-object object-three"></div>
+        <div class="floating-object object-four"></div>
+        <div class="floating-object object-five"></div>
+        <div class="grid-background"></div>
+    </div>
+    <!-- =====================================================
+         NAVBAR
+    ====================================================== -->
+    <header class="dashboard-navbar">
+        <a
+            href="{{ url_for('dashboard') }}"
+            class="brand"
+        >
+            <div class="brand-mark">
+                CR
+            </div>
+            <div class="brand-name">
+                CryptoRisk<span> AI</span>
+            </div>
+        </a>
+        <div class="dashboard-live-status">
+            <span class="status-dot"></span>
+            <span>
+                AI INTELLIGENCE
+            </span>
+        </div>
+        <div class="user-info">
+            {% if picture %}
+                <img
+                    src="{{ picture }}"
+                    alt="Profile"
+                    class="user-avatar"
+                >
+            {% else %}
+                <div class="user-avatar user-avatar-fallback">
+                    {{ name[:1]|upper }}
+                </div>
+            {% endif %}
+            <span class="user-name">
+                {{ name }}
+            </span>
+            <a
+                href="{{ url_for('logout') }}"
+                class="logout-btn"
+            >
+                Logout
+            </a>
+        </div>
+    </header>
+    <!-- =====================================================
+         MAIN TERMINAL
+    ====================================================== -->
+    <main class="dashboard-container">
+        <!-- =================================================
+             HERO
+        ================================================== -->
+        <section class="terminal-header">
+            <div class="terminal-copy">
+                <div class="terminal-eyebrow">
+                    CRYPTORISK AI / INTELLIGENCE TERMINAL
+                </div>
+                <h1>
+                    Understand the risk
+                    <span>before the noise.</span>
+                </h1>
+                <p>
+                    Transform a cryptocurrency symbol into a structured,
+                    AI-powered risk intelligence report.
+                </p>
+            </div>
+            <div class="terminal-status">
+                <span class="status-dot"></span>
+                <div>
+                    <strong>
+                        AI ENGINE
+                    </strong>
+                    <small>
+                        READY
+                    </small>
+                </div>
+            </div>
+        </section>
+        <!-- =================================================
+             ANALYSIS CARD
+        ================================================== -->
+        <section class="search-card">
+            <div class="search-card-top">
+                <div>
+                    <span class="search-label">
+                        NEW ANALYSIS
+                    </span>
+                    <h2>
+                        Analyze a cryptocurrency
+                    </h2>
+                    <p>
+                        Enter a ticker and generate a structured
+                        cryptocurrency risk intelligence report.
+                    </p>
+                </div>
+                <div class="search-terminal-icon">
+                    ◈
+                </div>
+            </div>
+            <form
+                method="POST"
+                action="{{ url_for('dashboard') }}"
+                id="analysis-form"
+            >
+                <div class="search-input-wrap">
+                    <span class="search-prefix">
+                        $
+                    </span>
+                    <input
+                        type="text"
+                        name="token_symbol"
+                        id="token-symbol"
+                        placeholder="BTC"
+                        maxlength="15"
+                        autocomplete="off"
+                        spellcheck="false"
+                        required
+                    >
+                    <span class="input-status">
+                        READY
+                    </span>
+                </div>
+                <button
+                    type="submit"
+                    class="analyze-button"
+                    id="analyze-button"
+                >
+                    <span class="button-text">
+                        Analyze
+                    </span>
+                    <span class="button-arrow">
+                        →
+                    </span>
+                </button>
+            </form>
+            <!-- =============================================
+                 PREMIUM ANALYSIS PROGRESS
+            ============================================== -->
+            <div
+                class="analysis-progress"
+                id="analysis-progress"
+                aria-hidden="true"
+            >
+                <div class="progress-top">
+                    <div class="progress-status">
+                        <span class="progress-pulse"></span>
+                        <span id="progress-title">
+                            Initializing intelligence engine
+                        </span>
+                    </div>
+                    <span
+                        class="progress-percent"
+                        id="progress-percent"
+                    >
+                        0%
+                    </span>
+                </div>
+                <div class="progress-track">
+                    <div
+                        class="progress-fill"
+                        id="progress-fill"
+                    ></div>
+                    <div class="progress-shine"></div>
+                </div>
+                <div class="progress-steps">
+                    <span
+                        class="progress-step active"
+                        data-step="1"
+                    >
+                        <i></i>
+                        INPUT
+                    </span>
+                    <span
+                        class="progress-step"
+                        data-step="2"
+                    >
+                        <i></i>
+                        AI ENGINE
+                    </span>
+                    <span
+                        class="progress-step"
+                        data-step="3"
+                    >
+                        <i></i>
+                        ANALYSIS
+                    </span>
+                    <span
+                        class="progress-step"
+                        data-step="4"
+                    >
+                        <i></i>
+                        REPORT
+                    </span>
+                </div>
+            </div>
+        </section>
+        <!-- =================================================
+             FLASH MESSAGES
+        ================================================== -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="dashboard-messages">
+                    {% for category, message in messages %}
+                        <div class="flash {{ category }}">
+                            <span class="flash-icon">
+                                {% if category == "danger" %}
+                                    !
+                                {% elif category == "warning" %}
+                                    !
+                                {% else %}
+                                    ✓
+                                {% endif %}
+                            </span>
+                            <span>
+                                {{ message }}
+                            </span>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        <!-- =================================================
+             LATEST REPORT
+        ================================================== -->
+        {% if latest %}
+        <section class="intelligence-report">
+            <!-- =============================================
+                 REPORT HEADER
+            ============================================== -->
+            <div class="report-header">
+                <div>
+                    <div class="report-label">
+                        AI RISK INTELLIGENCE
+                    </div>
+                    <div class="token-title-row">
+                        <h2>
+                            {{ latest.token }}
+                        </h2>
+                        <span class="analysis-live-pill">
+                            ANALYZED
+                        </span>
+                    </div>
+                </div>
+                <div class="report-meta">
+                    <span>
+                        STRUCTURED ANALYSIS
+                    </span>
+                    <span class="report-dot"></span>
+                    <span>
+                        GEMINI AI
+                    </span>
+                </div>
+            </div>
+            <!-- =============================================
+                 CORE METRICS
+            ============================================== -->
+            <div class="risk-overview">
+                <!-- RISK -->
+                <div class="risk-hero-card">
+                    <div class="metric-label">
+                        OVERALL RISK
+                    </div>
+                    <div class="risk-value {{ latest.risk|lower }}">
+                        {{ latest.risk }}
+                    </div>
+                    <div class="metric-description">
+                        AI-assessed uncertainty and downside exposure.
+                    </div>
+                </div>
+                <!-- TREND -->
+                <div class="metric-card">
+                    <div class="metric-label">
+                        MARKET OUTLOOK
+                    </div>
+                    <div
+                        class="metric-value trend-value {{ latest.trend|lower }}"
+                    >
+                        {{ latest.trend }}
+                    </div>
+                    <div class="metric-description">
+                        Analytical directional outlook.
+                    </div>
+                </div>
+                <!-- PRICE -->
+                <div class="metric-card">
+                    <div class="metric-label">
+                        REFERENCE PRICE
+                    </div>
+                    <div class="metric-value price-value">
+                        {{ latest.price }}
+                    </div>
+                    <div class="metric-description">
+                        Live market data is not connected.
+                    </div>
+                </div>
+            </div>
+            <!-- =============================================
+                 EXECUTIVE SUMMARY
+            ============================================== -->
+            <div class="report-section summary-section">
+                <div class="section-title-row">
+                    <div class="section-icon">
+                        ✦
+                    </div>
+                    <div>
+                        <span class="section-kicker">
+                            EXECUTIVE INTELLIGENCE
+                        </span>
+                        <h3>
+                            Summary
+                        </h3>
+                    </div>
+                </div>
+                <div class="summary-content">
+                    <p>
+                        {{ latest.summary }}
+                    </p>
+                </div>
+            </div>
+            <!-- =============================================
+                 PROBLEM SOLVED
+            ============================================== -->
+            <div class="problem-card">
+                <div class="problem-icon">
+                    ◎
+                </div>
+                <div class="problem-content">
+                    <span class="section-kicker">
+                        WHY THIS MATTERS
+                    </span>
+                    <h3>
+                        Problem this analysis solves
+                    </h3>
+                    <p>
+                        {{ latest.problem_solved }}
+                    </p>
+                </div>
+            </div>
+            <!-- =============================================
+                 RISKS + SIGNALS
+            ============================================== -->
+            <div class="intelligence-columns">
+                <!-- RISKS -->
+                <div class="report-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="section-kicker">
+                                DOWNSIDE
+                            </span>
+                            <h3>
+                                Key Risks
+                            </h3>
+                        </div>
+                        <span class="panel-number">
+                            {{ "%02d"|format(latest.key_risks|length) }}
+                        </span>
+                    </div>
+                    <div class="insight-list">
+                        {% for risk in latest.key_risks %}
+                            <div class="insight-item risk-item">
+                                <div class="insight-index">
+                                    {{ "%02d"|format(loop.index) }}
+                                </div>
+                                <div>
+                                    <h4>
+                                        {{ risk.title }}
+                                    </h4>
+                                    <p>
+                                        {{ risk.explanation }}
+                                    </p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <!-- SIGNALS -->
+                <div class="report-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="section-kicker">
+                                MARKET INTELLIGENCE
+                            </span>
+                            <h3>
+                                Key Signals
+                            </h3>
+                        </div>
+                        <span class="panel-number">
+                            {{ "%02d"|format(latest.key_signals|length) }}
+                        </span>
+                    </div>
+                    <div class="insight-list">
+                        {% for signal in latest.key_signals %}
+                            <div class="insight-item signal-item">
+                                <div class="insight-index">
+                                    {{ "%02d"|format(loop.index) }}
+                                </div>
+                                <div>
+                                    <h4>
+                                        {{ signal.title }}
+                                    </h4>
+                                    <p>
+                                        {{ signal.explanation }}
+                                    </p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <!-- =============================================
+                 WHAT TO WATCH
+            ============================================== -->
+            <div class="watch-card">
+                <div class="watch-header">
+                    <div>
+                        <span class="section-kicker">
+                            MONITOR
+                        </span>
+                        <h3>
+                            What to watch next
+                        </h3>
+                    </div>
+                    <div class="watch-icon">
+                        ◌
+                    </div>
+                </div>
+                <div class="watch-grid">
+                    {% for item in latest.watch_next %}
+                        <div class="watch-item">
+                            <span class="watch-number">
+                                {{ "%02d"|format(loop.index) }}
+                            </span>
+                            <span>
+                                {{ item }}
+                            </span>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <!-- =============================================
+                 DELETE CURRENT REPORT
+            ============================================== -->
+            {% if latest.id %}
+            <div class="report-actions">
+                <form
+                    method="POST"
+                    action="{{ url_for('delete_report', prediction_id=latest.id) }}"
+                    class="delete-report-form"
+                    onsubmit="return confirm('Delete this analysis report? This action cannot be undone.');"
+                >
+                    <button
+                        type="submit"
+                        class="delete-report-button"
+                    >
+                        <span class="delete-icon">
+                            ×
+                        </span>
+                        <span>
+                            Delete this report
+                        </span>
+                    </button>
+                </form>
+            </div>
+            {% endif %}
+            <!-- =============================================
+                 DISCLAIMER
+            ============================================== -->
+            <div class="analysis-disclaimer">
+                <span>
+                    AI-GENERATED ANALYSIS
+                </span>
+                <p>
+                    CryptoRisk AI provides educational risk intelligence,
+                    not financial advice. Cryptocurrency markets are
+                    volatile. Independently verify current market data
+                    before making decisions.
+                </p>
+            </div>
+        </section>
+        {% else %}
+        <!-- =================================================
+             EMPTY TERMINAL
+        ================================================== -->
+        <section class="empty-terminal">
+            <div class="empty-core">
+                <div class="empty-ring"></div>
+                <div class="empty-ring empty-ring-two"></div>
+                <div class="empty-core-inner">
+                    CR
+                </div>
+            </div>
+            <span class="section-kicker">
+                TERMINAL READY
+            </span>
+            <h2>
+                Your intelligence report
+                <span>starts here.</span>
+            </h2>
+            <p>
+                Enter a cryptocurrency above and CryptoRisk AI
+                will organize major risk factors, signals,
+                uncertainties, and areas worth monitoring.
+            </p>
+        </section>
+        {% endif %}
+        <!-- =================================================
+             HISTORY
+        ================================================== -->
+        {% if history %}
+        <section class="history-card">
+            <div class="history-header">
+                <div>
+                    <span class="section-kicker">
+                        YOUR ACTIVITY
+                    </span>
+                    <h2>
+                        Analysis history
+                    </h2>
+                </div>
+                <span class="history-count">
+                    {{ history|length }}
+                    REPORT{% if history|length != 1 %}S{% endif %}
+                </span>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>
+                                Asset
+                            </th>
+                            <th>
+                                Outlook
+                            </th>
+                            <th>
+                                Risk
+                            </th>
+                            <th>
+                                Price
+                            </th>
+                            <th>
+                                Time
+                            </th>
+                            <th>
+                                Action
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in history %}
+                        <tr>
+                            <td>
+                                <strong class="history-token">
+                                    {{ item.token_symbol }}
+                                </strong>
+                            </td>
+                            <td>
+                                <span class="{{ item.trend|lower }}">
+                                    {{ item.trend }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="{{ item.risk_score|lower }}">
+                                    {{ item.risk_score }}
+                                </span>
+                            </td>
+                            <td>
+                                {{ item.predicted_price or "N/A" }}
+                            </td>
+                            <td>
+                                {{ item.created_at.strftime("%d %b %Y · %H:%M") if item.created_at else "—" }}
+                            </td>
+                            <td>
+                                <form
+                                    method="POST"
+                                    action="{{ url_for('delete_report', prediction_id=item.id) }}"
+                                    class="history-delete-form"
+                                    onsubmit="return confirm('Delete this report? This action cannot be undone.');"
+                                >
+                                    <button
+                                        type="submit"
+                                        class="history-delete-button"
+                                        title="Delete report"
+                                        aria-label="Delete {{ item.token_symbol }} report"
+                                    >
+                                        <span>×</span>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {% endif %}
+        <!-- =================================================
+             FOOTER
+        ================================================== -->
+        <footer class="dashboard-footer">
+            <div class="footer-brand">
+                <div class="brand-mark">
+                    CR
+                </div>
+                <span>
+                    CryptoRisk AI
+                </span>
+            </div>
+            <span>
+                AI-powered cryptocurrency risk intelligence.
+            </span>
+        </footer>
+    </main>
+    <!-- =====================================================
+         DASHBOARD JAVASCRIPT
+    ====================================================== -->
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

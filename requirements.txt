@@ -1,6 +1,6 @@
 Flask
-Werkzeug
-google-genai
-python-dotenv
-gunicorn
+Authlib
 psycopg2-binary
+python-dotenv
+google-genai
+gunicorn
