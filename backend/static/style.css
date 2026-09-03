@@ -1449,6 +1449,8 @@ button {
    PREMIUM PROGRESS
    ========================================================= */
 .analysis-progress {
+    position: relative;
+    perspective: 900px;
     max-height: 0;
     overflow: hidden;
     opacity: 0;
@@ -1503,14 +1505,17 @@ button {
 }
 .progress-track {
     position: relative;
-    height: 9px;
+    height: 16px;
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 20px;
     background:
         rgba(255, 255, 255, 0.035);
+    transform: rotateX(12deg);
     box-shadow:
-        inset 0 0 15px rgba(0, 0, 0, 0.5);
+        inset 0 3px 8px rgba(0, 0, 0, 0.62),
+        0 10px 24px rgba(0, 0, 0, 0.28),
+        0 1px rgba(255, 255, 255, 0.12);
 }
 .progress-fill {
     position: relative;
@@ -1527,7 +1532,9 @@ button {
     background-size: 200% 100%;
     box-shadow:
         0 0 15px rgba(139, 92, 246, 0.65),
-        0 0 35px rgba(34, 211, 238, 0.25);
+        0 0 35px rgba(34, 211, 238, 0.25),
+        inset 0 2px rgba(255, 255, 255, 0.35),
+        inset 0 -3px rgba(0, 0, 0, 0.2);
     transition:
         width 1.2s cubic-bezier(.16,1,.3,1);
     animation:
@@ -1561,6 +1568,15 @@ button {
     transform: translateX(-100%);
     animation:
         progressShine 2.5s linear infinite;
+}
+.progress-track::before {
+    content: "";
+    position: absolute;
+    inset: 2px 0 auto;
+    height: 2px;
+    z-index: 2;
+    background: rgba(255, 255, 255, 0.2);
+    pointer-events: none;
 }
 .progress-steps {
     display: grid;
@@ -1610,6 +1626,76 @@ button {
     background: var(--purple);
     box-shadow:
         0 0 9px rgba(139, 92, 246, 0.7);
+}
+.analysis-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin-top: 18px;
+    padding: 15px 17px;
+    border: 1px solid rgba(251, 113, 133, 0.28);
+    border-radius: 15px;
+    background: linear-gradient(120deg, rgba(127, 29, 55, 0.24), rgba(255, 255, 255, 0.035));
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.08), 0 12px 35px rgba(0, 0, 0, 0.2);
+    color: #fecdd3;
+}
+.analysis-error strong {
+    display: block;
+    font-size: 12px;
+}
+.analysis-error p {
+    margin-top: 3px;
+    color: #fda4af;
+    font-size: 11px;
+}
+.retry-analysis-button {
+    flex: 0 0 auto;
+    padding: 9px 13px;
+    border: 1px solid rgba(251, 113, 133, 0.35);
+    border-radius: 10px;
+    background: rgba(251, 113, 133, 0.12);
+    color: #ffe4e6;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 800;
+    transition: transform 0.25s ease, background 0.25s ease;
+}
+.retry-analysis-button:hover {
+    transform: translateY(-2px);
+    background: rgba(251, 113, 133, 0.22);
+}
+.analysis-detail-grid {
+    margin-top: 18px;
+}
+.factor-list {
+    display: grid;
+    gap: 13px;
+}
+.factor-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: var(--text-soft);
+    font-size: 12px;
+}
+.factor-item span {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    margin-top: 7px;
+    border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 12px rgba(251, 113, 133, 0.65);
+}
+.key-insight-panel {
+    background: linear-gradient(145deg, rgba(34, 211, 238, 0.08), rgba(139, 92, 246, 0.07));
+}
+.key-insight {
+    color: #dbeafe;
+    font-family: var(--font-display);
+    font-size: 16px;
+    line-height: 1.55;
 }
 /* =========================================================
    FLASH MESSAGES
@@ -2626,6 +2712,13 @@ body.analysis-running .input-status {
     .progress-steps {
         grid-template-columns: repeat(2, 1fr);
         row-gap: 10px;
+    }
+    .analysis-error {
+        align-items: stretch;
+        flex-direction: column;
+    }
+    .retry-analysis-button {
+        width: 100%;
     }
     .risk-overview {
         grid-template-columns: 1fr;

@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Lock
 
 import psycopg2
@@ -28,6 +29,7 @@ from flask import (
     render_template,
     request,
     session,
+    jsonify,
     url_for,
 )
 from google import genai
@@ -611,7 +613,9 @@ The report must identify:
 5. Important positive/neutral market signals.
 6. What developments the user should monitor next.
 
-Return ONLY valid JSON.
+Return ONLY valid JSON. Analyze only the asset symbol and information
+available in this request. Do not invent prices, volume, news, market
+capitalization, confidence, or other unavailable measurements.
 
 Use EXACTLY this schema:
 
@@ -625,6 +629,14 @@ Use EXACTLY this schema:
 
     "summary":
         "A concise 2-3 sentence executive intelligence summary.",
+
+    "key_insight":
+        "One specific, decision-relevant insight grounded in the available information.",
+
+    "risk_factors": [
+        "A concise explanation of the first major risk driver.",
+        "A concise explanation of the second major risk driver."
+    ],
 
     "problem_solved":
         "Explain clearly what user problem CryptoRisk AI solves for this asset.",
@@ -680,6 +692,7 @@ QUALITY RULES:
 - Exactly 3 key risks.
 - Exactly 3 key signals.
 - Exactly 3 watch-next items.
+- Include 1-3 risk_factors and one key_insight.
 - Return JSON only.
 """
 
@@ -785,6 +798,28 @@ def normalize_report(data, token_symbol):
             "No executive summary was generated.",
         )
     ).strip()
+
+    key_insight = str(
+        data.get(
+            "key_insight",
+            "The available context is limited, so verify current market data before relying on this assessment.",
+        )
+    ).strip()
+
+    raw_factors = data.get("risk_factors", [])
+    risk_factors = []
+    if isinstance(raw_factors, list):
+        risk_factors = [
+            str(item).strip()
+            for item in raw_factors[:3]
+            if str(item).strip()
+        ]
+
+    if not risk_factors:
+        risk_factors = [
+            "Live price, volume, and liquidity data are unavailable to this analysis.",
+            "Broader market, regulatory, and project-specific conditions may change the risk quickly.",
+        ]
 
     problem_solved = str(
         data.get(
@@ -984,6 +1019,10 @@ def normalize_report(data, token_symbol):
 
         "summary": summary,
 
+        "key_insight": key_insight,
+
+        "risk_factors": risk_factors,
+
         "problem_solved": problem_solved,
 
         "key_risks": key_risks,
@@ -1099,10 +1138,17 @@ def dashboard():
                 token_symbol,
             )
 
-            response = client.models.generate_content(
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(
+                client.models.generate_content,
                 model="gemini-2.5-flash",
                 contents=prompt,
             )
+
+            try:
+                response = future.result(timeout=45)
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
             raw_result = (
                 response.text.strip()
@@ -1203,9 +1249,24 @@ def dashboard():
                     cursor.close()
                     connection.close()
 
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return jsonify({"success": True})
+
         # ==================================================
         # JSON ERROR
         # ==================================================
+
+        except TimeoutError:
+
+            logger.error("Gemini analysis timed out for %s.", token_symbol)
+
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return jsonify({
+                    "success": False,
+                    "message": "Analysis timed out. Please try again.",
+                }), 504
+
+            flash("Analysis timed out. Please try again.", "danger")
 
         except json.JSONDecodeError:
 
@@ -1213,10 +1274,13 @@ def dashboard():
                 "Gemini returned invalid JSON."
             )
 
-            flash(
-                "AI returned an invalid report. Please try again.",
-                "danger",
-            )
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return jsonify({
+                    "success": False,
+                    "message": "AI returned an invalid report. Please try again.",
+                }), 502
+
+            flash("AI returned an invalid report. Please try again.", "danger")
 
         # ==================================================
         # GEMINI QUOTA ERROR
@@ -1237,11 +1301,12 @@ def dashboard():
                     token_symbol,
                 )
 
-                flash(
-                    "Gemini free-tier quota is currently exhausted. "
-                    "Please wait and try again later.",
-                    "warning",
-                )
+                message = "Gemini is temporarily rate-limited. Please wait and try again."
+
+                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                    return jsonify({"success": False, "message": message}), 429
+
+                flash(message, "warning")
 
             else:
 
@@ -1249,10 +1314,12 @@ def dashboard():
                     "Gemini cryptocurrency analysis failed."
                 )
 
-                flash(
-                    "Unable to generate cryptocurrency analysis.",
-                    "danger",
-                )
+                message = "Unable to generate cryptocurrency analysis. Please try again."
+
+                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                    return jsonify({"success": False, "message": message}), 502
+
+                flash(message, "danger")
 
     # ======================================================
     # HISTORY
@@ -1304,6 +1371,19 @@ def dashboard():
 
             cursor.close()
             connection.close()
+
+    if not latest_analysis and history:
+        latest_row = history[0]
+        latest_analysis = normalize_report(
+            {
+                "trend": latest_row["trend"],
+                "risk_score": latest_row["risk_score"],
+                "predicted_price": latest_row["predicted_price"],
+                "summary": latest_row["summary"],
+            },
+            latest_row["token_symbol"],
+        )
+        latest_analysis["id"] = latest_row["id"]
 
     # ======================================================
     # RENDER

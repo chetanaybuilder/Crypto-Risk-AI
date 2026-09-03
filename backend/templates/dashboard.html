@@ -237,6 +237,13 @@
                     </span>
                 </div>
             </div>
+            <div class="analysis-error" id="analysis-error" role="alert" hidden>
+                <div>
+                    <strong>Analysis unavailable</strong>
+                    <p id="analysis-error-message">Please try again.</p>
+                </div>
+                <button type="button" class="retry-analysis-button" id="retry-analysis">Retry analysis</button>
+            </div>
         </section>
         <!-- =================================================
              FLASH MESSAGES
@@ -359,6 +366,30 @@
                     <p>
                         {{ latest.summary }}
                     </p>
+                </div>
+            </div>
+            <div class="intelligence-columns analysis-detail-grid">
+                <div class="report-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="section-kicker">RISK DRIVERS</span>
+                            <h3>What is driving risk</h3>
+                        </div>
+                    </div>
+                    <div class="factor-list">
+                        {% for factor in latest.risk_factors %}
+                            <div class="factor-item"><span></span><p>{{ factor }}</p></div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="report-panel key-insight-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="section-kicker">KEY INSIGHT</span>
+                            <h3>Signal to remember</h3>
+                        </div>
+                    </div>
+                    <p class="key-insight">{{ latest.key_insight }}</p>
                 </div>
             </div>
             <!-- =============================================
@@ -658,6 +689,6 @@
     <!-- =====================================================
          DASHBOARD JAVASCRIPT
     ====================================================== -->
-    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

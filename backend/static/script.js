@@ -15,30 +15,17 @@ document.addEventListener("DOMContentLoaded", () => {
         ".search-card form"
     );
 
-    const overlay = document.getElementById(
-        "analysisProgress"
-    );
+    const overlay = document.getElementById("analysis-progress");
 
-    const progressFill = document.getElementById(
-        "progressFill"
-    );
+    const progressFill = document.getElementById("progress-fill");
 
-    const progressPercent = document.getElementById(
-        "progressPercent"
-    );
+    const progressPercent = document.getElementById("progress-percent");
 
-    const progressMessage = document.getElementById(
-        "progressMessage"
-    );
+    const progressMessage = document.getElementById("progress-title");
 
-    const progressStage = document.getElementById(
-        "progressStage"
-    );
+    const progressStage = null;
 
-    const progressStatuses =
-        document.querySelectorAll(
-            ".progress-status"
-        );
+    const progressStatuses = document.querySelectorAll(".progress-step");
 
 
     /*
@@ -76,35 +63,35 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const progressStages = [
         {
-            percent: 18,
+            percent: 10,
             stage: "INITIALIZING",
             message:
                 "Preparing cryptocurrency intelligence request...",
             active: 0
         },
         {
-            percent: 38,
+            percent: 20,
             stage: "RESEARCHING",
             message:
                 "Building the asset risk intelligence context...",
             active: 0
         },
         {
-            percent: 62,
+            percent: 50,
             stage: "AI ANALYSIS",
             message:
                 "Gemini is evaluating risks and market signals...",
             active: 1
         },
         {
-            percent: 82,
+            percent: 80,
             stage: "STRUCTURING",
             message:
                 "Structuring your intelligence report...",
             active: 2
         },
         {
-            percent: 94,
+            percent: 90,
             stage: "SECURING",
             message:
                 "Saving your analysis securely...",
@@ -191,6 +178,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         let currentStage = 0;
 
+        clearInterval(progressTimer);
+
         updateProgress(
             progressStages[0]
         );
@@ -198,10 +187,7 @@ document.addEventListener("DOMContentLoaded", () => {
         progressTimer = setInterval(
             () => {
 
-                if (
-                    currentStage <
-                    progressStages.length - 1
-                ) {
+                if (currentStage < progressStages.length - 1) {
 
                     currentStage++;
 
@@ -209,12 +195,6 @@ document.addEventListener("DOMContentLoaded", () => {
                         progressStages[
                             currentStage
                         ]
-                    );
-
-                } else {
-
-                    clearInterval(
-                        progressTimer
                     );
 
                 }
@@ -234,9 +214,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (form) {
 
-        form.addEventListener(
-            "submit",
-            (event) => {
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
 
                 const button =
                     form.querySelector(
@@ -254,24 +233,8 @@ document.addEventListener("DOMContentLoaded", () => {
                         : "";
 
 
-                if (!token) {
+                if (!token || form.dataset.submitting === "true") {
                     return;
-                }
-
-
-                /*
-                Prevent double submissions.
-                */
-
-                if (
-                    form.dataset.submitting ===
-                    "true"
-                ) {
-
-                    event.preventDefault();
-
-                    return;
-
                 }
 
 
@@ -299,9 +262,73 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 startProgress();
 
-            }
-        );
+                const errorBox = document.getElementById("analysis-error");
+                const errorMessage = document.getElementById("analysis-error-message");
 
+                if (errorBox) {
+                    errorBox.hidden = true;
+                }
+
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 50000);
+
+                try {
+                    const response = await fetch(form.action || "/dashboard", {
+                        method: "POST",
+                        headers: {
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Content-Type": "application/x-www-form-urlencoded",
+                        },
+                        body: new URLSearchParams({ token_symbol: token }),
+                        signal: controller.signal,
+                    });
+
+                    const result = await response.json();
+
+                    if (!response.ok || !result.success) {
+                        throw new Error(result.message || "Analysis could not be completed.");
+                    }
+
+                    updateProgress({
+                        percent: 100,
+                        stage: "REPORT",
+                        message: "Intelligence report ready.",
+                        active: 3,
+                    });
+                    window.location.reload();
+                } catch (error) {
+                    clearInterval(progressTimer);
+                    document.body.classList.remove("analysis-running");
+                    overlay.classList.remove("is-visible");
+                    overlay.setAttribute("aria-hidden", "true");
+                    form.dataset.submitting = "false";
+                    button.disabled = false;
+                    button.classList.remove("is-loading");
+
+                    if (text) {
+                        text.textContent = "Analyze";
+                    }
+
+                    if (errorBox) {
+                        errorBox.hidden = false;
+                        errorMessage.textContent = error.name === "AbortError"
+                            ? "Analysis timed out. Please try again."
+                            : error.message;
+                    }
+                } finally {
+                    clearTimeout(timeout);
+                }
+            });
+
+    }
+
+    const retryButton = document.getElementById("retry-analysis");
+
+    if (retryButton && form) {
+        retryButton.addEventListener(
+            "click",
+            () => form.requestSubmit()
+        );
     }
 
 
