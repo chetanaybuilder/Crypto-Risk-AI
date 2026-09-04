@@ -49,7 +49,6 @@ Crypto-Risk-AI/
 ├── frontend/
 │   ├── dashboard.html       # Dashboard page
 │   ├── index.html           # Landing page
-│   ├── login.html           # Flask Google OAuth login page
 │   ├── script.js            # Client-side behavior
 │   └── style.css            # UI styles
 ├── backend/

@@ -1093,19 +1093,6 @@ def home():
 # COMPATIBILITY ROUTES
 # ==========================================================
 
-@app.route("/login")
-def login():
-
-    if "user_id" in session:
-        return redirect(
-            url_for("dashboard")
-        )
-
-    return redirect(
-        url_for("google_login")
-    )
-
-
 @app.route("/register")
 def register():
 
