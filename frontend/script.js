@@ -41,98 +41,9 @@ document.addEventListener("DOMContentLoaded", () => {
         );
 
 
-    async function fetchUserAudits() {
-
-        const historyBody = document.getElementById(
-            "history-tbody"
-        );
-
-        if (!historyBody || !window.supabaseClient) {
-            return;
-        }
-
-        const { data: userData, error: userError } =
-            await window.supabaseClient.auth.getUser();
-
-        if (userError) {
-            throw userError;
-        }
-
-        if (!userData.user) {
-            historyBody.innerHTML =
-                '<tr><td colspan="6">Sign in to view your audit history.</td></tr>';
-            return;
-        }
-
-        const { data: audits, error: auditError } =
-            await window.supabaseClient
-                .from("risk_audits")
-                .select("ticker, risk_score, outlook, price, created_at")
-                .eq("user_id", userData.user.id)
-                .order("created_at", { ascending: false });
-
-        if (auditError) {
-            throw auditError;
-        }
-
-        historyBody.innerHTML = "";
-
-        if (!audits || audits.length === 0) {
-            historyBody.innerHTML =
-                '<tr><td colspan="6">No saved audits yet.</td></tr>';
-        } else {
-            audits.forEach((audit) => {
-                const row = document.createElement("tr");
-                const createdAt = audit.created_at
-                    ? new Date(audit.created_at).toLocaleString()
-                    : "—";
-
-                row.innerHTML = `
-                    <td><strong class="history-token">${audit.ticker || "—"}</strong></td>
-                    <td><span class="${String(audit.outlook || "").toLowerCase()}">${audit.outlook || "—"}</span></td>
-                    <td><span class="${String(audit.risk_score || "").toLowerCase()}">${audit.risk_score ?? "—"}</span></td>
-                    <td>${audit.price ?? "—"}</td>
-                    <td>${createdAt}</td>
-                    <td>—</td>
-                `;
-
-                historyBody.appendChild(row);
-            });
-        }
-
-        const historyCount = document.querySelector(
-            ".history-count"
-        );
-
-        if (historyCount) {
-            historyCount.textContent =
-                `${audits ? audits.length : 0} REPORT${audits && audits.length === 1 ? "" : "S"}`;
-        }
-
-    }
-
-
-    fetchUserAudits().catch((error) => {
-        console.error("Unable to fetch user audits:", error);
-    });
-
-
     async function handleLogout() {
 
-        if (!window.supabaseClient) {
-            console.error("Supabase client is unavailable.");
-            return;
-        }
-
-        const { error } =
-            await window.supabaseClient.auth.signOut();
-
-        if (error) {
-            console.error("Unable to sign out:", error);
-            return;
-        }
-
-        window.location.href = "login.html";
+        window.location.href = "/logout";
 
     }
 
@@ -239,29 +150,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const reportRiskScore = document.getElementById(
         "report-risk-score"
     );
-
-    async function analyzeRisk(ticker) {
-
-        const response = await fetch(
-            "https://wcowwebrwowbcakngyeg.supabase.co/functions/v1/Analyze-Risk",
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${window.supabaseAnonKey}`
-                },
-                body: JSON.stringify({ ticker })
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(
-                `Risk analysis request failed (${response.status}).`
-            );
-        }
-
-        return response.json();
-    }
 
     const tickerMap = {
         BTC: "bitcoin",
@@ -562,14 +450,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     report.classList.add("is-loading");
                 }
 
-                analyzeRisk(token)
-                    .then((data) => {
-                        console.log("Risk analysis response:", data);
-                    })
-                    .catch((error) => {
-                        console.error("Risk analysis failed:", error);
-                    });
-
                 loadMarketData(token).catch(() => {
                     if (reportPrice) {
                         reportPrice.textContent = "—";
@@ -587,48 +467,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (report && initialTicker) {
         loadMarketData(initialTicker).catch(() => {});
     }
-            }
-        );
-
-    }
-
-
-    const financialAuditForm = document.getElementById(
-        "financial-audit-form"
-    );
-
-    if (financialAuditForm) {
-
-        financialAuditForm.addEventListener(
-            "submit",
-            async (event) => {
-
-                event.preventDefault();
-
-                const getFieldValue = (name, id) => {
-                    const field =
-                        financialAuditForm.elements.namedItem(name)
-                        || document.getElementById(id);
-
-                    return field ? field.value.trim() : "";
-                };
-
-                const ticker = getFieldValue("ticker", "ticker");
-                const riskScore = getFieldValue("risk_score", "risk-score");
-                const outlook = getFieldValue("outlook", "outlook");
-                const price = getFieldValue("price", "price");
-
-                try {
-                    await saveRiskAudit({
-                        ticker,
-                        riskScore,
-                        outlook,
-                        price
-                    });
-                } catch (error) {
-                    console.error("Unable to save financial audit:", error);
-                }
-
             }
         );
 

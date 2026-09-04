@@ -12,7 +12,7 @@ The project uses a monorepo layout with a clear boundary between browser code an
                                                  |
                                    +-------------+-------------+
                                    |                           |
-                                   [ Google Gemini API ]       [ PostgreSQL / Supabase ]
+                                   [ Google Gemini API ]       [ PostgreSQL ]
 
 * **Frontend Layer:** HTML5, CSS, and browser JavaScript are isolated in `frontend/`.
 * **Backend Layer:** Python 3.14 and Flask live in `backend/`, managing secure user sessions, CSRF protections, and OAuth verification via Authlib.
@@ -49,7 +49,7 @@ Crypto-Risk-AI/
 ├── frontend/
 │   ├── dashboard.html       # Dashboard page
 │   ├── index.html           # Landing page
-│   ├── login.html           # Supabase login page
+│   ├── login.html           # Flask Google OAuth login page
 │   ├── script.js            # Client-side behavior
 │   └── style.css            # UI styles
 ├── backend/
