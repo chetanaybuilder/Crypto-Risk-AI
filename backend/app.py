@@ -17,9 +17,11 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Lock
+from typing import Any, Optional
 
 import psycopg2
 import psycopg2.extras
+import requests
 from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
 from flask import (
@@ -33,6 +35,7 @@ from flask import (
     url_for,
 )
 from google import genai
+from google.genai import types
 
 
 # ==========================================================
@@ -77,10 +80,555 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================================
+# MARKET DATA
+# ==========================================================
+
+COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
+COINGECKO_REQUEST_TIMEOUT = 10
+COINGECKO_TICKER_MAP = {
+    "btc": "bitcoin",
+    "eth": "ethereum",
+    "sol": "solana",
+    "usdt": "tether",
+    "usdc": "usd-coin",
+    "bnb": "binancecoin",
+    "xrp": "ripple",
+    "ada": "cardano",
+    "doge": "dogecoin",
+}
+MARKET_DATA_DEFAULTS = {
+    "price": 0.0,
+    "price_change_percentage_24h": 0.0,
+    "change_24h": 0.0,
+    "volume": 0.0,
+    "market_cap": 0.0,
+    "symbol": "N/A",
+    "ticker": "N/A",
+    "current_price_usd": 0.0,
+    "volume_24h_usd": 0.0,
+    "market_cap_usd": 0.0,
+    "price_change_percentage_7d": 0.0,
+}
+
+
+def sanitize_market_data(market_data: Any) -> dict[str, Any]:
+    """Return a complete dictionary safe for scoring, templates, and prompts."""
+
+    sanitized_data = dict(market_data) if isinstance(market_data, dict) else {}
+
+    for key, default_value in MARKET_DATA_DEFAULTS.items():
+        sanitized_data.setdefault(key, default_value)
+
+    for numeric_key in (
+        "price",
+        "price_change_percentage_24h",
+        "change_24h",
+        "volume",
+        "market_cap",
+        "current_price_usd",
+        "volume_24h_usd",
+        "market_cap_usd",
+        "price_change_percentage_7d",
+    ):
+        try:
+            sanitized_data[numeric_key] = float(
+                sanitized_data.get(
+                    numeric_key,
+                    MARKET_DATA_DEFAULTS[numeric_key],
+                )
+                or 0.0
+            )
+        except (TypeError, ValueError):
+            sanitized_data[numeric_key] = MARKET_DATA_DEFAULTS[numeric_key]
+
+    sanitized_data["price_change_percentage_24h"] = sanitized_data.get(
+        "price_change_percentage_24h",
+        sanitized_data.get("change_24h", 0.0),
+    ) or 0.0
+    sanitized_data["change_24h"] = sanitized_data.get(
+        "change_24h",
+        sanitized_data["price_change_percentage_24h"],
+    ) or 0.0
+    sanitized_data["symbol"] = sanitized_data.get(
+        "symbol",
+        sanitized_data.get("ticker", "N/A"),
+    ) or "N/A"
+    sanitized_data["ticker"] = sanitized_data.get(
+        "ticker",
+        sanitized_data["symbol"],
+    ) or "N/A"
+
+    return sanitized_data
+
+
+def format_percentage(value: Any) -> str:
+    """Format a numeric percentage to exactly two decimal places."""
+
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def format_usd(value: Any) -> str:
+    """Format USD values using readable K, M, or B notation."""
+
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+
+    absolute_amount = abs(amount)
+
+    if absolute_amount >= 1_000_000_000:
+        return f"${amount / 1_000_000_000:.2f}B"
+    if absolute_amount >= 1_000_000:
+        return f"${amount / 1_000_000:.2f}M"
+    if absolute_amount >= 1_000:
+        return f"${amount / 1_000:.2f}K"
+
+    return f"${amount:,.2f}"
+
+
+def format_market_data_for_display(
+    market_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Create display-safe market metrics without changing numeric source data."""
+
+    market_data = sanitize_market_data(market_data)
+
+    return {
+        **market_data,
+        "current_price_display": format_usd(
+            market_data.get("current_price_usd")
+        ),
+        "volume_24h_display": format_usd(
+            market_data.get("volume_24h_usd")
+        ),
+        "market_cap_display": format_usd(
+            market_data.get("market_cap_usd")
+        ),
+        "price_change_percentage_24h_display": format_percentage(
+            market_data.get("price_change_percentage_24h")
+        ),
+        "price_change_percentage_7d_display": format_percentage(
+            market_data.get("price_change_percentage_7d")
+        ),
+    }
+
+
+def fetch_crypto_market_data(
+    ticker: str,
+) -> dict[str, Any]:
+    """Fetch current CoinGecko market data for an exact ticker symbol."""
+
+    if not isinstance(ticker, str):
+        return sanitize_market_data({})
+
+    normalized_ticker = ticker.strip().lower()
+
+    if not re.fullmatch(
+        r"[a-z0-9][a-z0-9._-]{0,19}",
+        normalized_ticker,
+    ):
+        return sanitize_market_data({"symbol": ticker.upper()})
+
+    try:
+        coin_id = COINGECKO_TICKER_MAP.get(normalized_ticker)
+
+        if not coin_id:
+            search_response = requests.get(
+                f"{COINGECKO_API_URL}/search",
+                params={"query": normalized_ticker},
+                timeout=COINGECKO_REQUEST_TIMEOUT,
+            )
+
+            if search_response.status_code == 429:
+                logger.warning("CoinGecko rate limit reached during ticker search.")
+                return sanitize_market_data({"symbol": normalized_ticker.upper()})
+
+            search_response.raise_for_status()
+            search_payload = search_response.json()
+
+            if not isinstance(search_payload, dict):
+                return sanitize_market_data({"symbol": normalized_ticker.upper()})
+
+            matching_coin = next(
+                (
+                    coin
+                    for coin in search_payload.get("coins", [])
+                    if isinstance(coin, dict)
+                    and str(coin.get("symbol", "")).lower()
+                    == normalized_ticker
+                    and coin.get("id")
+                ),
+                None,
+            )
+
+            coin_id = matching_coin["id"] if matching_coin else None
+
+        if not coin_id:
+            return sanitize_market_data({"symbol": normalized_ticker.upper()})
+
+        market_response = requests.get(
+            f"{COINGECKO_API_URL}/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "ids": coin_id,
+                "price_change_percentage": "7d",
+            },
+            timeout=COINGECKO_REQUEST_TIMEOUT,
+        )
+
+        if market_response.status_code == 429:
+            logger.warning("CoinGecko rate limit reached during market lookup.")
+            return sanitize_market_data({"symbol": normalized_ticker.upper()})
+
+        market_response.raise_for_status()
+        market_payload = market_response.json()
+
+        if not isinstance(market_payload, list) or not market_payload:
+            return sanitize_market_data({"symbol": normalized_ticker.upper()})
+
+        market_data = market_payload[0]
+        required_fields = {
+            "current_price": "current_price_usd",
+            "total_volume": "volume_24h_usd",
+            "price_change_percentage_24h": "price_change_percentage_24h",
+            "price_change_percentage_7d_in_currency": "price_change_percentage_7d",
+            "market_cap": "market_cap_usd",
+        }
+
+        if not isinstance(market_data, dict) or any(
+            market_data.get(source_field) is None
+            for source_field in required_fields
+        ):
+            return sanitize_market_data({"symbol": normalized_ticker.upper()})
+
+        return sanitize_market_data({
+            "ticker": normalized_ticker.upper(),
+            "symbol": normalized_ticker.upper(),
+            "coin_id": coin_id,
+            "high_24h_usd": market_data.get("high_24h"),
+            "low_24h_usd": market_data.get("low_24h"),
+            **{
+                output_field: float(market_data[source_field])
+                for source_field, output_field in required_fields.items()
+            },
+        })
+
+    except requests.Timeout:
+        logger.warning("CoinGecko request timed out for ticker %s.", normalized_ticker)
+        return sanitize_market_data({"symbol": normalized_ticker.upper()})
+    except requests.RequestException:
+        logger.exception(
+            "CoinGecko market data request failed for ticker %s.",
+            normalized_ticker,
+        )
+        return sanitize_market_data({"symbol": normalized_ticker.upper()})
+    except (ValueError, TypeError, KeyError):
+        logger.exception(
+            "CoinGecko market data request failed for ticker %s.",
+            normalized_ticker,
+        )
+        return sanitize_market_data({"symbol": normalized_ticker.upper()})
+
+
+GOPLUS_API_URL = "https://api.gopluslabs.io/api/v1/token_security"
+
+
+def _goplus_bool(value: Any) -> bool:
+    """Normalize GoPlus boolean fields, which are commonly returned as strings."""
+
+    return str(value).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _goplus_tax_percentage(value: Any) -> float:
+    """Normalize GoPlus tax ratios or percentages into a percentage value."""
+
+    tax_value = float(value)
+
+    if 0 <= tax_value <= 1:
+        return tax_value * 100
+
+    return tax_value
+
+
+def fetch_token_security(
+    chain_id: str,
+    contract_address: str,
+) -> Optional[dict[str, Any]]:
+    """Fetch and summarize GoPlus token security details."""
+
+    if not isinstance(chain_id, str) or not re.fullmatch(
+        r"[0-9]+",
+        chain_id.strip(),
+    ):
+        return None
+
+    if not isinstance(contract_address, str):
+        return None
+
+    normalized_chain_id = chain_id.strip()
+    normalized_address = contract_address.strip()
+
+    if not normalized_address or len(normalized_address) > 200:
+        return None
+
+    try:
+        response = requests.get(
+            f"{GOPLUS_API_URL}/{normalized_chain_id}",
+            params={"contract_addresses": normalized_address},
+            timeout=COINGECKO_REQUEST_TIMEOUT,
+        )
+
+        if response.status_code == 429:
+            logger.warning("GoPlus rate limit reached for token security lookup.")
+            return None
+
+        response.raise_for_status()
+        payload = response.json()
+
+        if not isinstance(payload, dict) or payload.get("code") != 1:
+            return None
+
+        results = payload.get("result")
+
+        if not isinstance(results, dict) or not results:
+            return None
+
+        security_data = next(
+            (
+                value
+                for key, value in results.items()
+                if str(key).lower() == normalized_address.lower()
+                and isinstance(value, dict)
+            ),
+            None,
+        )
+
+        if security_data is None:
+            security_data = next(
+                (
+                    value
+                    for value in results.values()
+                    if isinstance(value, dict)
+                ),
+                None,
+            )
+
+        if security_data is None:
+            return None
+
+        buy_tax = _goplus_tax_percentage(security_data.get("buy_tax", 0))
+        sell_tax = _goplus_tax_percentage(security_data.get("sell_tax", 0))
+        is_honeypot = _goplus_bool(security_data.get("is_honeypot", 0))
+        cannot_sell_all = _goplus_bool(
+            security_data.get("cannot_sell_all", 0)
+        )
+
+        warnings = []
+
+        if buy_tax > 10:
+            warnings.append(
+                f"Buy tax is high at {buy_tax:g}% (above 10%)."
+            )
+
+        if sell_tax > 10:
+            warnings.append(
+                f"Sell tax is high at {sell_tax:g}% (above 10%)."
+            )
+
+        if is_honeypot:
+            warnings.append(
+                "GoPlus flags this token as a potential honeypot."
+            )
+
+        if cannot_sell_all:
+            warnings.append(
+                "GoPlus indicates that the token may not be fully sellable."
+            )
+
+        return {
+            "chain_id": normalized_chain_id,
+            "contract_address": normalized_address,
+            "is_honeypot": is_honeypot,
+            "buy_tax": buy_tax,
+            "sell_tax": sell_tax,
+            "cannot_sell_all": cannot_sell_all,
+            "is_open_source": _goplus_bool(
+                security_data.get("is_open_source", 0)
+            ),
+            "warnings": warnings,
+        }
+
+    except (requests.RequestException, ValueError, TypeError, KeyError):
+        logger.exception(
+            "GoPlus token security request failed for chain %s and address %s.",
+            normalized_chain_id,
+            normalized_address,
+        )
+        return None
+
+
+def _bounded_score(value: float) -> int:
+    """Return a score constrained to the public 0-100 range."""
+
+    return max(0, min(100, int(round(value))))
+
+
+def _numeric_value(data: dict[str, Any], *keys: str) -> float:
+    """Read the first usable numeric value from a payload."""
+
+    for key in keys:
+        try:
+            value = data.get(key)
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def evaluate_risk_profile(
+    market_data: dict[str, Any],
+    security_data: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Decompose asset risk into volatility, liquidity, and contract pillars."""
+
+    market_data = sanitize_market_data(market_data)
+    security_data = security_data if isinstance(security_data, dict) else {}
+
+    change_7d = abs(_numeric_value(
+        market_data,
+        "change_7d",
+        "price_change_percentage_7d",
+    ))
+    change_24h = abs(_numeric_value(
+        market_data,
+        "change_24h",
+        "price_change_percentage_24h",
+    ))
+    high_24h = _numeric_value(market_data, "high_24h_usd", "high_24h")
+    low_24h = _numeric_value(market_data, "low_24h_usd", "low_24h")
+    current_price = _numeric_value(market_data, "current_price_usd", "price")
+    range_percentage = (
+        ((high_24h - low_24h) / current_price) * 100
+        if current_price > 0 and high_24h >= low_24h > 0
+        else change_24h
+    )
+
+    volatility_risk = _bounded_score(
+        (change_7d * 2.5) + (abs(range_percentage) * 1.5)
+    )
+
+    volume = _numeric_value(market_data, "volume_24h_usd", "volume")
+    market_cap = _numeric_value(market_data, "market_cap_usd", "market_cap")
+    turnover = volume / market_cap if market_cap > 0 else 0.0
+
+    if turnover < 0.02:
+        liquidity_risk = _bounded_score(100 - (turnover / 0.02 * 30))
+    elif turnover >= 0.10:
+        liquidity_risk = _bounded_score(max(0, 30 - (turnover - 0.10) * 100))
+    else:
+        liquidity_risk = _bounded_score(
+            70 - ((turnover - 0.02) / 0.08 * 40)
+        )
+
+    ticker = str(
+        market_data.get("ticker", market_data.get("symbol", ""))
+    ).lower()
+    native_l1s = {"btc", "bitcoin", "eth", "ethereum", "sol", "solana"}
+
+    if _goplus_bool(security_data.get("is_honeypot", False)):
+        contract_risk = 100
+    else:
+        buy_tax = _numeric_value(security_data, "buy_tax")
+        sell_tax = _numeric_value(security_data, "sell_tax")
+        contract_risk = (
+            15
+            if ticker in native_l1s and not security_data
+            else min(100, 15 + (buy_tax + sell_tax) * 4)
+        )
+        if _goplus_bool(security_data.get("cannot_sell_all", False)):
+            contract_risk = max(contract_risk, 90)
+        if security_data and not _goplus_bool(
+            security_data.get("is_open_source", True)
+        ):
+            contract_risk += 15
+
+    composite_score = _bounded_score(
+        volatility_risk * 0.35
+        + liquidity_risk * 0.35
+        + contract_risk * 0.30
+    )
+
+    return {
+        "volatility_risk": volatility_risk,
+        "liquidity_risk": liquidity_risk,
+        "contract_risk": _bounded_score(contract_risk),
+        "composite_score": composite_score,
+        "turnover_ratio": turnover,
+        "range_percentage": range_percentage,
+    }
+
+
+def calculate_risk_score(
+    market_data: dict[str, Any],
+    security_data: Optional[dict[str, Any]] = None,
+) -> int:
+    """Compatibility wrapper returning the decomposed composite score."""
+
+    return evaluate_risk_profile(market_data, security_data)["composite_score"]
+
+
+def simulate_stress_test(
+    asset_change_7d: float,
+    btc_change_7d: float,
+    shock_pct: float = -10.0,
+) -> dict[str, Any]:
+    """Estimate asset drawdown under a BTC-linked market shock."""
+
+    try:
+        asset_change = float(asset_change_7d)
+        btc_change = float(btc_change_7d)
+        shock = float(shock_pct)
+    except (TypeError, ValueError):
+        asset_change, btc_change, shock = 0.0, 0.0, -10.0
+
+    raw_beta = asset_change / btc_change if btc_change else 1.0
+    beta = max(0.5, min(3.0, raw_beta))
+    expected_drawdown = shock * beta
+
+    return {
+        "simulated_shock": shock,
+        "beta": round(beta, 2),
+        "expected_drawdown": round(expected_drawdown, 2),
+        "resilience_label": (
+            "Fragile"
+            if beta > 1.4
+            else "Resilient"
+            if beta < 0.9
+            else "Moderate"
+        ),
+    }
+
+
+# ==========================================================
 # FLASK
 # ==========================================================
 
-app = Flask(__name__)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(PROJECT_ROOT, "frontend"),
+    static_folder=os.path.join(PROJECT_ROOT, "frontend"),
+)
 
 app.secret_key = SECRET_KEY
 
@@ -140,6 +688,7 @@ def get_db():
         return psycopg2.connect(
             DATABASE_URL,
             cursor_factory=psycopg2.extras.RealDictCursor,
+            connect_timeout=5,
         )
 
     except Exception:
@@ -574,126 +1123,102 @@ def register():
 # AI PROMPT
 # ==========================================================
 
-def build_crypto_prompt(token_symbol):
+def build_crypto_prompt(
+    market_data: dict[str, Any],
+    security_data: dict[str, Any],
+    risk_profile: dict[str, Any],
+    stress_test: dict[str, Any],
+) -> str:
+    """Build the forensic quantitative risk-autopsy instruction."""
+
+    market_data = sanitize_market_data(market_data)
+    security_data = security_data if isinstance(security_data, dict) else {}
+
+    asset = market_data.get("ticker", "unknown asset")
+    current_price = market_data.get("current_price_usd", "not supplied")
+    volume_24h = market_data.get("volume_24h_usd", "not supplied")
+    volatility = round(float(market_data.get(
+        "volatility_percentage",
+        market_data.get(
+            "price_change_percentage_24h",
+            "not supplied",
+        ),
+    )), 2)
+    buy_tax = security_data.get("buy_tax", "not supplied")
+    sell_tax = security_data.get("sell_tax", "not supplied")
+    is_honeypot = security_data.get("is_honeypot", "not supplied")
+    cannot_sell_all = security_data.get("cannot_sell_all", "not supplied")
+    is_open_source = security_data.get("is_open_source", "not supplied")
+    score = risk_profile["composite_score"]
+    radar = {
+        "volatility": risk_profile["volatility_risk"],
+        "liquidity": risk_profile["liquidity_risk"],
+        "contract": risk_profile["contract_risk"],
+    }
 
     return f"""
-You are the intelligence engine behind CryptoRisk AI.
+SYSTEM INSTRUCTION
 
-Your job is to transform cryptocurrency research context
-into a clear, professional, educational risk-intelligence
-report.
+Act strictly as an elite quantitative risk analyst performing a Risk Autopsy.
+Be blunt, forensic, and specific. Do not explain beginner concepts, market
+volatility in generic terms, or add financial disclaimers.
 
-ASSET:
-{token_symbol}
+LIVE EVIDENCE
 
-IMPORTANT DATA POLICY:
+Asset: {asset}
+Current price USD: {current_price}
+24h volume USD: {volume_24h}
+24h price change percent: {volatility}
+Buy tax percent: {buy_tax}
+Sell tax percent: {sell_tax}
+Honeypot flag: {is_honeypot}
+Cannot sell all flag: {cannot_sell_all}
+Open-source flag: {is_open_source}
 
-- You do NOT have guaranteed real-time market data.
-- Do NOT invent a current price.
-- Do NOT claim that a value is live.
-- Do NOT fabricate exact statistics.
-- If current market data is unavailable, explicitly say so.
-- Distinguish analytical reasoning from verified live data.
-- This is educational risk intelligence, not financial advice.
+DECOMPOSED RISK PROFILE
 
-CORE OBJECTIVE:
+Volatility risk: {radar['volatility']}/100
+Liquidity risk: {radar['liquidity']}/100
+Contract risk: {radar['contract']}/100
+Composite score: {score}/100
+Turnover ratio: {risk_profile.get('turnover_ratio', 0):.4f}
 
-Help a user answer:
+DOWNSIDE STRESS TEST
 
-"Why should I pay attention to the risk of this
-cryptocurrency, and what should I understand before
-making an informed decision?"
+BTC shock: {stress_test['simulated_shock']:.2f}%
+Historical beta: {stress_test['beta']:.2f}x
+Expected drawdown: {stress_test['expected_drawdown']:.2f}%
+Resilience label: {stress_test['resilience_label']}
 
-The report must identify:
+RULES
 
-1. Overall risk level.
-2. Directional market outlook.
-3. Important uncertainty.
-4. Major downside risks.
-5. Important positive/neutral market signals.
-6. What developments the user should monitor next.
+- Use only the evidence above and cite exact numerical metrics.
+- Repeat the exact injected values for composite score, pillar scores, beta,
+    and expected drawdown. Do not round or substitute them differently.
+- Card 1 must discuss Momentum & Drawdown Risk using the exact 24h change,
+    7d change, and volatility score.
+- Card 2 must discuss Liquidity Depth & Slippage Risk using the exact turnover
+    ratio and liquidity score ({radar['liquidity']}/100).
+- Card 3 must discuss Macro & Contract Sensitivity using the exact beta,
+    expected drawdown, composite score ({score}/100), and contract flags.
+- Never use fallback values such as 1.00x beta, 50/100 score, or -10.00%
+    when the injected values above are present.
+- fatal_flaws must contain exactly three bullets, each citing a different
+    injected number or score.
+- Never say data is unavailable, context is limited, or crypto is volatile.
+- Do not invent news, prices, causes, or security findings.
 
-Return ONLY valid JSON. Analyze only the asset symbol and information
-available in this request. Do not invent prices, volume, news, market
-capitalization, confidence, or other unavailable measurements.
-
-Use EXACTLY this schema:
+Return ONLY valid JSON with exactly this schema:
 
 {{
-    "trend": "Bullish | Bearish | Neutral",
-
-    "risk_score": "Low | Medium | High | Extreme",
-
-    "predicted_price":
-        "Unavailable — live market data not connected.",
-
-    "summary":
-        "A concise 2-3 sentence executive intelligence summary.",
-
-    "key_insight":
-        "One specific, decision-relevant insight grounded in the available information.",
-
-    "risk_factors": [
-        "A concise explanation of the first major risk driver.",
-        "A concise explanation of the second major risk driver."
+    "autopsy_summary": "Exactly two blunt sentences explaining how this asset could harm a holder today.",
+    "fatal_flaws": [
+        "Exactly one structural risk with an explicit numerical citation.",
+        "Exactly one structural risk with an explicit numerical citation.",
+        "Exactly one structural risk with an explicit numerical citation."
     ],
-
-    "problem_solved":
-        "Explain clearly what user problem CryptoRisk AI solves for this asset.",
-
-    "key_risks": [
-        {{
-            "title": "Short risk title",
-            "explanation": "One concise explanation."
-        }},
-        {{
-            "title": "Short risk title",
-            "explanation": "One concise explanation."
-        }},
-        {{
-            "title": "Short risk title",
-            "explanation": "One concise explanation."
-        }}
-    ],
-
-    "key_signals": [
-        {{
-            "title": "Short signal title",
-            "explanation": "One concise explanation."
-        }},
-        {{
-            "title": "Short signal title",
-            "explanation": "One concise explanation."
-        }},
-        {{
-            "title": "Short signal title",
-            "explanation": "One concise explanation."
-        }}
-    ],
-
-    "watch_next": [
-        "One concise thing to monitor.",
-        "One concise thing to monitor.",
-        "One concise thing to monitor."
-    ]
+    "stress_verdict": "A concise evaluation of the asset under the BTC shock using beta and expected drawdown."
 }}
-
-QUALITY RULES:
-
-- Be analytical rather than promotional.
-- Avoid hype.
-- Avoid guaranteed predictions.
-- Avoid phrases such as "this will go up".
-- Use uncertainty when evidence is uncertain.
-- Keep explanations understandable.
-- Do not overwhelm the user.
-- Focus on decision-relevant intelligence.
-- Never invent live prices.
-- Exactly 3 key risks.
-- Exactly 3 key signals.
-- Exactly 3 watch-next items.
-- Include 1-3 risk_factors and one key_insight.
-- Return JSON only.
 """
 
 
@@ -747,7 +1272,29 @@ def extract_json(text):
 # NORMALIZE AI REPORT
 # ==========================================================
 
-def normalize_report(data, token_symbol):
+FORBIDDEN_AI_PHRASES = (
+    "live price, volume, and liquidity data are unavailable",
+    "the available context is limited",
+)
+
+
+def _is_generic_ai_disclaimer(value: str) -> bool:
+    """Detect boilerplate that must never reach the risk report."""
+
+    normalized_value = value.lower()
+    return any(
+        phrase in normalized_value
+        for phrase in FORBIDDEN_AI_PHRASES
+    )
+
+def normalize_report(
+    data: dict[str, Any],
+    token_symbol: str,
+    market_data: Optional[dict[str, Any]] = None,
+    risk_profile: Optional[dict[str, Any]] = None,
+    stress_test: Optional[dict[str, Any]] = None,
+    security_data: Optional[dict[str, Any]] = None,
+):
 
     if not isinstance(data, dict):
 
@@ -792,33 +1339,104 @@ def normalize_report(data, token_symbol):
         "Medium",
     )
 
-    summary = str(
+    market_data = sanitize_market_data(market_data)
+    risk_profile = risk_profile if isinstance(risk_profile, dict) else {}
+    stress_test = stress_test if isinstance(stress_test, dict) else {}
+    security_data = security_data if isinstance(security_data, dict) else {}
+    current_price = market_data.get("current_price_usd", 0)
+    volume_24h = market_data.get("volume_24h_usd", 0)
+    change_24h = market_data.get("price_change_percentage_24h", 0)
+
+    composite_score = int(risk_profile.get("composite_score", 50))
+    risk_score = (
+        "Extreme" if composite_score >= 80
+        else "High" if composite_score >= 65
+        else "Medium" if composite_score >= 35
+        else "Low"
+    )
+
+    autopsy_summary = str(
         data.get(
-            "summary",
-            "No executive summary was generated.",
+            "autopsy_summary",
+            data.get(
+                "executive_summary",
+                data.get(
+                    "summary",
+                f"Price is {format_usd(current_price)}, with 24h volume of "
+                f"{format_usd(volume_24h)} and a 24h move of "
+                f"{format_percentage(change_24h)}.",
+                ),
+            ),
         )
     ).strip()
 
-    key_insight = str(
+    if _is_generic_ai_disclaimer(autopsy_summary):
+        autopsy_summary = (
+            f"Price is {format_usd(current_price)}, with 24h volume of "
+            f"{format_usd(volume_24h)} and a 24h move of "
+            f"{format_percentage(change_24h)}."
+        )
+
+    market_conditions = str(
         data.get(
-            "key_insight",
-            "The available context is limited, so verify current market data before relying on this assessment.",
+            "market_conditions",
+            "",
         )
     ).strip()
 
-    raw_factors = data.get("risk_factors", [])
+    if _is_generic_ai_disclaimer(market_conditions):
+        market_conditions = ""
+
+    if market_conditions:
+        autopsy_summary = f"{autopsy_summary} {market_conditions}".strip()
+
+    stress_verdict = str(
+        data.get(
+            "stress_verdict",
+            data.get(
+                "signal_to_remember",
+                f"A {stress_test.get('simulated_shock', -10.0):.2f}% BTC shock "
+                f"implies a {stress_test.get('expected_drawdown', -10.0):.2f}% "
+                f"drawdown at {stress_test.get('beta', 1.0):.2f}x beta.",
+            ),
+        )
+    ).strip()
+
+    if _is_generic_ai_disclaimer(stress_verdict):
+        stress_verdict = (
+            f"The stress test estimates a {stress_test.get('expected_drawdown', -10.0):.2f}% "
+            "drawdown under the modeled BTC shock."
+        )
+
+    key_insight = stress_verdict
+
+    raw_factors = data.get("fatal_flaws")
+    if raw_factors is None:
+        raw_factors = data.get(
+            "what_is_driving_risk",
+            data.get("top_risk_drivers", data.get("risk_factors", [])),
+        )
+
+    if isinstance(raw_factors, str):
+        raw_factors = [raw_factors]
+
     risk_factors = []
     if isinstance(raw_factors, list):
         risk_factors = [
             str(item).strip()
             for item in raw_factors[:3]
             if str(item).strip()
+            and not _is_generic_ai_disclaimer(str(item).strip())
         ]
 
     if not risk_factors:
         risk_factors = [
-            "Live price, volume, and liquidity data are unavailable to this analysis.",
-            "Broader market, regulatory, and project-specific conditions may change the risk quickly.",
+            f"Price is {format_usd(current_price)} and the 24h move is "
+            f"{format_percentage(change_24h)}.",
+            f"24h trading volume is {format_usd(volume_24h)}; compare it "
+            "with market capitalization when assessing liquidity.",
+            f"Composite risk is {composite_score}/100 with liquidity risk at "
+            f"{risk_profile.get('liquidity_risk', 0)}/100.",
         ]
 
     problem_solved = str(
@@ -831,7 +1449,7 @@ def normalize_report(data, token_symbol):
     predicted_price = str(
         data.get(
             "predicted_price",
-            "Unavailable — live market data not connected.",
+            format_usd(current_price),
         )
     ).strip()
 
@@ -841,7 +1459,7 @@ def normalize_report(data, token_symbol):
 
     raw_risks = data.get(
         "key_risks",
-        [],
+        data.get("fatal_flaws", data.get("top_risk_drivers", [])),
     )
 
     key_risks = []
@@ -850,7 +1468,17 @@ def normalize_report(data, token_symbol):
 
         for item in raw_risks[:3]:
 
-            if isinstance(item, dict):
+            if isinstance(item, str):
+                explanation = item.strip()
+                if explanation and not _is_generic_ai_disclaimer(explanation):
+                    key_risks.append(
+                        {
+                            "title": "Quantified risk driver",
+                            "explanation": explanation,
+                        }
+                    )
+
+            elif isinstance(item, dict):
 
                 title = str(
                     item.get(
@@ -868,6 +1496,9 @@ def normalize_report(data, token_symbol):
 
                 if title and explanation:
 
+                    if _is_generic_ai_disclaimer(explanation):
+                        continue
+
                     key_risks.append(
                         {
                             "title": title,
@@ -881,8 +1512,11 @@ def normalize_report(data, token_symbol):
 
     raw_signals = data.get(
         "key_signals",
-        [],
+        data.get("signal_to_remember", []),
     )
+
+    if isinstance(raw_signals, str):
+        raw_signals = [raw_signals]
 
     key_signals = []
 
@@ -890,7 +1524,17 @@ def normalize_report(data, token_symbol):
 
         for item in raw_signals[:3]:
 
-            if isinstance(item, dict):
+            if isinstance(item, str):
+                explanation = item.strip()
+                if explanation and not _is_generic_ai_disclaimer(explanation):
+                    key_signals.append(
+                        {
+                            "title": "Quantified market signal",
+                            "explanation": explanation,
+                        }
+                    )
+
+            elif isinstance(item, dict):
 
                 title = str(
                     item.get(
@@ -907,6 +1551,9 @@ def normalize_report(data, token_symbol):
                 ).strip()
 
                 if title and explanation:
+
+                    if _is_generic_ai_disclaimer(explanation):
+                        continue
 
                     key_signals.append(
                         {
@@ -946,21 +1593,23 @@ def normalize_report(data, token_symbol):
         key_risks = [
 
             {
-                "title": "Market volatility",
+                "title": "Price movement",
                 "explanation":
-                    "Cryptocurrency prices can change rapidly, increasing uncertainty."
+                    f"The asset moved {format_percentage(change_24h)} over 24 hours "
+                    f"at a reference price of {format_usd(current_price)}."
             },
 
             {
-                "title": "Information uncertainty",
+                "title": "Trading liquidity",
                 "explanation":
-                    "Available information can change quickly and should be independently verified."
+                    f"24h trading volume is {format_usd(volume_24h)}, which should "
+                    "be evaluated against market capitalization."
             },
 
             {
-                "title": "External conditions",
+                "title": "Risk score",
                 "explanation":
-                    "Regulatory, macroeconomic, technological, and market conditions can affect the asset."
+                    f"The scoring engine assigned a risk score of {data.get('risk_score', 'not supplied')}."
             },
 
         ]
@@ -974,21 +1623,21 @@ def normalize_report(data, token_symbol):
         key_signals = [
 
             {
-                "title": "Market direction",
+                "title": "24h direction",
                 "explanation":
-                    "The current analytical outlook should be treated as an uncertain directional signal."
+                    f"The current 24h price change is {format_percentage(change_24h)}."
             },
 
             {
-                "title": "Ecosystem activity",
+                "title": "Reference price",
                 "explanation":
-                    "Development and ecosystem activity can provide useful context for long-term relevance."
+                    f"The live reference price is {format_usd(current_price)}."
             },
 
             {
-                "title": "Market conditions",
+                "title": "Volume context",
                 "explanation":
-                    "Broader cryptocurrency market conditions can materially influence individual assets."
+                    f"The latest 24h trading volume is {format_usd(volume_24h)}."
             },
 
         ]
@@ -1011,13 +1660,32 @@ def normalize_report(data, token_symbol):
 
         "token": token_symbol,
 
+        "risk_score_value": {
+            "low": 20,
+            "medium": 50,
+            "high": 75,
+            "extreme": 95,
+        }.get(risk_score.lower(), 50),
+
         "trend": trend,
 
         "risk": risk_score,
 
         "price": predicted_price,
 
-        "summary": summary,
+        "summary": autopsy_summary,
+
+        "autopsy_summary": autopsy_summary,
+
+        "fatal_flaws": risk_factors[:3],
+
+        "stress_verdict": stress_verdict,
+
+        "risk_profile": risk_profile,
+
+        "stress_test": stress_test,
+
+        "security_data": security_data,
 
         "key_insight": key_insight,
 
@@ -1051,6 +1719,7 @@ def dashboard():
         )
 
     latest_analysis = None
+    risk_score = None
 
     # ======================================================
     # NEW ANALYSIS
@@ -1127,8 +1796,27 @@ def dashboard():
         # BUILD PROMPT
         # --------------------------------------------------
 
+        market_data = fetch_crypto_market_data(token_symbol) or {
+            "ticker": token_symbol,
+        }
+        market_data = sanitize_market_data(market_data)
+        security_data = {}
+        risk_profile = evaluate_risk_profile(
+            market_data,
+            security_data,
+        )
+        risk_score = risk_profile["composite_score"]
+        btc_market_data = fetch_crypto_market_data("BTC")
+        stress_test = simulate_stress_test(
+            market_data.get("price_change_percentage_7d", 0),
+            btc_market_data.get("price_change_percentage_7d", 0),
+        )
+
         prompt = build_crypto_prompt(
-            token_symbol
+            market_data,
+            security_data,
+            risk_profile,
+            stress_test,
         )
 
         try:
@@ -1143,6 +1831,10 @@ def dashboard():
                 client.models.generate_content,
                 model="gemini-2.5-flash",
                 contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                ),
             )
 
             try:
@@ -1173,7 +1865,13 @@ def dashboard():
             latest_analysis = normalize_report(
                 ai_data,
                 token_symbol,
+                market_data,
+                risk_profile,
+                stress_test,
+                security_data,
             )
+            latest_analysis["security_data"] = security_data
+            latest_analysis["risk_score_value"] = risk_score
 
             # ==================================================
             # SAVE TO POSTGRESQL
@@ -1382,8 +2080,41 @@ def dashboard():
                 "summary": latest_row["summary"],
             },
             latest_row["token_symbol"],
+            fetch_crypto_market_data(latest_row["token_symbol"]) or {},
         )
         latest_analysis["id"] = latest_row["id"]
+
+    if latest_analysis:
+        latest_analysis["market_data"] = (
+            fetch_crypto_market_data(latest_analysis["token"])
+            or {}
+        )
+        latest_analysis["market_data"] = format_market_data_for_display(
+            latest_analysis["market_data"]
+        )
+
+        if not latest_analysis.get("risk_profile"):
+            latest_analysis["risk_profile"] = evaluate_risk_profile(
+                latest_analysis["market_data"],
+            )
+
+        if not latest_analysis.get("stress_test"):
+            btc_market_data = fetch_crypto_market_data("BTC")
+            latest_analysis["stress_test"] = simulate_stress_test(
+                latest_analysis["market_data"].get(
+                    "price_change_percentage_7d",
+                    0,
+                ),
+                btc_market_data.get("price_change_percentage_7d", 0),
+            )
+
+        if risk_score is None:
+            risk_score = latest_analysis["risk_profile"]["composite_score"]
+
+        latest_analysis["risk_score_value"] = latest_analysis[
+            "risk_profile"
+        ]["composite_score"]
+        latest_analysis.setdefault("security_data", {})
 
     # ======================================================
     # RENDER
@@ -1416,6 +2147,8 @@ def dashboard():
         ),
 
         latest=latest_analysis,
+
+        risk_score=risk_score,
 
         history=history,
     )
@@ -1559,6 +2292,26 @@ def ensure_database_initialized():
 # ==========================================================
 
 if __name__ == "__main__":
+
+    mock_market_data = {
+        "change_7d": 24.5,
+        "volume": 1_500_000,
+        "market_cap": 10_000_000,
+    }
+
+    mock_security_data = {
+        "is_honeypot": False,
+        "buy_tax": 4,
+        "sell_tax": 8,
+    }
+
+    print(
+        "Mock risk score:",
+        calculate_risk_score(
+            mock_market_data,
+            mock_security_data,
+        ),
+    )
 
     app.run(
         host="0.0.0.0",

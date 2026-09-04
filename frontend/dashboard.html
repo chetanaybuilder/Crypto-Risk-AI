@@ -8,10 +8,18 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="dashboard-page">
+
+    <div class="ambient-canvas" aria-hidden="true"></div>
+    <div class="physics-tokens" aria-hidden="true">
+        <span class="physics-token token-btc">₿</span>
+        <span class="physics-token token-eth">◆</span>
+        <span class="physics-token token-sol">S</span>
+        <span class="physics-token token-node">+</span>
+    </div>
 
     <!-- 3D AMBIENT SPACE -->
     <div class="scene">
@@ -39,7 +47,7 @@
         <div class="user-info">
             <div class="user-avatar user-avatar-fallback">C</div>
             <span class="user-name">User</span>
-            <a href="index.html" class="logout-btn">Logout</a>
+            <button type="button" class="logout-btn" id="logout-button">Logout</button>
         </div>
     </header>
 
@@ -62,7 +70,7 @@
         </section>
 
         <!-- SEARCH / ANALYSIS INPUT -->
-        <section class="search-card">
+        <section class="search-card glass-card">
             <div class="search-card-top">
                 <div>
                     <span class="search-label">NEW ANALYSIS</span>
@@ -124,21 +132,32 @@
 
             <!-- CORE METRICS -->
             <div class="risk-overview">
-                <div class="risk-hero-card">
-                    <div class="metric-label">OVERALL RISK</div>
-                    <div class="risk-value high" id="report-risk">HIGH</div>
+                <div class="risk-hero-card glass-card">
+                    <div class="metric-label">RISK SCORE</div>
+                    <div class="risk-score-badge risk-score-red" id="report-risk-score">
+                        <strong>75</strong>
+                        <span>/ 100</span>
+                    </div>
                     <div class="metric-description">AI-assessed uncertainty and downside exposure.</div>
                 </div>
-                <div class="metric-card">
+                <div class="metric-card glass-card">
                     <div class="metric-label">MARKET OUTLOOK</div>
                     <div class="metric-value trend-value neutral" id="report-outlook">NEUTRAL</div>
                     <div class="metric-description">Analytical directional outlook.</div>
                 </div>
-                <div class="metric-card">
+                <div class="metric-card glass-card">
                     <div class="metric-label">REFERENCE PRICE</div>
-                    <div class="metric-value price-value" id="report-price">$64,250</div>
-                    <div class="metric-description">Live market reference data.</div>
+                    <div class="reference-price-row">
+                        <div class="metric-value price-value" id="report-price">—</div>
+                        <span class="price-change-pill" id="report-change">—</span>
+                    </div>
+                    <div class="reference-volume" id="report-volume">24H VOL <strong>—</strong></div>
                 </div>
+            </div>
+            <div class="report-loading-skeleton" id="report-loading-skeleton" aria-hidden="true">
+                <span class="skeleton-line skeleton-line-wide"></span>
+                <span class="skeleton-line skeleton-line-medium"></span>
+                <span class="skeleton-block"></span>
             </div>
 
             <!-- EXECUTIVE SUMMARY -->
@@ -302,6 +321,15 @@
         </footer>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const supabaseUrl = "YOUR_SUPABASE_URL";
+        const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indjb3d2ZWJyd293YmNha25xeWVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgwNzkzMjAsImV4cCI6MjEwMzY1NTMyMH0.EZiQKluSEcOs1G1_zHo5YRCZz5O4bFzkbjcSEttf7L4";
+        window.supabaseClient = window.supabase.createClient(
+            supabaseUrl,
+            supabaseAnonKey
+        );
+    </script>
     <script src="script.js"></script>
 </body>
 </html>

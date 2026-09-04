@@ -6,18 +6,18 @@ CryptoRisk AI is a production-grade, full-stack intelligence platform that trans
 
 ## Architecture & System Design
 
-The platform uses a decoupled architecture separating high-performance static delivery from containerized server-side processing and cloud database persistence:
+The project uses a monorepo layout with a clear boundary between browser code and server code:
 
-[ Netlify Static CDN ] --(HTTPS / OAuth)--> [ Render Python/Flask Backend ]
-                                                    |
-                                      +-------------+-------------+
-                                      |                           |
-                            [ Google Gemini API ]      [ Supabase PostgreSQL ]
+[ frontend/ browser UI ] --(HTTP / OAuth)--> [ backend/ Flask API ]
+                                                 |
+                                   +-------------+-------------+
+                                   |                           |
+                                   [ Google Gemini API ]       [ PostgreSQL / Supabase ]
 
-* **Frontend Layer:** Built with tactile brutalism UI principles, clean CSS variables, and native responsive design, hosted globally via Netlify.
-* **Backend Layer:** Powered by Python 3.14 and Flask, managing secure user sessions, CSRF protections, and OAuth verification via Authlib.
+* **Frontend Layer:** HTML5, CSS, and browser JavaScript are isolated in `frontend/`.
+* **Backend Layer:** Python 3.14 and Flask live in `backend/`, managing secure user sessions, CSRF protections, and OAuth verification via Authlib.
 * **Intelligence Layer:** Integrates the Google Gemini API to analyze cryptocurrency tickers under strict data policies, filtering out real-time price hallucination in favor of rigorous risk analysis.
-* **Data Layer:** Persistent relational storage managed via PostgreSQL (Supabase / Render), maintaining strict foreign-key constraints between authenticated users and their historical analysis reports.
+* **Data Layer:** Persistent relational storage managed via PostgreSQL, maintaining strict foreign-key constraints between authenticated users and their historical analysis reports.
 
 ---
 
@@ -29,8 +29,8 @@ The platform uses a decoupled architecture separating high-performance static de
 | **Backend** | Python, Flask, Gunicorn |
 | **Authentication** | Google OpenID Connect (OAuth 2.0 via Authlib) |
 | **AI Engine** | Google Gemini API (`gemini-2.5-flash`) |
-| **Database** | PostgreSQL, Psycopg2 (Supabase / Render Hosting) |
-| **Deployment** | Netlify (Static Hosting) & Render (Web Service Container) |
+| **Database** | PostgreSQL, Psycopg2 |
+| **Project layout** | Monorepo with separate `frontend/` and `backend/` applications |
 
 ---
 
@@ -46,14 +46,15 @@ The platform uses a decoupled architecture separating high-performance static de
 ## Project Structure
 
 Crypto-Risk-AI/
-├── backend/
-│   ├── app.py              # Main Flask application and API integration
-│   ├── requirements.txt    # Python runtime dependencies
-│   └── templates/          # Jinja templates (dashboard and reports)
 ├── frontend/
-│   ├── index.html          # Landing page (Netlify deployment)
-│   ├── dashboard.html      # Client-side user interface
-│   └── style.css           # Global design system & tactile styles
+│   ├── dashboard.html       # Dashboard page
+│   ├── index.html           # Landing page
+│   ├── login.html           # Supabase login page
+│   ├── script.js            # Client-side behavior
+│   └── style.css            # UI styles
+├── backend/
+│   ├── app.py               # Flask application and API integration
+│   └── requirements.txt     # Python runtime dependencies
 └── README.md
 
 ---
@@ -73,8 +74,8 @@ GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
 ## Local Development & Setup
 
 1. **Clone the repository:**
-   git clone https://github.com/chetanaybuilder/Crypto-Risk-AI.git
-   cd Crypto-Risk-AI
+   git clone <your-repository-url>
+   cd <repository-directory>
 
 2. **Set up the backend environment:**
    cd backend
@@ -85,3 +86,18 @@ GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
 
 4. **Access the platform:**
    Navigate to `http://localhost:5000` in your browser.
+
+## GitHub Setup
+
+For a new GitHub repository, run these commands from the project root:
+
+```bash
+git init
+git add .
+git commit -m "Restructure project into frontend and backend"
+git branch -M main
+git remote add origin https://github.com/<github-username>/<repository-name>.git
+git push -u origin main
+```
+
+Replace the remote URL with the repository you created on GitHub. Keep `.env` local; it is excluded by `.gitignore` and must not be committed.
