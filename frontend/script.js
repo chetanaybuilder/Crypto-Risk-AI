@@ -240,6 +240,29 @@ document.addEventListener("DOMContentLoaded", () => {
         "report-risk-score"
     );
 
+    async function analyzeRisk(ticker) {
+
+        const response = await fetch(
+            "https://wcowwebrwowbcakngyeg.supabase.co/functions/v1/Analyze-Risk",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${window.supabaseAnonKey}`
+                },
+                body: JSON.stringify({ ticker })
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(
+                `Risk analysis request failed (${response.status}).`
+            );
+        }
+
+        return response.json();
+    }
+
     const tickerMap = {
         BTC: "bitcoin",
         ETH: "ethereum",
@@ -538,6 +561,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (report) {
                     report.classList.add("is-loading");
                 }
+
+                analyzeRisk(token)
+                    .then((data) => {
+                        console.log("Risk analysis response:", data);
+                    })
+                    .catch((error) => {
+                        console.error("Risk analysis failed:", error);
+                    });
 
                 loadMarketData(token).catch(() => {
                     if (reportPrice) {

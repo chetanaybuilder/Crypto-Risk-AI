@@ -323,8 +323,9 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
-        const supabaseUrl = "YOUR_SUPABASE_URL";
-        const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indjb3d2ZWJyd293YmNha25xeWVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgwNzkzMjAsImV4cCI6MjEwMzY1NTMyMH0.EZiQKluSEcOs1G1_zHo5YRCZz5O4bFzkbjcSEttf7L4";
+        const supabaseUrl = "https://wcowwebrwowbcakngyeg.supabase.co";
+        const supabaseAnonKey = "YOUR_SUPABASE_ANON_KEY";
+        window.supabaseAnonKey = supabaseAnonKey;
         window.supabaseClient = window.supabase.createClient(
             supabaseUrl,
             supabaseAnonKey
