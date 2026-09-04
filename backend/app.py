@@ -42,7 +42,8 @@ from google.genai import types
 # ENVIRONMENT
 # ==========================================================
 
-load_dotenv()
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -622,8 +623,6 @@ def simulate_stress_test(
 # FLASK
 # ==========================================================
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 app = Flask(
     __name__,
     template_folder=os.path.join(PROJECT_ROOT, "frontend"),
@@ -816,7 +815,7 @@ def init_db():
 # GOOGLE AUTHENTICATION
 # ==========================================================
 
-@app.route("/auth/google")
+@app.route("/auth/google", methods=["GET"])
 def google_login():
 
     if "user_id" in session:
