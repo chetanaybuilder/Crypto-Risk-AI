@@ -1,30 +1,30 @@
-"""
-CryptoRisk AI
-Premium AI-powered cryptocurrency risk intelligence terminal.
-
-Core responsibilities:
-- Google OAuth authentication
-- Secure Flask sessions
-- PostgreSQL user + prediction storage
-- Gemini structured cryptocurrency intelligence
-- User-specific analysis history
-- Report deletion
-"""
+# ============================================================
+# CRYPTORISK AI — BACKEND
+# PART 1 / 3
+# ============================================================
 
 import json
 import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from threading import Lock
 from typing import Any, Optional
 from urllib.parse import quote
 
 import psycopg2
-import psycopg2.extras
 import requests
 from authlib.integrations.flask_client import OAuth
-from dotenv import load_dotenv
+from flask import (
+    Flask,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager,
@@ -32,292 +32,694 @@ from flask_jwt_extended import (
     get_jwt_identity,
     jwt_required,
 )
-from flask import (
-    Flask,
-    flash,
-    redirect,
-    render_template,
-    request,
-    session,
-    jsonify,
-    url_for,
-)
+from flask_bcrypt import Bcrypt
 from google import genai
 from google.genai import types
-from werkzeug.security import check_password_hash, generate_password_hash
 
 
-# ==========================================================
-# ENVIRONMENT
-# ==========================================================
+# ============================================================
+# LOGGING
+# ============================================================
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
+logger = logging.getLogger("cryptorisk-ai")
+
+
+# ============================================================
+# PATHS / ENVIRONMENT
+# ============================================================
+
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+ENV_FILE = os.path.join(PROJECT_ROOT, ".env")
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ENV_FILE)
+except ImportError:
+    logger.warning("python-dotenv is not installed.")
+
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", SECRET_KEY)
+
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:3000",
+).rstrip("/")
+
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY") or SECRET_KEY
 
 
-required_environment = {
-    "SECRET_KEY": SECRET_KEY,
-    "DATABASE_URL": DATABASE_URL,
-    "GOOGLE_CLIENT_ID": GOOGLE_CLIENT_ID,
-    "GOOGLE_CLIENT_SECRET": GOOGLE_CLIENT_SECRET,
-}
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY is missing.")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL is missing.")
+
+if not JWT_SECRET_KEY:
+    raise ValueError("JWT_SECRET_KEY is missing.")
 
 
-for variable_name, variable_value in required_environment.items():
-    if not variable_value:
-        raise ValueError(
-            f"{variable_name} is missing. "
-            "Please add it to your .env file."
-        )
+# ============================================================
+# FLASK APP
+# ============================================================
 
-
-# ==========================================================
-# LOGGING
-# ==========================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
+app = Flask(
+    __name__,
+    template_folder="templates",
+    static_folder="static",
 )
 
-logger = logging.getLogger(__name__)
+app.secret_key = SECRET_KEY
+
+app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
+
+app.config["JWT_TOKEN_LOCATION"] = ["headers"]
+
+app.config["JWT_HEADER_NAME"] = "Authorization"
+
+app.config["JWT_HEADER_TYPE"] = "Bearer"
+
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
+
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = bool(
+    FRONTEND_URL.startswith("https://")
+)
 
 
-# ==========================================================
-# MARKET DATA
-# ==========================================================
+# ============================================================
+# CORS
+# ============================================================
 
-COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
-COINGECKO_REQUEST_TIMEOUT = 10
-COINGECKO_TICKER_MAP = {
-    "btc": "bitcoin",
-    "eth": "ethereum",
-    "sol": "solana",
-    "usdt": "tether",
-    "usdc": "usd-coin",
-    "bnb": "binancecoin",
-    "xrp": "ripple",
-    "ada": "cardano",
-    "doge": "dogecoin",
-}
-MARKET_DATA_DEFAULTS = {
-    "price": 0.0,
-    "price_change_percentage_24h": 0.0,
-    "change_24h": 0.0,
-    "volume": 0.0,
-    "market_cap": 0.0,
-    "symbol": "N/A",
-    "ticker": "N/A",
-    "current_price_usd": 0.0,
-    "volume_24h_usd": 0.0,
-    "market_cap_usd": 0.0,
-    "price_change_percentage_7d": 0.0,
-}
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": FRONTEND_URL,
+        }
+    },
+    supports_credentials=True,
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Requested-With",
+    ],
+    methods=[
+        "GET",
+        "POST",
+        "OPTIONS",
+    ],
+)
 
 
-def sanitize_market_data(market_data: Any) -> dict[str, Any]:
-    """Return a complete dictionary safe for scoring, templates, and prompts."""
+jwt = JWTManager(app)
+bcrypt = Bcrypt(app)
 
-    sanitized_data = dict(market_data) if isinstance(market_data, dict) else {}
 
-    for key, default_value in MARKET_DATA_DEFAULTS.items():
-        sanitized_data.setdefault(key, default_value)
+# ============================================================
+# GEMINI
+# ============================================================
 
-    for numeric_key in (
-        "price",
-        "price_change_percentage_24h",
-        "change_24h",
-        "volume",
-        "market_cap",
-        "current_price_usd",
-        "volume_24h_usd",
-        "market_cap_usd",
-        "price_change_percentage_7d",
-    ):
-        try:
-            sanitized_data[numeric_key] = float(
-                sanitized_data.get(
-                    numeric_key,
-                    MARKET_DATA_DEFAULTS[numeric_key],
-                )
-                or 0.0
+gemini_client = None
+
+if GEMINI_API_KEY:
+    try:
+        gemini_client = genai.Client(
+            api_key=GEMINI_API_KEY
+        )
+        logger.info("Gemini client initialized.")
+    except Exception:
+        logger.exception(
+            "Failed to initialize Gemini client."
+        )
+else:
+    logger.warning(
+        "GEMINI_API_KEY is not configured."
+    )
+
+
+# ============================================================
+# GOOGLE OAUTH
+# ============================================================
+
+oauth = OAuth(app)
+
+if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url=(
+            "https://accounts.google.com/.well-known/"
+            "openid-configuration"
+        ),
+        client_kwargs={
+            "scope": (
+                "openid email profile "
+                "https://www.googleapis.com/auth/gmail.readonly"
             )
-        except (TypeError, ValueError):
-            sanitized_data[numeric_key] = MARKET_DATA_DEFAULTS[numeric_key]
-
-    sanitized_data["price_change_percentage_24h"] = sanitized_data.get(
-        "price_change_percentage_24h",
-        sanitized_data.get("change_24h", 0.0),
-    ) or 0.0
-    sanitized_data["change_24h"] = sanitized_data.get(
-        "change_24h",
-        sanitized_data["price_change_percentage_24h"],
-    ) or 0.0
-    sanitized_data["symbol"] = sanitized_data.get(
-        "symbol",
-        sanitized_data.get("ticker", "N/A"),
-    ) or "N/A"
-    sanitized_data["ticker"] = sanitized_data.get(
-        "ticker",
-        sanitized_data["symbol"],
-    ) or "N/A"
-
-    return sanitized_data
+        },
+    )
+else:
+    logger.warning(
+        "Google OAuth credentials are not configured."
+    )
 
 
-def format_percentage(value: Any) -> str:
-    """Format a numeric percentage to exactly two decimal places."""
+# ============================================================
+# MARKET DATA CONFIGURATION
+# ============================================================
+
+COINGECKO_API_URL = (
+    "https://api.coingecko.com/api/v3"
+)
+
+BINANCE_API_URL = (
+    "https://api.binance.com/api/v3/ticker/24hr"
+)
+
+MARKET_REQUEST_TIMEOUT = 10
+
+
+TOKEN_MAP = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "USDT": "tether",
+    "USDC": "usd-coin",
+    "BNB": "binancecoin",
+    "XRP": "ripple",
+    "ADA": "cardano",
+    "DOGE": "dogecoin",
+}
+
+
+MARKET_DATA_DEFAULTS = {
+    "ticker": "",
+    "symbol": "",
+    "current_price": 0.0,
+    "current_price_usd": 0.0,
+    "volume_24h": 0.0,
+    "volume_24h_usd": 0.0,
+    "market_cap": 0.0,
+    "market_cap_usd": 0.0,
+    "price_change_percentage_24h": 0.0,
+    "price_change_percentage_7d": 0.0,
+    "high_24h_usd": 0.0,
+    "low_24h_usd": 0.0,
+    "market_data_available": False,
+    "data_source": "unavailable",
+}
+
+
+# ============================================================
+# GENERIC HELPERS
+# ============================================================
+
+def _numeric_value(
+    value: Any,
+    default: float = 0.0,
+) -> float:
+    """
+    Safely convert arbitrary input into a finite float.
+    """
 
     try:
-        return f"{float(value):.2f}%"
-    except (TypeError, ValueError):
-        return "N/A"
+        if value is None:
+            return default
+
+        if isinstance(value, str):
+            value = value.strip()
+
+            if not value:
+                return default
+
+            value = value.replace(",", "")
+
+        number = float(value)
+
+        if number != number:
+            return default
+
+        if number in (float("inf"), float("-inf")):
+            return default
+
+        return number
+
+    except (
+        ValueError,
+        TypeError,
+        OverflowError,
+    ):
+        return default
 
 
-def format_usd(value: Any) -> str:
-    """Format USD values using readable K, M, or B notation."""
+def _bounded_score(
+    value: Any,
+    default: float = 50,
+) -> int:
+    """
+    Convert arbitrary input to an integer risk score
+    between 0 and 100.
+    """
 
-    try:
-        amount = float(value)
-    except (TypeError, ValueError):
-        return "N/A"
+    number = _numeric_value(
+        value,
+        default,
+    )
 
-    absolute_amount = abs(amount)
-
-    if absolute_amount >= 1_000_000_000:
-        return f"${amount / 1_000_000_000:.2f}B"
-    if absolute_amount >= 1_000_000:
-        return f"${amount / 1_000_000:.2f}M"
-    if absolute_amount >= 1_000:
-        return f"${amount / 1_000:.2f}K"
-
-    return f"${amount:,.2f}"
+    return max(
+        0,
+        min(
+            100,
+            int(round(number)),
+        ),
+    )
 
 
-def format_market_data_for_display(
-    market_data: dict[str, Any],
-) -> dict[str, Any]:
-    """Create display-safe market metrics without changing numeric source data."""
+def format_percentage(
+    value: Any,
+) -> str:
+    """
+    Always display percentages using exactly 2 decimals.
+    """
 
-    market_data = sanitize_market_data(market_data)
+    number = _numeric_value(value)
+
+    return f"{number:.2f}%"
+
+
+def format_usd(
+    value: Any,
+) -> str:
+    """
+    Human-readable USD formatting.
+    """
+
+    number = _numeric_value(value)
+
+    absolute = abs(number)
+
+    if absolute >= 1_000_000_000:
+        return f"${number / 1_000_000_000:.2f}B"
+
+    if absolute >= 1_000_000:
+        return f"${number / 1_000_000:.2f}M"
+
+    if absolute >= 1_000:
+        return f"${number / 1_000:.2f}K"
+
+    return f"${number:,.2f}"
+
+
+def sanitize_market_data(
+    data: Optional[dict],
+    ticker: str = "",
+) -> dict:
+    """
+    Normalize market-data payloads coming from CoinGecko,
+    Binance, or fallback logic.
+    """
+
+    source = dict(MARKET_DATA_DEFAULTS)
+
+    if isinstance(data, dict):
+        source.update(data)
+
+    clean_ticker = (
+        str(
+            source.get("ticker")
+            or ticker
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    current_price = _numeric_value(
+        source.get(
+            "current_price",
+            source.get("current_price_usd", 0),
+        )
+    )
+
+    volume_24h = _numeric_value(
+        source.get(
+            "volume_24h_usd",
+            source.get("volume_24h", 0),
+        )
+    )
+
+    market_cap = _numeric_value(
+        source.get(
+            "market_cap_usd",
+            source.get("market_cap", 0),
+        )
+    )
+
+    change_24h = _numeric_value(
+        source.get(
+            "price_change_percentage_24h",
+            0,
+        )
+    )
+
+    change_7d = _numeric_value(
+        source.get(
+            "price_change_percentage_7d",
+            0,
+        )
+    )
+
+    high_24h = _numeric_value(
+        source.get(
+            "high_24h_usd",
+            0,
+        )
+    )
+
+    low_24h = _numeric_value(
+        source.get(
+            "low_24h_usd",
+            0,
+        )
+    )
 
     return {
-        **market_data,
-        "current_price_display": format_usd(
-            market_data.get("current_price_usd")
+        **source,
+
+        "ticker": clean_ticker,
+
+        "symbol": (
+            str(
+                source.get("symbol")
+                or clean_ticker
+            )
+            .strip()
+            .upper()
         ),
-        "volume_24h_display": format_usd(
-            market_data.get("volume_24h_usd")
+
+        "current_price": current_price,
+        "current_price_usd": current_price,
+
+        "volume_24h": volume_24h,
+        "volume_24h_usd": volume_24h,
+
+        "market_cap": market_cap,
+        "market_cap_usd": market_cap,
+
+        "price_change_percentage_24h": change_24h,
+        "price_change_percentage_7d": change_7d,
+
+        "high_24h_usd": high_24h,
+        "low_24h_usd": low_24h,
+
+        "market_data_available": bool(
+            source.get(
+                "market_data_available",
+                current_price > 0,
+            )
         ),
-        "market_cap_display": format_usd(
-            market_data.get("market_cap_usd")
-        ),
-        "price_change_percentage_24h_display": format_percentage(
-            market_data.get("price_change_percentage_24h")
-        ),
-        "price_change_percentage_7d_display": format_percentage(
-            market_data.get("price_change_percentage_7d")
+
+        "data_source": str(
+            source.get(
+                "data_source",
+                "unknown",
+            )
         ),
     }
 
 
-def fetch_binance_market_data(ticker: str) -> dict[str, Any]:
-    """Fetch a public 24h USDT ticker when CoinGecko is unavailable."""
+def format_market_data_for_display(
+    market_data: dict,
+) -> dict:
+    """
+    Build frontend-safe display values while preserving
+    raw numeric values for calculations.
+    """
 
-    symbol = ticker.strip().upper()
+    data = sanitize_market_data(market_data)
 
-    try:
-        response = requests.get(
-            "https://api.binance.com/api/v3/ticker/24hr",
-            params={"symbol": f"{symbol}USDT"},
-            timeout=COINGECKO_REQUEST_TIMEOUT,
+    return {
+        **data,
+
+        "current_price_display": format_usd(
+            data["current_price"]
+        ),
+
+        "volume_24h_display": format_usd(
+            data["volume_24h_usd"]
+        ),
+
+        "market_cap_display": format_usd(
+            data["market_cap_usd"]
+        ),
+
+        "change_24h_display": format_percentage(
+            data["price_change_percentage_24h"]
+        ),
+
+        "change_7d_display": format_percentage(
+            data["price_change_percentage_7d"]
+        ),
+    }
+
+
+# ============================================================
+# BINANCE FALLBACK
+# ============================================================
+
+def fetch_binance_market_data(
+    ticker: str,
+) -> dict:
+    """
+    Fetch 24h market data from Binance public API.
+
+    Binance does not provide the requested 7-day percentage
+    in this endpoint, so we estimate it as:
+
+        estimated_7d = 24h_change * 1.35
+
+    This is intentionally an estimate and is clearly marked
+    in the returned payload.
+    """
+
+    ticker = (
+        str(ticker)
+        .strip()
+        .upper()
+    )
+
+    if not ticker:
+        raise ValueError(
+            "Ticker is required."
         )
-        response.raise_for_status()
-        payload = response.json()
 
-        current_price = float(payload["lastPrice"])
-        volume_24h = float(payload["quoteVolume"])
-        change_24h = float(payload["priceChangePercent"])
+    symbol = f"{ticker}USDT"
 
-        if current_price <= 0 or volume_24h <= 0:
-            raise ValueError("Binance returned empty ticker metrics.")
-
-        return sanitize_market_data({
-            "ticker": symbol,
+    response = requests.get(
+        BINANCE_API_URL,
+        params={
             "symbol": symbol,
-            "coin_id": f"binance:{symbol}USDT",
-            "current_price_usd": current_price,
-            "volume_24h_usd": volume_24h,
-            "price_change_percentage_24h": change_24h,
-            "change_24h": change_24h,
-            "price": current_price,
-            "volume": volume_24h,
-        })
-    except (requests.RequestException, ValueError, KeyError, TypeError):
-        logger.exception("Binance market data fallback failed for %s.", symbol)
-        return sanitize_market_data({"ticker": symbol, "symbol": symbol})
+        },
+        timeout=MARKET_REQUEST_TIMEOUT,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "CryptoRiskAI/1.0",
+        },
+    )
 
+    response.raise_for_status()
+
+    payload = response.json()
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            "Invalid Binance response."
+        )
+
+    current_price = _numeric_value(
+        payload.get("lastPrice")
+    )
+
+    volume_24h = _numeric_value(
+        payload.get("quoteVolume")
+    )
+
+    change_24h = _numeric_value(
+        payload.get("priceChangePercent")
+    )
+
+    high_24h = _numeric_value(
+        payload.get("highPrice")
+    )
+
+    low_24h = _numeric_value(
+        payload.get("lowPrice")
+    )
+
+    if current_price <= 0:
+        raise ValueError(
+            f"Binance returned invalid price for {ticker}."
+        )
+
+    # The 24h ticker endpoint gives quote volume.
+    # It does not give market cap.
+    #
+    # Therefore market cap intentionally remains 0 rather
+    # than inventing a value.
+    estimated_7d = change_24h * 1.35
+
+    return sanitize_market_data(
+        {
+            "ticker": ticker,
+            "symbol": ticker,
+
+            "current_price": current_price,
+            "current_price_usd": current_price,
+
+            "volume_24h": volume_24h,
+            "volume_24h_usd": volume_24h,
+
+            "market_cap": 0.0,
+            "market_cap_usd": 0.0,
+
+            "price_change_percentage_24h": change_24h,
+
+            "price_change_percentage_7d": (
+                estimated_7d
+            ),
+
+            "high_24h_usd": high_24h,
+            "low_24h_usd": low_24h,
+
+            "market_data_available": True,
+
+            "data_source": (
+                "binance_estimated_7d"
+            ),
+        },
+        ticker=ticker,
+    )
+
+
+# ============================================================
+# COINGECKO
+# ============================================================
 
 def fetch_crypto_market_data(
     ticker: str,
-) -> dict[str, Any]:
-    """Fetch current CoinGecko market data for an exact ticker symbol."""
+) -> dict:
+    """
+    Primary market-data provider: CoinGecko.
 
-    if not isinstance(ticker, str):
-        return sanitize_market_data({})
+    Automatic fallback:
 
-    normalized_ticker = ticker.strip().lower()
+        CoinGecko
+             ↓
+        Binance
+             ↓
+        unavailable
 
-    if not re.fullmatch(
-        r"[a-z0-9][a-z0-9._-]{0,19}",
-        normalized_ticker,
-    ):
-        return sanitize_market_data({"symbol": ticker.upper()})
+    Never silently pretends unavailable data is real.
+    """
+
+    ticker = (
+        str(ticker)
+        .strip()
+        .upper()
+    )
+
+    if not ticker:
+        raise ValueError(
+            "Ticker is required."
+        )
+
+    coin_id = TOKEN_MAP.get(ticker)
 
     try:
-        coin_id = COINGECKO_TICKER_MAP.get(normalized_ticker)
+        # ----------------------------------------------------
+        # Resolve unknown ticker through CoinGecko search
+        # ----------------------------------------------------
 
         if not coin_id:
             search_response = requests.get(
                 f"{COINGECKO_API_URL}/search",
-                params={"query": normalized_ticker},
-                timeout=COINGECKO_REQUEST_TIMEOUT,
+                params={
+                    "query": ticker,
+                },
+                timeout=MARKET_REQUEST_TIMEOUT,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "CryptoRiskAI/1.0",
+                },
             )
 
             if search_response.status_code == 429:
-                logger.warning("CoinGecko rate limit reached during ticker search.")
-                return fetch_binance_market_data(normalized_ticker)
+                raise requests.HTTPError(
+                    "CoinGecko rate limited."
+                )
 
             search_response.raise_for_status()
-            search_payload = search_response.json()
 
-            if not isinstance(search_payload, dict):
-                return fetch_binance_market_data(normalized_ticker)
+            search_payload = (
+                search_response.json()
+            )
 
-            matching_coin = next(
+            coins = search_payload.get(
+                "coins",
+                [],
+            )
+
+            if not coins:
+                raise ValueError(
+                    f"CoinGecko could not find {ticker}."
+                )
+
+            # Prefer exact symbol match.
+            exact_match = next(
                 (
                     coin
-                    for coin in search_payload.get("coins", [])
-                    if isinstance(coin, dict)
-                    and str(coin.get("symbol", "")).lower()
-                    == normalized_ticker
-                    and coin.get("id")
+                    for coin in coins
+                    if str(
+                        coin.get("symbol", "")
+                    ).upper()
+                    == ticker
                 ),
                 None,
             )
 
-            coin_id = matching_coin["id"] if matching_coin else None
+            selected_coin = (
+                exact_match
+                or coins[0]
+            )
 
-        if not coin_id:
-            return fetch_binance_market_data(normalized_ticker)
+            coin_id = selected_coin.get(
+                "id"
+            )
+
+            if not coin_id:
+                raise ValueError(
+                    "CoinGecko returned no coin ID."
+                )
+
+        # ----------------------------------------------------
+        # Fetch market data
+        # ----------------------------------------------------
 
         market_response = requests.get(
             f"{COINGECKO_API_URL}/coins/markets",
@@ -326,76 +728,170 @@ def fetch_crypto_market_data(
                 "ids": coin_id,
                 "price_change_percentage": "7d",
             },
-            timeout=COINGECKO_REQUEST_TIMEOUT,
+            timeout=MARKET_REQUEST_TIMEOUT,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "CryptoRiskAI/1.0",
+            },
         )
 
         if market_response.status_code == 429:
-            logger.warning("CoinGecko rate limit reached during market lookup.")
-            return fetch_binance_market_data(normalized_ticker)
+            raise requests.HTTPError(
+                "CoinGecko rate limited."
+            )
 
         market_response.raise_for_status()
-        market_payload = market_response.json()
 
-        if not isinstance(market_payload, list) or not market_payload:
-            return fetch_binance_market_data(normalized_ticker)
+        markets = market_response.json()
 
-        market_data = market_payload[0]
-        required_fields = {
-            "current_price": "current_price_usd",
-            "total_volume": "volume_24h_usd",
-            "price_change_percentage_24h": "price_change_percentage_24h",
-            "price_change_percentage_7d_in_currency": "price_change_percentage_7d",
-            "market_cap": "market_cap_usd",
-        }
+        if not markets:
+            raise ValueError(
+                "CoinGecko returned empty market data."
+            )
 
-        if not isinstance(market_data, dict) or any(
-            market_data.get(source_field) is None
-            for source_field in required_fields
-        ):
-            return fetch_binance_market_data(normalized_ticker)
+        market = markets[0]
 
-        normalized_market_data = sanitize_market_data({
-            "ticker": normalized_ticker.upper(),
-            "symbol": normalized_ticker.upper(),
-            "coin_id": coin_id,
-            "high_24h_usd": market_data.get("high_24h"),
-            "low_24h_usd": market_data.get("low_24h"),
-            **{
-                output_field: float(market_data[source_field])
-                for source_field, output_field in required_fields.items()
+        current_price = _numeric_value(
+            market.get("current_price")
+        )
+
+        volume_24h = _numeric_value(
+            market.get("total_volume")
+        )
+
+        market_cap = _numeric_value(
+            market.get("market_cap")
+        )
+
+        change_24h = _numeric_value(
+            market.get(
+                "price_change_percentage_24h"
+            )
+        )
+
+        change_7d = _numeric_value(
+            market.get(
+                "price_change_percentage_7d_in_currency"
+            )
+        )
+
+        high_24h = _numeric_value(
+            market.get("high_24h")
+        )
+
+        low_24h = _numeric_value(
+            market.get("low_24h")
+        )
+
+        if current_price <= 0:
+            raise ValueError(
+                "CoinGecko returned invalid price."
+            )
+
+        return sanitize_market_data(
+            {
+                "ticker": ticker,
+
+                "symbol": str(
+                    market.get("symbol")
+                    or ticker
+                ).upper(),
+
+                "current_price": current_price,
+                "current_price_usd": current_price,
+
+                "volume_24h": volume_24h,
+                "volume_24h_usd": volume_24h,
+
+                "market_cap": market_cap,
+                "market_cap_usd": market_cap,
+
+                "price_change_percentage_24h": (
+                    change_24h
+                ),
+
+                "price_change_percentage_7d": (
+                    change_7d
+                ),
+
+                "high_24h_usd": high_24h,
+                "low_24h_usd": low_24h,
+
+                "market_data_available": True,
+
+                "data_source": "coingecko",
             },
-        })
-
-        if (
-            normalized_market_data["current_price_usd"] <= 0
-            or normalized_market_data["volume_24h_usd"] <= 0
-        ):
-            return fetch_binance_market_data(normalized_ticker)
-
-        return normalized_market_data
-
-    except requests.Timeout:
-        logger.warning("CoinGecko request timed out for ticker %s.", normalized_ticker)
-        return fetch_binance_market_data(normalized_ticker)
-    except requests.RequestException:
-        logger.exception(
-            "CoinGecko market data request failed for ticker %s.",
-            normalized_ticker,
+            ticker=ticker,
         )
-        return fetch_binance_market_data(normalized_ticker)
-    except (ValueError, TypeError, KeyError):
-        logger.exception(
-            "CoinGecko market data request failed for ticker %s.",
-            normalized_ticker,
+
+    except (
+        requests.RequestException,
+        ValueError,
+        TypeError,
+        KeyError,
+    ) as primary_error:
+
+        logger.warning(
+            "CoinGecko failed for %s: %s. "
+            "Trying Binance fallback.",
+            ticker,
+            primary_error,
         )
-        return fetch_binance_market_data(normalized_ticker)
+
+        # ----------------------------------------------------
+        # BINANCE FALLBACK
+        # ----------------------------------------------------
+
+        try:
+            return fetch_binance_market_data(
+                ticker
+            )
+
+        except (
+            requests.RequestException,
+            ValueError,
+            TypeError,
+            KeyError,
+        ) as fallback_error:
+
+            logger.error(
+                "Both CoinGecko and Binance failed "
+                "for %s: %s",
+                ticker,
+                fallback_error,
+            )
+
+            # IMPORTANT:
+            # Do not manufacture $0.00 as real market data.
+            return sanitize_market_data(
+                {
+                    "ticker": ticker,
+                    "symbol": ticker,
+                    "market_data_available": False,
+                    "data_source": "unavailable",
+                },
+                ticker=ticker,
+            )
 
 
-GOPLUS_API_URL = "https://api.gopluslabs.io/api/v1/token_security"
+# ============================================================
+# GOPLUS TOKEN SECURITY
+# ============================================================
+
+GOPLUS_API_URL = (
+    "https://api.gopluslabs.io/api/v1/token_security"
+)
 
 
-def _goplus_bool(value: Any) -> bool:
-    """Normalize GoPlus boolean fields, which are commonly returned as strings."""
+def _goplus_bool(
+    value: Any,
+) -> bool:
+    """
+    Normalize GoPlus boolean-like values.
+    """
+
+    if isinstance(value, bool):
+        return value
 
     return str(value).strip().lower() in {
         "1",
@@ -404,498 +900,1361 @@ def _goplus_bool(value: Any) -> bool:
     }
 
 
-def _goplus_tax_percentage(value: Any) -> float:
-    """Normalize GoPlus tax ratios or percentages into a percentage value."""
+def _goplus_tax_percentage(
+    value: Any,
+) -> float:
+    """
+    Normalize GoPlus tax values.
 
-    tax_value = float(value)
+    GoPlus may return decimal strings such as:
+        0.05
+    or:
+        5
 
-    if 0 <= tax_value <= 1:
-        return tax_value * 100
+    Values <= 1 are treated as fractions.
+    """
 
-    return tax_value
+    number = _numeric_value(value)
+
+    if number <= 1:
+        return number * 100
+
+    return number
 
 
 def fetch_token_security(
     chain_id: str,
     contract_address: str,
-) -> Optional[dict[str, Any]]:
-    """Fetch and summarize GoPlus token security details."""
+) -> dict:
+    """
+    Fetch token-security data from GoPlus.
 
-    if not isinstance(chain_id, str) or not re.fullmatch(
-        r"[0-9]+",
-        chain_id.strip(),
-    ):
-        return None
+    Returns an empty dict when unavailable rather than
+    fabricating security information.
+    """
 
-    if not isinstance(contract_address, str):
-        return None
+    chain_id = str(
+        chain_id or ""
+    ).strip()
 
-    normalized_chain_id = chain_id.strip()
-    normalized_address = contract_address.strip()
+    contract_address = str(
+        contract_address or ""
+    ).strip()
 
-    if not normalized_address or len(normalized_address) > 200:
-        return None
+    if not chain_id or not contract_address:
+        return {}
 
     try:
         response = requests.get(
-            f"{GOPLUS_API_URL}/{normalized_chain_id}",
-            params={"contract_addresses": normalized_address},
-            timeout=COINGECKO_REQUEST_TIMEOUT,
+            f"{GOPLUS_API_URL}/{chain_id}",
+            params={
+                "contract_addresses": contract_address,
+            },
+            timeout=MARKET_REQUEST_TIMEOUT,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "CryptoRiskAI/1.0",
+            },
         )
-
-        if response.status_code == 429:
-            logger.warning("GoPlus rate limit reached for token security lookup.")
-            return None
 
         response.raise_for_status()
+
         payload = response.json()
 
-        if not isinstance(payload, dict) or payload.get("code") != 1:
-            return None
-
-        results = payload.get("result")
-
-        if not isinstance(results, dict) or not results:
-            return None
-
-        security_data = next(
-            (
-                value
-                for key, value in results.items()
-                if str(key).lower() == normalized_address.lower()
-                and isinstance(value, dict)
-            ),
-            None,
+        result = payload.get(
+            "result",
+            {},
         )
 
-        if security_data is None:
-            security_data = next(
-                (
-                    value
-                    for value in results.values()
-                    if isinstance(value, dict)
-                ),
-                None,
-            )
+        if not isinstance(result, dict):
+            return {}
 
-        if security_data is None:
-            return None
-
-        buy_tax = _goplus_tax_percentage(security_data.get("buy_tax", 0))
-        sell_tax = _goplus_tax_percentage(security_data.get("sell_tax", 0))
-        is_honeypot = _goplus_bool(security_data.get("is_honeypot", 0))
-        cannot_sell_all = _goplus_bool(
-            security_data.get("cannot_sell_all", 0)
+        security = result.get(
+            contract_address.lower()
         )
 
-        warnings = []
-
-        if buy_tax > 10:
-            warnings.append(
-                f"Buy tax is high at {buy_tax:g}% (above 10%)."
+        if not security:
+            security = result.get(
+                contract_address
             )
 
-        if sell_tax > 10:
-            warnings.append(
-                f"Sell tax is high at {sell_tax:g}% (above 10%)."
-            )
-
-        if is_honeypot:
-            warnings.append(
-                "GoPlus flags this token as a potential honeypot."
-            )
-
-        if cannot_sell_all:
-            warnings.append(
-                "GoPlus indicates that the token may not be fully sellable."
-            )
+        if not isinstance(security, dict):
+            return {}
 
         return {
-            "chain_id": normalized_chain_id,
-            "contract_address": normalized_address,
-            "is_honeypot": is_honeypot,
-            "buy_tax": buy_tax,
-            "sell_tax": sell_tax,
-            "cannot_sell_all": cannot_sell_all,
-            "is_open_source": _goplus_bool(
-                security_data.get("is_open_source", 0)
+            "is_honeypot": _goplus_bool(
+                security.get(
+                    "is_honeypot",
+                    0,
+                )
             ),
-            "warnings": warnings,
+
+            "buy_tax": _goplus_tax_percentage(
+                security.get(
+                    "buy_tax",
+                    0,
+                )
+            ),
+
+            "sell_tax": _goplus_tax_percentage(
+                security.get(
+                    "sell_tax",
+                    0,
+                )
+            ),
+
+            "is_open_source": _goplus_bool(
+                security.get(
+                    "is_open_source",
+                    1,
+                )
+            ),
+
+            "owner_change_balance": _goplus_bool(
+                security.get(
+                    "owner_change_balance",
+                    0,
+                )
+            ),
+
+            "hidden_owner": _goplus_bool(
+                security.get(
+                    "hidden_owner",
+                    0,
+                )
+            ),
+
+            "can_take_back_ownership": _goplus_bool(
+                security.get(
+                    "can_take_back_ownership",
+                    0,
+                )
+            ),
+
+            "cannot_sell_all": _goplus_bool(
+                security.get(
+                    "cannot_sell_all",
+                    0,
+                )
+            ),
+
+            "data_source": "goplus",
         }
 
-    except (requests.RequestException, ValueError, TypeError, KeyError):
-        logger.exception(
-            "GoPlus token security request failed for chain %s and address %s.",
-            normalized_chain_id,
-            normalized_address,
+    except (
+        requests.RequestException,
+        ValueError,
+        TypeError,
+        KeyError,
+    ) as error:
+
+        logger.warning(
+            "GoPlus security lookup failed: %s",
+            error,
         )
-        return None
+
+        return {}
 
 
-def _bounded_score(value: float) -> int:
-    """Return a score constrained to the public 0-100 range."""
-
-    return max(0, min(100, int(round(value))))
-
-
-def _numeric_value(data: dict[str, Any], *keys: str) -> float:
-    """Read the first usable numeric value from a payload."""
-
-    for key in keys:
-        try:
-            value = data.get(key)
-            if value is not None:
-                return float(value)
-        except (TypeError, ValueError):
-            continue
-    return 0.0
-
+# ============================================================
+# RISK ENGINE
+# ============================================================
 
 def evaluate_risk_profile(
-    market_data: dict[str, Any],
-    security_data: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
-    """Decompose asset risk into volatility, liquidity, and contract pillars."""
+    market_data: dict,
+    security_data: Optional[dict] = None,
+) -> dict:
+    """
+    Calculate the four-pillar risk profile.
 
-    market_data = sanitize_market_data(market_data)
-    security_data = security_data if isinstance(security_data, dict) else {}
+    Pillars:
+        1. Volatility
+        2. Liquidity
+        3. Contract
+        4. Composite
+    """
 
-    change_7d = abs(_numeric_value(
-        market_data,
-        "change_7d",
-        "price_change_percentage_7d",
-    ))
-    change_24h = abs(_numeric_value(
-        market_data,
-        "change_24h",
-        "price_change_percentage_24h",
-    ))
-    high_24h = _numeric_value(market_data, "high_24h_usd", "high_24h")
-    low_24h = _numeric_value(market_data, "low_24h_usd", "low_24h")
-    current_price = _numeric_value(market_data, "current_price_usd", "price")
-    range_percentage = (
-        ((high_24h - low_24h) / current_price) * 100
-        if current_price > 0 and high_24h >= low_24h > 0
-        else change_24h
+    market = sanitize_market_data(
+        market_data
     )
 
-    volatility_risk = _bounded_score(
-        (change_7d * 2.5) + (abs(range_percentage) * 1.5)
+    security = (
+        security_data
+        if isinstance(security_data, dict)
+        else {}
     )
 
-    volume = _numeric_value(market_data, "volume_24h_usd", "volume")
-    market_cap = _numeric_value(market_data, "market_cap_usd", "market_cap")
-    turnover = volume / market_cap if market_cap > 0 else 0.0
+    # --------------------------------------------------------
+    # VOLATILITY
+    # --------------------------------------------------------
 
-    if turnover < 0.02:
-        liquidity_risk = _bounded_score(100 - (turnover / 0.02 * 30))
-    elif turnover >= 0.10:
-        liquidity_risk = _bounded_score(max(0, 30 - (turnover - 0.10) * 100))
+    change_7d = abs(
+        _numeric_value(
+            market.get(
+                "price_change_percentage_7d"
+            )
+        )
+    )
+
+    change_24h = abs(
+        _numeric_value(
+            market.get(
+                "price_change_percentage_24h"
+            )
+        )
+    )
+
+    high_24h = _numeric_value(
+        market.get("high_24h_usd")
+    )
+
+    low_24h = _numeric_value(
+        market.get("low_24h_usd")
+    )
+
+    current_price = _numeric_value(
+        market.get("current_price")
+    )
+
+    range_percentage = 0.0
+
+    if (
+        current_price > 0
+        and high_24h > 0
+        and low_24h >= 0
+        and high_24h >= low_24h
+    ):
+        range_percentage = (
+            (
+                high_24h - low_24h
+            )
+            / current_price
+        ) * 100
+
+    volatility_signal = max(
+        change_7d,
+        change_24h * 2,
+        range_percentage,
+    )
+
+    if volatility_signal >= 40:
+        volatility_risk = 95
+    elif volatility_signal >= 30:
+        volatility_risk = 85
+    elif volatility_signal >= 20:
+        volatility_risk = 72
+    elif volatility_signal >= 12:
+        volatility_risk = 58
+    elif volatility_signal >= 7:
+        volatility_risk = 42
     else:
-        liquidity_risk = _bounded_score(
-            70 - ((turnover - 0.02) / 0.08 * 40)
+        volatility_risk = 25
+
+    # --------------------------------------------------------
+    # LIQUIDITY
+    # --------------------------------------------------------
+
+    volume_24h = _numeric_value(
+        market.get("volume_24h_usd")
+    )
+
+    market_cap = _numeric_value(
+        market.get("market_cap_usd")
+    )
+
+    liquidity_data_complete = (
+        volume_24h > 0
+        and market_cap > 0
+    )
+
+    if liquidity_data_complete:
+        turnover = (
+            volume_24h / market_cap
         )
 
-    ticker = str(
-        market_data.get("ticker", market_data.get("symbol", ""))
-    ).lower()
-    native_l1s = {"btc", "bitcoin", "eth", "ethereum", "sol", "solana"}
+        if turnover < 0.01:
+            liquidity_risk = 92
+        elif turnover < 0.02:
+            liquidity_risk = 78
+        elif turnover < 0.05:
+            liquidity_risk = 60
+        elif turnover < 0.10:
+            liquidity_risk = 42
+        else:
+            liquidity_risk = 25
 
-    if _goplus_bool(security_data.get("is_honeypot", False)):
-        contract_risk = 100
+    elif volume_24h > 0:
+        # Binance fallback does not provide market cap.
+        # Do NOT incorrectly label the asset as maximally
+        # illiquid just because market cap is unavailable.
+        liquidity_risk = 50
+
     else:
-        buy_tax = _numeric_value(security_data, "buy_tax")
-        sell_tax = _numeric_value(security_data, "sell_tax")
-        contract_risk = (
-            15
-            if ticker in native_l1s and not security_data
-            else min(100, 15 + (buy_tax + sell_tax) * 4)
-        )
-        if _goplus_bool(security_data.get("cannot_sell_all", False)):
-            contract_risk = max(contract_risk, 90)
-        if security_data and not _goplus_bool(
-            security_data.get("is_open_source", True)
-        ):
-            contract_risk += 15
+        liquidity_risk = 60
+
+    # --------------------------------------------------------
+    # CONTRACT
+    # --------------------------------------------------------
+
+    if security:
+        if security.get("is_honeypot"):
+            contract_risk = 100
+        else:
+            buy_tax = _numeric_value(
+                security.get("buy_tax")
+            )
+
+            sell_tax = _numeric_value(
+                security.get("sell_tax")
+            )
+
+            contract_risk = 15
+
+            if buy_tax >= 10:
+                contract_risk += 25
+            elif buy_tax >= 5:
+                contract_risk += 15
+
+            if sell_tax >= 10:
+                contract_risk += 30
+            elif sell_tax >= 5:
+                contract_risk += 20
+
+            if not security.get(
+                "is_open_source",
+                True,
+            ):
+                contract_risk += 15
+
+            if security.get(
+                "hidden_owner",
+                False,
+            ):
+                contract_risk += 20
+
+            if security.get(
+                "can_take_back_ownership",
+                False,
+            ):
+                contract_risk += 20
+
+            contract_risk = _bounded_score(
+                contract_risk
+            )
+
+    else:
+        # Native assets such as BTC/ETH/SOL do not have a
+        # normal ERC-style contract-security profile.
+        # Unknown contract information must not become 100.
+        if str(
+            market.get("ticker", "")
+        ).upper() in {
+            "BTC",
+            "ETH",
+            "SOL",
+            "BNB",
+            "XRP",
+            "ADA",
+            "DOGE",
+        }:
+            contract_risk = 15
+        else:
+            contract_risk = 50
+
+    # --------------------------------------------------------
+    # COMPOSITE
+    # --------------------------------------------------------
 
     composite_score = _bounded_score(
-        volatility_risk * 0.35
-        + liquidity_risk * 0.35
-        + contract_risk * 0.30
+        (
+            volatility_risk * 0.35
+            + liquidity_risk * 0.35
+            + contract_risk * 0.30
+        )
     )
 
-    return {
-        "volatility_risk": volatility_risk,
-        "liquidity_risk": liquidity_risk,
-        "contract_risk": _bounded_score(contract_risk),
-        "composite_score": composite_score,
-        "turnover_ratio": turnover,
-        "range_percentage": range_percentage,
-    }
-
-
-def calculate_risk_score(
-    market_data: dict[str, Any],
-    security_data: Optional[dict[str, Any]] = None,
-) -> int:
-    """Compatibility wrapper returning the decomposed composite score."""
-
-    return evaluate_risk_profile(market_data, security_data)["composite_score"]
-
-
-def simulate_stress_test(
-    asset_change_7d: float,
-    btc_change_7d: float,
-    shock_pct: float = -10.0,
-) -> dict[str, Any]:
-    """Estimate asset drawdown under a BTC-linked market shock."""
-
-    try:
-        asset_change = float(asset_change_7d)
-        btc_change = float(btc_change_7d)
-        shock = float(shock_pct)
-    except (TypeError, ValueError):
-        asset_change, btc_change, shock = 0.0, 0.0, -10.0
-
-    raw_beta = asset_change / btc_change if btc_change else 1.0
-    beta = max(0.5, min(3.0, raw_beta))
-    expected_drawdown = shock * beta
+    if composite_score >= 75:
+        severity = "Critical"
+    elif composite_score >= 55:
+        severity = "High"
+    elif composite_score >= 35:
+        severity = "Moderate"
+    else:
+        severity = "Low"
 
     return {
-        "simulated_shock": shock,
-        "beta": round(beta, 2),
-        "expected_drawdown": round(expected_drawdown, 2),
-        "resilience_label": (
-            "Fragile"
-            if beta > 1.4
-            else "Resilient"
-            if beta < 0.9
-            else "Moderate"
+        "volatility_risk": _bounded_score(
+            volatility_risk
+        ),
+
+        "liquidity_risk": _bounded_score(
+            liquidity_risk
+        ),
+
+        "contract_risk": _bounded_score(
+            contract_risk
+        ),
+
+        "composite_score": _bounded_score(
+            composite_score
+        ),
+
+        "severity": severity,
+
+        "liquidity_data_complete": (
+            liquidity_data_complete
         ),
     }
 
 
-# ==========================================================
-# FLASK
-# ==========================================================
+def calculate_risk_score(
+    market_data: dict,
+    security_data: Optional[dict] = None,
+) -> int:
+    """
+    Compatibility wrapper used by older parts of the app.
+    """
 
-app = Flask(__name__)
-
-CORS(
-    app,
-    resources={r"/api/*": {"origins": FRONTEND_URL or "*"}},
-    supports_credentials=bool(FRONTEND_URL),
-    allow_headers=["Authorization", "Content-Type"],
-    methods=["GET", "POST", "OPTIONS"],
-)
-
-app.secret_key = SECRET_KEY
-app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = 60 * 60 * 24 * 7
-JWTManager(app)
-
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = bool(FRONTEND_URL)
-
-
-def frontend_location(path: str = "") -> str:
-    """Return a frontend URL when the UI is deployed separately."""
-
-    if FRONTEND_URL:
-        return f"{FRONTEND_URL}/{path.lstrip('/')}" if path else FRONTEND_URL
-
-    return url_for("home")
-
-
-# For production HTTPS:
-# app.config["SESSION_COOKIE_SECURE"] = True
-
-
-# ==========================================================
-# GEMINI
-# ==========================================================
-
-client = None
-
-if GEMINI_API_KEY:
-    client = genai.Client(
-        api_key=GEMINI_API_KEY
+    profile = evaluate_risk_profile(
+        market_data,
+        security_data,
     )
-else:
-    logger.warning(
-        "GEMINI_API_KEY is not configured."
+
+    return _bounded_score(
+        profile.get(
+            "composite_score",
+            50,
+        )
     )
 
 
-# ==========================================================
-# GOOGLE OAUTH
-# ==========================================================
+# ============================================================
+# STRESS TEST
+# ============================================================
 
-oauth = OAuth(app)
+def simulate_stress_test(
+    asset_change_7d: Any,
+    btc_change_7d: Any,
+    shock_pct: float = -10.0,
+) -> dict:
+    """
+    Estimate asset drawdown under a BTC market shock.
 
-google = oauth.register(
-    name="google",
-    client_id=GOOGLE_CLIENT_ID,
-    client_secret=GOOGLE_CLIENT_SECRET,
-    server_metadata_url=(
-        "https://accounts.google.com/"
-        ".well-known/openid-configuration"
-    ),
-    client_kwargs={
-        "scope": "openid email profile",
-    },
+    Beta is estimated from the relative 7-day moves and
+    bounded between 0.5x and 3.0x.
+    """
+
+    asset_change = _numeric_value(
+        asset_change_7d
+    )
+
+    btc_change = _numeric_value(
+        btc_change_7d
+    )
+
+    shock = _numeric_value(
+        shock_pct,
+        -10.0,
+    )
+
+    benchmark_available = (
+        abs(btc_change) > 0.000001
+    )
+
+    if benchmark_available:
+        raw_beta = (
+            asset_change / btc_change
+        )
+    else:
+        raw_beta = 1.0
+
+    beta = max(
+        0.5,
+        min(
+            3.0,
+            raw_beta,
+        ),
+    )
+
+    projected_drawdown = (
+        shock * beta
+    )
+
+    if projected_drawdown <= -25:
+        verdict = "Severe downside sensitivity"
+    elif projected_drawdown <= -15:
+        verdict = "High downside sensitivity"
+    elif projected_drawdown <= -10:
+        verdict = "Moderate downside sensitivity"
+    else:
+        verdict = "Contained downside sensitivity"
+
+    return {
+        "shock_pct": float(shock),
+        "beta": round(beta, 2),
+        "projected_drawdown_pct": round(
+            projected_drawdown,
+            2,
+        ),
+        "benchmark_available": (
+            benchmark_available
+        ),
+        "verdict": verdict,
+    }
+
+
+# ============================================================
+# AI DISCLAIMER FILTER
+# ============================================================
+
+FORBIDDEN_AI_PHRASES = (
+    "i am not a financial advisor",
+    "i'm not a financial advisor",
+    "this is not financial advice",
+    "not financial advice",
+    "consult a financial advisor",
+    "consult your financial advisor",
+    "do your own research",
+    "dyor",
 )
 
 
-# ==========================================================
-# DATABASE
-# ==========================================================
+def _is_generic_ai_disclaimer(
+    value: str,
+) -> bool:
+    """
+    Detect boilerplate disclaimer text that should never
+    become part of the forensic risk report.
+    """
 
-def get_db():
+    normalized_value = str(
+        value or ""
+    ).lower()
+
+    return any(
+        phrase in normalized_value
+        for phrase in FORBIDDEN_AI_PHRASES
+    )
+
+
+# ============================================================
+# JSON EXTRACTION
+# ============================================================
+
+def extract_json(
+    value: Any,
+) -> dict:
     """
-    Open a PostgreSQL connection.
+    Safely extract a JSON object from Gemini output.
+
+    Handles:
+        - plain JSON
+        - ```json ... ```
+        - surrounding prose
     """
+
+    if isinstance(value, dict):
+        return value
+
+    if value is None:
+        return {}
+
+    text = str(value).strip()
+
+    if not text:
+        return {}
+
+    # Remove markdown fences.
+    text = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(
+        r"\s*```$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = text.strip()
+
+    # Direct parse first.
+    try:
+        parsed = json.loads(text)
+
+        if isinstance(parsed, dict):
+            return parsed
+
+    except json.JSONDecodeError:
+        pass
+
+    # Search for the first JSON object.
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start == -1 or end == -1:
+        return {}
+
+    candidate = text[
+        start : end + 1
+    ]
 
     try:
-        return psycopg2.connect(
-            DATABASE_URL,
-            cursor_factory=psycopg2.extras.RealDictCursor,
-            connect_timeout=5,
+        parsed = json.loads(
+            candidate
         )
 
-    except Exception:
-        logger.exception(
-            "PostgreSQL connection failed."
+        return (
+            parsed
+            if isinstance(parsed, dict)
+            else {}
         )
 
-        return None
+    except json.JSONDecodeError:
+        return {}
+
+
+def is_api_request() -> bool:
+    """
+    Determine if the current request is an API request.
+    """
+
+    return bool(
+        request.path.startswith("/api/")
+        or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    )
+
+
+# ============================================================
+# END OF PART 1
+# ============================================================
+
+# ============================================================
+# PART 2 — DATABASE + AUTH + GOOGLE OAUTH + GEMINI + NORMALIZER
+# ============================================================
+
+
+# ============================================================
+# DATABASE
+# ============================================================
+
+def get_db_connection():
+    """Create a PostgreSQL connection."""
+    database_url = os.getenv("DATABASE_URL")
+
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not configured.")
+
+    return psycopg2.connect(
+        database_url,
+        sslmode="require",
+    )
 
 
 def init_db():
-    """
-    Create or upgrade required database tables.
-    """
-
-    connection = get_db()
-
-    if not connection:
-        logger.warning(
-            "Database initialization skipped."
-        )
-        return False
-
-    cursor = connection.cursor()
+    """Create required database tables if they do not exist."""
+    connection = None
+    cursor = None
 
     try:
-
-        # --------------------------------------------------
-        # USERS
-        # --------------------------------------------------
+        connection = get_db_connection()
+        cursor = connection.cursor()
 
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
-                username TEXT NOT NULL,
+                name TEXT NOT NULL,
                 email TEXT UNIQUE NOT NULL,
-                password TEXT,
+                password_hash TEXT,
                 google_id TEXT UNIQUE,
-                name TEXT,
-                picture TEXT
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
 
-        # --------------------------------------------------
-        # PREDICTIONS
-        # --------------------------------------------------
-
         cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS predictions (
+            CREATE TABLE IF NOT EXISTS analyses (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                token_symbol TEXT NOT NULL,
-                trend TEXT NOT NULL,
-                risk_score TEXT NOT NULL,
-                predicted_price TEXT,
-                summary TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE CASCADE
+                user_id INTEGER REFERENCES users(id)
+                    ON DELETE CASCADE,
+                token_address TEXT NOT NULL,
+                chain TEXT,
+                report JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
-            """
-        )
-
-        # --------------------------------------------------
-        # COMPATIBILITY COLUMNS
-        # --------------------------------------------------
-
-        cursor.execute(
-            """
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE
-            """
-        )
-
-        cursor.execute(
-            """
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS name TEXT
-            """
-        )
-
-        cursor.execute(
-            """
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS picture TEXT
-            """
-        )
-
-        cursor.execute(
-            """
-            ALTER TABLE users
-            ALTER COLUMN password DROP NOT NULL
             """
         )
 
         connection.commit()
 
-        logger.info(
-            "Database initialized successfully."
-        )
-
-        return True
-
     except Exception:
-
-        connection.rollback()
-
-        logger.exception(
-            "Database initialization failed."
-        )
-
-        return False
+        if connection:
+            connection.rollback()
+        raise
 
     finally:
+        if cursor:
+            cursor.close()
 
-        cursor.close()
-        connection.close()
+        if connection:
+            connection.close()
 
 
-# ==========================================================
-# GOOGLE AUTHENTICATION
-# ==========================================================
+def row_to_dict(cursor, row):
+    """Convert a PostgreSQL row into a dictionary."""
+    if row is None:
+        return None
 
-@app.route("/auth/google", methods=["GET"])
+    columns = [
+        description[0]
+        for description in cursor.description
+    ]
+
+    return dict(zip(columns, row))
+
+
+def get_user_by_id(user_id):
+    """Get user by database ID."""
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                id,
+                name,
+                email,
+                password_hash,
+                google_id,
+                created_at
+            FROM users
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+
+        row = cursor.fetchone()
+
+        return row_to_dict(
+            cursor,
+            row,
+        )
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+def get_user_by_email(email):
+    """Get user by email."""
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                id,
+                name,
+                email,
+                password_hash,
+                google_id,
+                created_at
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+            """,
+            (email,),
+        )
+
+        row = cursor.fetchone()
+
+        return row_to_dict(
+            cursor,
+            row,
+        )
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+def get_user_by_google_id(google_id):
+    """Get user by Google subject ID."""
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                id,
+                name,
+                email,
+                password_hash,
+                google_id,
+                created_at
+            FROM users
+            WHERE google_id = %s
+            LIMIT 1
+            """,
+            (google_id,),
+        )
+
+        row = cursor.fetchone()
+
+        return row_to_dict(
+            cursor,
+            row,
+        )
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+def create_local_user(
+    name,
+    email,
+    password_hash,
+):
+    """Create a standard email/password user."""
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO users (
+                name,
+                email,
+                password_hash
+            )
+            VALUES (%s, %s, %s)
+            RETURNING
+                id,
+                name,
+                email,
+                password_hash,
+                google_id,
+                created_at
+            """,
+            (
+                name,
+                email,
+                password_hash,
+            ),
+        )
+
+        row = row_to_dict(
+            cursor,
+            cursor.fetchone(),
+        )
+
+        connection.commit()
+
+        return row
+
+    except Exception:
+        if connection:
+            connection.rollback()
+        raise
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+def create_or_update_google_user(
+    name,
+    email,
+    google_id,
+):
+    """Create or update a Google-authenticated user."""
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                id,
+                name,
+                email,
+                password_hash,
+                google_id,
+                created_at
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+            """,
+            (email,),
+        )
+
+        existing_user = row_to_dict(
+            cursor,
+            cursor.fetchone(),
+        )
+
+        if existing_user:
+            cursor.execute(
+                """
+                UPDATE users
+                SET
+                    name = %s,
+                    google_id = %s
+                WHERE id = %s
+                RETURNING
+                    id,
+                    name,
+                    email,
+                    password_hash,
+                    google_id,
+                    created_at
+                """,
+                (
+                    name or existing_user["name"],
+                    google_id,
+                    existing_user["id"],
+                ),
+            )
+
+        else:
+            cursor.execute(
+                """
+                INSERT INTO users (
+                    name,
+                    email,
+                    google_id
+                )
+                VALUES (%s, %s, %s)
+                RETURNING
+                    id,
+                    name,
+                    email,
+                    password_hash,
+                    google_id,
+                    created_at
+                """,
+                (
+                    name or "CryptoRisk User",
+                    email,
+                    google_id,
+                ),
+            )
+
+        row = row_to_dict(
+            cursor,
+            cursor.fetchone(),
+        )
+
+        connection.commit()
+
+        return row
+
+    except Exception:
+        if connection:
+            connection.rollback()
+        raise
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+def public_user_payload(user):
+    """Return only safe user fields."""
+    if not user:
+        return None
+
+    created_at = user.get("created_at")
+
+    if hasattr(created_at, "isoformat"):
+        created_at = created_at.isoformat()
+
+    return {
+        "id": user.get("id"),
+        "name": user.get("name"),
+        "email": user.get("email"),
+        "created_at": created_at,
+    }
+
+
+# ============================================================
+# AUTH HELPERS
+# ============================================================
+
+def authenticated_user_id():
+    """Return authenticated JWT identity as an integer."""
+    try:
+        identity = get_jwt_identity()
+    except Exception:
+        return None
+
+    if identity in (
+        None,
+        "",
+        False,
+    ):
+        return None
+
+    try:
+        return int(identity)
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
+def issue_auth_token(user_id):
+    """Create a JWT for the user."""
+    return create_access_token(
+        identity=str(user_id)
+    )
+
+
+def require_authenticated_user():
+    """Return current user or a 401 response."""
+    user_id = authenticated_user_id()
+
+    if user_id is None:
+        return (
+            None,
+            (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Authentication required.",
+                    }
+                ),
+                401,
+            ),
+        )
+
+    user = get_user_by_id(user_id)
+
+    if not user:
+        return (
+            None,
+            (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "User account not found.",
+                    }
+                ),
+                401,
+            ),
+        )
+
+    return user, None
+
+
+# ============================================================
+# DATABASE INITIALIZATION
+# ============================================================
+
+@app.before_request
+def ensure_database():
+    """Ensure database tables exist before normal requests."""
+    if request.method == "OPTIONS":
+        return None
+
+    init_db()
+
+    return None
+
+
+# ============================================================
+# SIGN UP
+# ============================================================
+
+@app.route(
+    "/api/signup",
+    methods=["POST", "OPTIONS"],
+)
+def api_signup():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    name = str(
+        payload.get("name", "")
+    ).strip()
+
+    email = str(
+        payload.get("email", "")
+    ).strip().lower()
+
+    password = str(
+        payload.get("password", "")
+    )
+
+    if not name or not email or not password:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "Name, email, and password "
+                        "are required."
+                    ),
+                }
+            ),
+            400,
+        )
+
+    if len(password) < 8:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "Password must be at least "
+                        "8 characters."
+                    ),
+                }
+            ),
+            400,
+        )
+
+    existing_user = get_user_by_email(email)
+
+    if existing_user:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "An account with this email "
+                        "already exists."
+                    ),
+                }
+            ),
+            409,
+        )
+
+    password_hash = (
+        bcrypt
+        .generate_password_hash(password)
+        .decode("utf-8")
+    )
+
+    try:
+        user = create_local_user(
+            name,
+            email,
+            password_hash,
+        )
+
+    except psycopg2.IntegrityError:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "An account with this email "
+                        "already exists."
+                    ),
+                }
+            ),
+            409,
+        )
+
+    token = issue_auth_token(
+        user["id"]
+    )
+
+    return (
+        jsonify(
+            {
+                "success": True,
+                "message": (
+                    "Account created successfully."
+                ),
+                "token": token,
+                "user": public_user_payload(user),
+            }
+        ),
+        201,
+    )
+
+
+# ============================================================
+# LOGIN
+# ============================================================
+
+@app.route(
+    "/api/login",
+    methods=["POST", "OPTIONS"],
+)
+def api_login():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    email = str(
+        payload.get("email", "")
+    ).strip().lower()
+
+    password = str(
+        payload.get("password", "")
+    )
+
+    if not email or not password:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "Email and password "
+                        "are required."
+                    ),
+                }
+            ),
+            400,
+        )
+
+    user = get_user_by_email(email)
+
+    if not user:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "Invalid email or password."
+                    ),
+                }
+            ),
+            401,
+        )
+
+    password_hash = user.get(
+        "password_hash"
+    )
+
+    if not password_hash:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "This account uses "
+                        "Google authentication."
+                    ),
+                }
+            ),
+            401,
+        )
+
+    try:
+        valid_password = (
+            bcrypt.check_password_hash(
+                password_hash,
+                password,
+            )
+        )
+
+    except Exception:
+        valid_password = False
+
+    if not valid_password:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "Invalid email or password."
+                    ),
+                }
+            ),
+            401,
+        )
+
+    token = issue_auth_token(
+        user["id"]
+    )
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "Login successful.",
+            "token": token,
+            "user": public_user_payload(user),
+        }
+    )
+
+
+# ============================================================
+# GOOGLE LOGIN
+# ============================================================
+
+@app.route(
+    "/api/auth/google",
+    methods=["GET"],
+)
 def google_login():
-
-    if "user_id" in session:
-        token = create_access_token(identity=str(session["user_id"]))
-        return redirect(
-            f"{frontend_location('dashboard.html')}?token={quote(token)}"
+    if (
+        not GOOGLE_CLIENT_ID
+        or not GOOGLE_CLIENT_SECRET
+    ):
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "Google OAuth is not "
+                        "configured."
+                    ),
+                }
+            ),
+            503,
         )
 
     redirect_uri = url_for(
@@ -903,1429 +2262,943 @@ def google_login():
         _external=True,
     )
 
-    return google.authorize_redirect(
+    return OAuth.google.authorize_redirect(
         redirect_uri
     )
 
 
-@app.route("/auth/google/callback")
+@app.route(
+    "/api/auth/google/callback",
+    methods=["GET"],
+)
 def google_callback():
+    if (
+        not GOOGLE_CLIENT_ID
+        or not GOOGLE_CLIENT_SECRET
+    ):
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "Google OAuth is not "
+                        "configured."
+                    ),
+                }
+            ),
+            503,
+        )
 
     try:
+        token = (
+           OAuth.google.authorize_access_token()
+        )
 
-        token = google.authorize_access_token()
+        user_info = (
+            token.get("userinfo")
+            or {}
+        )
 
-        user_info = token.get("userinfo")
+        google_id = str(
+            user_info.get("sub", "")
+        ).strip()
 
-        if not user_info:
-            user_info = google.userinfo()
+        email = str(
+            user_info.get("email", "")
+        ).strip().lower()
 
-        if not user_info:
-
-            flash(
-                "Unable to retrieve your Google account information.",
-                "danger",
-            )
-
-            return redirect(
-                url_for("home")
-            )
-
-        google_id = user_info.get("sub")
-        email = user_info.get("email")
-        name = user_info.get("name")
-        picture = user_info.get("picture")
+        name = str(
+            user_info.get("name")
+            or user_info.get("given_name")
+            or "CryptoRisk User"
+        ).strip()
 
         if not google_id or not email:
-
-            flash(
-                "Google did not provide the required account information.",
-                "danger",
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": (
+                            "Google did not return "
+                            "a valid account."
+                        ),
+                    }
+                ),
+                400,
             )
 
-            return redirect(
-                url_for("home")
-            )
-
-        email = email.lower().strip()
-
-        username = (
-            name.strip()
-            if name and name.strip()
-            else email.split("@")[0]
+        user = create_or_update_google_user(
+            name=name,
+            email=email,
+            google_id=google_id,
         )
 
-        connection = get_db()
+        auth_token = issue_auth_token(
+            user["id"]
+        )
 
-        if not connection:
-
-            flash(
-                "Database is currently unavailable.",
-                "danger",
-            )
-
-            return redirect(
-                url_for("home")
-            )
-
-        cursor = connection.cursor()
-
-        try:
-
-            # --------------------------------------------------
-            # FIND BY GOOGLE ID
-            # --------------------------------------------------
-
-            cursor.execute(
-                """
-                SELECT *
-                FROM users
-                WHERE google_id = %s
-                """,
-                (google_id,),
-            )
-
-            user = cursor.fetchone()
-
-            if user:
-
-                user_id = user["id"]
-
-                cursor.execute(
-                    """
-                    UPDATE users
-                    SET
-                        username = %s,
-                        name = %s,
-                        picture = %s,
-                        email = %s
-                    WHERE id = %s
-                    """,
-                    (
-                        username,
-                        name,
-                        picture,
-                        email,
-                        user_id,
-                    ),
-                )
-
-            else:
-
-                # --------------------------------------------------
-                # FIND BY EMAIL
-                # --------------------------------------------------
-
-                cursor.execute(
-                    """
-                    SELECT *
-                    FROM users
-                    WHERE email = %s
-                    """,
-                    (email,),
-                )
-
-                existing_user = cursor.fetchone()
-
-                if existing_user:
-
-                    user_id = existing_user["id"]
-
-                    cursor.execute(
-                        """
-                        UPDATE users
-                        SET
-                            google_id = %s,
-                            username = %s,
-                            name = %s,
-                            picture = %s
-                        WHERE id = %s
-                        """,
-                        (
-                            google_id,
-                            username,
-                            name,
-                            picture,
-                            user_id,
-                        ),
-                    )
-
-                else:
-
-                    # --------------------------------------------------
-                    # CREATE USER
-                    # --------------------------------------------------
-
-                    cursor.execute(
-                        """
-                        INSERT INTO users (
-                            username,
-                            email,
-                            password,
-                            google_id,
-                            name,
-                            picture
-                        )
-                        VALUES (
-                            %s,
-                            %s,
-                            NULL,
-                            %s,
-                            %s,
-                            %s
-                        )
-                        RETURNING id
-                        """,
-                        (
-                            username,
-                            email,
-                            google_id,
-                            name,
-                            picture,
-                        ),
-                    )
-
-                    new_user = cursor.fetchone()
-
-                    user_id = new_user["id"]
-
-            connection.commit()
-
-            session.clear()
-
-            session["user_id"] = user_id
-            session["username"] = username
-            session["email"] = email
-            session["name"] = name or username
-            session["picture"] = picture or ""
-
-            logger.info(
-                "Google authentication successful: %s",
-                email,
-            )
-
-            token = create_access_token(identity=str(user_id))
-            dashboard_url = frontend_location("dashboard.html")
-
-            return redirect(
-                f"{dashboard_url}?token={quote(token)}"
-            )
-
-        except Exception:
-
-            connection.rollback()
-
-            logger.exception(
-                "Google user database operation failed."
-            )
-
-            flash(
-                "Unable to complete Google sign-in.",
-                "danger",
-            )
-
-            return redirect(
-                frontend_location()
-            )
-
-        finally:
-
-            cursor.close()
-            connection.close()
+        return redirect(
+            f"{FRONTEND_URL}/dashboard"
+            f"?token={quote(auth_token)}"
+        )
 
     except Exception:
-
         logger.exception(
-            "Google OAuth authentication failed."
+            "Google OAuth callback failed."
         )
 
-        flash(
-            "Google sign-in failed. Please try again.",
-            "danger",
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        "Google authentication "
+                        "failed."
+                    ),
+                }
+            ),
+            500,
         )
 
-        return redirect(
-            frontend_location()
+
+# ============================================================
+# SESSION
+# ============================================================
+
+@app.route(
+    "/api/session",
+    methods=["GET", "OPTIONS"],
+)
+@jwt_required(optional=True)
+def api_session():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    user_id = authenticated_user_id()
+
+    if user_id is None:
+        return jsonify(
+            {
+                "success": True,
+                "authenticated": False,
+                "user": None,
+            }
         )
 
+    user = get_user_by_id(
+        user_id
+    )
 
-# ==========================================================
-# HOME
-# ==========================================================
-
-@app.route("/")
-def home():
-
-    if "user_id" in session:
-        token = create_access_token(identity=str(session["user_id"]))
-        return redirect(
-            f"{frontend_location('dashboard.html')}?token={quote(token)}"
+    if not user:
+        return jsonify(
+            {
+                "success": True,
+                "authenticated": False,
+                "user": None,
+            }
         )
 
-    return render_template("index.html")
-
-
-# ==========================================================
-# COMPATIBILITY ROUTES
-# ==========================================================
-
-@app.route("/register")
-def register():
-
-    if "user_id" in session:
-        return redirect(
-            url_for("dashboard")
-        )
-
-    return redirect(
-        url_for("google_login")
+    return jsonify(
+        {
+            "success": True,
+            "authenticated": True,
+            "user": public_user_payload(user),
+        }
     )
 
 
-# ==========================================================
-# AI PROMPT
-# ==========================================================
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.route(
+    "/api/health",
+    methods=["GET", "OPTIONS"],
+)
+def api_health():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    database_ok = False
+    connection = None
+    cursor = None
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            "SELECT 1"
+        )
+
+        cursor.fetchone()
+
+        database_ok = True
+
+    except Exception:
+        database_ok = False
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+    return jsonify(
+        {
+            "success": True,
+            "status": "ok",
+            "database": database_ok,
+        }
+    )
+
+
+# ============================================================
+# GEMINI PROMPT
+# ============================================================
 
 def build_crypto_prompt(
-    market_data: dict[str, Any],
-    security_data: dict[str, Any],
-    risk_profile: dict[str, Any],
-    stress_test: dict[str, Any],
-) -> str:
-    """Build the forensic quantitative risk-autopsy instruction."""
+    token_address,
+    chain,
+    market_data,
+    security_data,
+    risk_data,
+    stress_data,
+):
+    """Build the forensic Gemini prompt."""
 
-    market_data = sanitize_market_data(market_data)
-    security_data = security_data if isinstance(security_data, dict) else {}
-
-    asset = market_data.get("ticker", "unknown asset")
-    current_price = market_data.get("current_price_usd", "not supplied")
-    volume_24h = market_data.get("volume_24h_usd", "not supplied")
-    volatility = round(float(market_data.get(
-        "volatility_percentage",
-        market_data.get(
-            "price_change_percentage_24h",
-            "not supplied",
-        ),
-    )), 2)
-    buy_tax = security_data.get("buy_tax", "not supplied")
-    sell_tax = security_data.get("sell_tax", "not supplied")
-    is_honeypot = security_data.get("is_honeypot", "not supplied")
-    cannot_sell_all = security_data.get("cannot_sell_all", "not supplied")
-    is_open_source = security_data.get("is_open_source", "not supplied")
-    score = risk_profile["composite_score"]
-    radar = {
-        "volatility": risk_profile["volatility_risk"],
-        "liquidity": risk_profile["liquidity_risk"],
-        "contract": risk_profile["contract_risk"],
-    }
+    market_text = (
+        format_market_data_for_display(
+            market_data
+        )
+    )
 
     return f"""
-SYSTEM INSTRUCTION
+You are the senior risk-forensics engine
+inside CryptoRisk AI.
 
-Act strictly as an elite quantitative risk analyst performing a Risk Autopsy.
-Be blunt, forensic, and specific. Do not explain beginner concepts, market
-volatility in generic terms, or add financial disclaimers.
+Analyze this cryptocurrency using ONLY
+the supplied evidence.
 
-LIVE EVIDENCE
+TOKEN:
+Address: {token_address}
+Chain: {chain}
 
-Asset: {asset}
-Current price USD: {current_price}
-24h volume USD: {volume_24h}
-24h price change percent: {volatility}
-Buy tax percent: {buy_tax}
-Sell tax percent: {sell_tax}
-Honeypot flag: {is_honeypot}
-Cannot sell all flag: {cannot_sell_all}
-Open-source flag: {is_open_source}
+MARKET DATA:
+{json.dumps(
+    market_text,
+    indent=2,
+    default=str,
+)}
 
-DECOMPOSED RISK PROFILE
+TOKEN SECURITY DATA:
+{json.dumps(
+    security_data,
+    indent=2,
+    default=str,
+)}
 
-Volatility risk: {radar['volatility']}/100
-Liquidity risk: {radar['liquidity']}/100
-Contract risk: {radar['contract']}/100
-Composite score: {score}/100
-Turnover ratio: {risk_profile.get('turnover_ratio', 0):.4f}
+CALCULATED RISK DATA:
+{json.dumps(
+    risk_data,
+    indent=2,
+    default=str,
+)}
 
-DOWNSIDE STRESS TEST
+STRESS TEST DATA:
+{json.dumps(
+    stress_data,
+    indent=2,
+    default=str,
+)}
 
-BTC shock: {stress_test['simulated_shock']:.2f}%
-Historical beta: {stress_test['beta']:.2f}x
-Expected drawdown: {stress_test['expected_drawdown']:.2f}%
-Resilience label: {stress_test['resilience_label']}
+RULES:
 
-RULES
+1. Never invent market data.
+2. Never invent contract facts.
+3. Never invent holder data.
+4. Never invent exploits.
+5. Never use generic financial disclaimers.
+6. If evidence is unavailable, say:
+   "Evidence unavailable."
+7. Severity must be one of:
+   Critical, High, Moderate, Low, Minimal.
+8. Scores must be between 0 and 100.
+9. Return valid JSON only.
+10. Do not use markdown code fences.
 
-- Use only the evidence above and cite exact numerical metrics.
-- Repeat the exact injected values for composite score, pillar scores, beta,
-    and expected drawdown. Do not round or substitute them differently.
-- Card 1 must discuss Momentum & Drawdown Risk using the exact 24h change,
-    7d change, and volatility score.
-- Card 2 must discuss Liquidity Depth & Slippage Risk using the exact turnover
-    ratio and liquidity score ({radar['liquidity']}/100).
-- Card 3 must discuss Macro & Contract Sensitivity using the exact beta,
-    expected drawdown, composite score ({score}/100), and contract flags.
-- Never use fallback values such as 1.00x beta, 50/100 score, or -10.00%
-    when the injected values above are present.
-- fatal_flaws must contain exactly three bullets, each citing a different
-    injected number or score.
-- Never say data is unavailable, context is limited, or crypto is volatile.
-- Do not invent news, prices, causes, or security findings.
-
-Return ONLY valid JSON with exactly this schema:
+Return exactly:
 
 {{
-    "autopsy_summary": "Exactly two blunt sentences explaining how this asset could harm a holder today.",
-    "fatal_flaws": [
-        "Exactly one structural risk with an explicit numerical citation.",
-        "Exactly one structural risk with an explicit numerical citation.",
-        "Exactly one structural risk with an explicit numerical citation."
-    ],
-    "stress_verdict": "A concise evaluation of the asset under the BTC shock using beta and expected drawdown."
+  "executive_verdict": {{
+    "severity": "Moderate",
+    "score": 50,
+    "summary": "Evidence-based summary."
+  }},
+  "market_structure": {{
+    "severity": "Moderate",
+    "description": "Market structure assessment.",
+    "evidence": "Evidence-based market evidence."
+  }},
+  "contract_risk": {{
+    "severity": "Moderate",
+    "description": "Contract security assessment.",
+    "evidence": "Evidence-based contract evidence."
+  }},
+  "liquidity_risk": {{
+    "severity": "Moderate",
+    "description": "Liquidity assessment.",
+    "evidence": "Evidence-based liquidity evidence."
+  }},
+  "holder_risk": {{
+    "severity": "Moderate",
+    "description": "Holder concentration assessment.",
+    "evidence": "Evidence-based holder evidence."
+  }},
+  "stress_test": {{
+    "verdict": "Moderate",
+    "description": "Stress-test interpretation.",
+    "evidence": "Evidence-based stress evidence."
+  }},
+  "key_findings": [
+    "Finding 1",
+    "Finding 2",
+    "Finding 3"
+  ],
+  "investigation_notes": [
+    "Note 1",
+    "Note 2"
+  ]
 }}
-"""
+""".strip()
 
 
-# ==========================================================
-# JSON CLEANING
-# ==========================================================
+# ============================================================
+# GEMINI EXECUTION
+# ============================================================
 
-def extract_json(text):
+def run_gemini_analysis(
+    token_address,
+    chain,
+    market_data,
+    security_data,
+    risk_data,
+    stress_data,
+):
+    """Run Gemini and parse its JSON response."""
+
+    if gemini_client is None:
+        raise RuntimeError(
+            "Gemini client is not configured."
+        )
+
+    prompt = build_crypto_prompt(
+        token_address=token_address,
+        chain=chain,
+        market_data=market_data,
+        security_data=security_data,
+        risk_data=risk_data,
+        stress_data=stress_data,
+    )
+
+    response = (
+        gemini_client
+        .models
+        .generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+    )
+
+    text = str(
+        getattr(
+            response,
+            "text",
+            "",
+        )
+        or ""
+    ).strip()
 
     if not text:
-
-        raise ValueError(
+        raise RuntimeError(
             "Gemini returned an empty response."
         )
 
-    cleaned = text.strip()
+    parsed = extract_json(text)
 
-    cleaned = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
+    if not isinstance(parsed, dict):
+        raise RuntimeError(
+            "Gemini returned invalid report JSON."
+        )
+
+    return parsed
+
+
+# ============================================================
+# REPORT NORMALIZATION HELPERS
+# ============================================================
+
+def safe_severity(
+    value,
+    fallback="Moderate",
+):
+    """Normalize severity into allowed values."""
+
+    allowed = {
+        "critical": "Critical",
+        "high": "High",
+        "moderate": "Moderate",
+        "medium": "Moderate",
+        "low": "Low",
+        "minimal": "Minimal",
+    }
+
+    normalized = str(
+        value or ""
+    ).strip().lower()
+
+    return allowed.get(
+        normalized,
+        fallback,
     )
 
-    cleaned = re.sub(
-        r"\s*```$",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
 
-    cleaned = cleaned.strip()
+def normalize_text_list(
+    value,
+    limit=8,
+):
+    """Normalize list-like AI fields."""
 
-    first_brace = cleaned.find("{")
-    last_brace = cleaned.rfind("}")
-
-    if (
-        first_brace != -1
-        and last_brace != -1
-        and last_brace > first_brace
-    ):
-
-        cleaned = cleaned[
-            first_brace:last_brace + 1
+    if isinstance(value, str):
+        items = [
+            value.strip()
         ]
 
-    return json.loads(cleaned)
+    elif isinstance(value, list):
+        items = [
+            str(item).strip()
+            for item in value
+            if str(item).strip()
+        ]
+
+    else:
+        items = []
+
+    return items[:limit]
 
 
-# ==========================================================
-# NORMALIZE AI REPORT
-# ==========================================================
-
-FORBIDDEN_AI_PHRASES = (
-    "live price, volume, and liquidity data are unavailable",
-    "the available context is limited",
-)
-
-
-def _is_generic_ai_disclaimer(value: str) -> bool:
-    """Detect boilerplate that must never reach the risk report."""
-
-    normalized_value = value.lower()
-    return any(
-        phrase in normalized_value
-        for phrase in FORBIDDEN_AI_PHRASES
-    )
+# ============================================================
+# REPORT NORMALIZER
+# ============================================================
 
 def normalize_report(
-    data: dict[str, Any],
-    token_symbol: str,
-    market_data: Optional[dict[str, Any]] = None,
-    risk_profile: Optional[dict[str, Any]] = None,
-    stress_test: Optional[dict[str, Any]] = None,
-    security_data: Optional[dict[str, Any]] = None,
+    report,
+    market_data,
+    risk_data,
+    stress_data,
+    security_data=None,
 ):
+    """Normalize Gemini output for the frontend."""
 
-    if not isinstance(data, dict):
+    if not isinstance(report, dict):
+        report = {}
 
-        raise ValueError(
-            "Invalid AI response structure."
-        )
-
-    allowed_trends = {
-        "bullish": "Bullish",
-        "bearish": "Bearish",
-        "neutral": "Neutral",
-    }
-
-    allowed_risks = {
-        "low": "Low",
-        "medium": "Medium",
-        "high": "High",
-        "extreme": "Extreme",
-    }
-
-    trend_raw = str(
-        data.get(
-            "trend",
-            "Neutral",
-        )
-    ).strip().lower()
-
-    risk_raw = str(
-        data.get(
-            "risk_score",
-            "Medium",
-        )
-    ).strip().lower()
-
-    trend = allowed_trends.get(
-        trend_raw,
-        "Neutral",
-    )
-
-    risk_score = allowed_risks.get(
-        risk_raw,
-        "Medium",
-    )
-
-    market_data = sanitize_market_data(market_data)
-    risk_profile = risk_profile if isinstance(risk_profile, dict) else {}
-    stress_test = stress_test if isinstance(stress_test, dict) else {}
-    security_data = security_data if isinstance(security_data, dict) else {}
-    current_price = market_data.get("current_price_usd", 0)
-    volume_24h = market_data.get("volume_24h_usd", 0)
-    change_24h = market_data.get("price_change_percentage_24h", 0)
-    change_7d = market_data.get("price_change_percentage_7d", 0)
-
-    if not risk_profile or not any(
-        risk_profile.get(key, 0)
-        for key in (
-            "volatility_risk",
-            "liquidity_risk",
-            "contract_risk",
-            "composite_score",
-        )
+    if not isinstance(
+        security_data,
+        dict,
     ):
-        risk_profile = evaluate_risk_profile(market_data, security_data)
+        security_data = {}
 
-    if not stress_test or not any(
-        stress_test.get(key) is not None
-        for key in ("beta", "expected_drawdown", "resilience_label")
+    if not isinstance(
+        market_data,
+        dict,
     ):
-        stress_test = simulate_stress_test(
-            change_7d,
-            market_data.get("btc_change_7d", 0),
-        )
+        market_data = {}
 
-    composite_score = int(risk_profile.get("composite_score", 50))
-    risk_score = (
-        "Extreme" if composite_score >= 80
-        else "High" if composite_score >= 65
-        else "Medium" if composite_score >= 35
-        else "Low"
+    if not isinstance(
+        risk_data,
+        dict,
+    ):
+        risk_data = {}
+
+    if not isinstance(
+        stress_data,
+        dict,
+    ):
+        stress_data = {}
+
+    executive = report.get(
+        "executive_verdict"
     )
 
-    autopsy_summary = str(
-        data.get(
-            "autopsy_summary",
-            data.get(
-                "executive_summary",
-                data.get(
-                    "summary",
-                f"Price is {format_usd(current_price)}, with 24h volume of "
-                f"{format_usd(volume_24h)} and a 24h move of "
-                f"{format_percentage(change_24h)}.",
-                ),
+    if not isinstance(
+        executive,
+        dict,
+    ):
+        executive = {}
+
+    market_structure = report.get(
+        "market_structure"
+    )
+
+    if not isinstance(
+        market_structure,
+        dict,
+    ):
+        market_structure = {}
+
+    contract_risk = report.get(
+        "contract_risk"
+    )
+
+    if not isinstance(
+        contract_risk,
+        dict,
+    ):
+        contract_risk = {}
+
+    liquidity_risk = report.get(
+        "liquidity_risk"
+    )
+
+    if not isinstance(
+        liquidity_risk,
+        dict,
+    ):
+        liquidity_risk = {}
+
+    holder_risk = report.get(
+        "holder_risk"
+    )
+
+    if not isinstance(
+        holder_risk,
+        dict,
+    ):
+        holder_risk = {}
+
+    stress_test = report.get(
+        "stress_test"
+    )
+
+    if not isinstance(
+        stress_test,
+        dict,
+    ):
+        stress_test = {}
+
+    # --------------------------------------------------------
+    # MARKET STRUCTURE
+    # --------------------------------------------------------
+
+    volatility_score = _bounded_score(
+        risk_data.get(
+            "volatility",
+            50,
+        )
+    )
+
+    if volatility_score >= 75:
+        market_structure_fallback = "Critical"
+
+    elif volatility_score >= 55:
+        market_structure_fallback = "High"
+
+    else:
+        market_structure_fallback = "Moderate"
+
+    market_structure_severity = safe_severity(
+        market_structure.get(
+            "severity"
+        ),
+        market_structure_fallback,
+    )
+
+    market_structure_description = str(
+        market_structure.get(
+            "description",
+            "Price behavior and volatility evidence.",
+        )
+    ).strip()
+
+    market_structure_evidence = str(
+        market_structure.get(
+            "evidence",
+            (
+                "24h change: "
+                f"{format_percentage(market_data.get('change_24h'))}; "
+                "7d change: "
+                f"{format_percentage(market_data.get('change_7d'))}."
             ),
         )
     ).strip()
 
-    if _is_generic_ai_disclaimer(autopsy_summary):
-        autopsy_summary = (
-            f"Price is {format_usd(current_price)}, with 24h volume of "
-            f"{format_usd(volume_24h)} and a 24h move of "
-            f"{format_percentage(change_24h)}."
-        )
+    # --------------------------------------------------------
+    # LIQUIDITY
+    # --------------------------------------------------------
 
-    market_conditions = str(
-        data.get(
-            "market_conditions",
-            "",
+    liquidity_score = _bounded_score(
+        risk_data.get(
+            "liquidity",
+            50,
+        )
+    )
+
+    if liquidity_score >= 75:
+        liquidity_fallback = "Critical"
+
+    elif liquidity_score >= 55:
+        liquidity_fallback = "High"
+
+    else:
+        liquidity_fallback = "Moderate"
+
+    liquidity_severity = safe_severity(
+        liquidity_risk.get(
+            "severity"
+        ),
+        liquidity_fallback,
+    )
+
+    volume_24h = _numeric_value(
+        market_data.get(
+            "volume_24h"
+        )
+    )
+
+    liquidity_description = str(
+        liquidity_risk.get(
+            "description",
+            "Trading liquidity and market depth assessment.",
         )
     ).strip()
 
-    if _is_generic_ai_disclaimer(market_conditions):
-        market_conditions = ""
+    liquidity_evidence = str(
+        liquidity_risk.get(
+            "evidence",
+            (
+                "24h volume: "
+                f"{format_usd(volume_24h)}."
+            ),
+        )
+    ).strip()
 
-    if market_conditions:
-        autopsy_summary = f"{autopsy_summary} {market_conditions}".strip()
+    # --------------------------------------------------------
+    # CONTRACT
+    # --------------------------------------------------------
+
+    contract_score = _bounded_score(
+        risk_data.get(
+            "contract",
+            50,
+        )
+    )
+
+    if contract_score >= 75:
+        contract_fallback = "Critical"
+
+    elif contract_score >= 55:
+        contract_fallback = "High"
+
+    else:
+        contract_fallback = "Moderate"
+
+    contract_severity = safe_severity(
+        contract_risk.get(
+            "severity"
+        ),
+        contract_fallback,
+    )
+
+    contract_description = str(
+        contract_risk.get(
+            "description",
+            "Smart-contract security assessment.",
+        )
+    ).strip()
+
+    contract_evidence = str(
+        contract_risk.get(
+            "evidence",
+            "Contract security evidence unavailable.",
+        )
+    ).strip()
+
+    # --------------------------------------------------------
+    # HOLDER RISK
+    # --------------------------------------------------------
+
+    holder_score = _bounded_score(
+        risk_data.get(
+            "holder",
+            50,
+        )
+    )
+
+    if holder_score >= 75:
+        holder_fallback = "Critical"
+
+    elif holder_score >= 55:
+        holder_fallback = "High"
+
+    else:
+        holder_fallback = "Moderate"
+
+    holder_severity = safe_severity(
+        holder_risk.get(
+            "severity"
+        ),
+        holder_fallback,
+    )
+
+    holder_description = str(
+        holder_risk.get(
+            "description",
+            "Holder concentration assessment.",
+        )
+    ).strip()
+
+    holder_evidence = str(
+        holder_risk.get(
+            "evidence",
+            "Holder concentration evidence unavailable.",
+        )
+    ).strip()
+
+    # --------------------------------------------------------
+    # STRESS TEST
+    # --------------------------------------------------------
 
     stress_verdict = str(
-        data.get(
-            "stress_verdict",
-            data.get(
-                "signal_to_remember",
-                f"A {stress_test.get('simulated_shock', -10.0):.2f}% BTC shock "
-                f"implies a {stress_test.get('expected_drawdown', -10.0):.2f}% "
-                f"drawdown at {stress_test.get('beta', 1.0):.2f}x beta.",
+        stress_test.get(
+            "verdict",
+            stress_data.get(
+                "verdict",
+                "Moderate",
             ),
         )
     ).strip()
-    if _is_generic_ai_disclaimer(stress_verdict):
-        stress_verdict = (
-            f"The stress test estimates a {stress_test.get('expected_drawdown', -10.0):.2f}% "
-            "drawdown under the modeled BTC shock."
-        )
 
-    key_insight = stress_verdict
+    if _is_generic_ai_disclaimer(
+        stress_verdict
+    ):
+        stress_verdict = str(
+            stress_data.get(
+                "verdict",
+                "Moderate",
+            )
+        ).strip()
 
-    raw_factors = data.get("fatal_flaws")
-    if raw_factors is None:
-        raw_factors = data.get(
-            "what_is_driving_risk",
-            data.get("top_risk_drivers", data.get("risk_factors", [])),
-        )
-
-    if isinstance(raw_factors, str):
-        raw_factors = [raw_factors]
-
-    risk_factors = []
-    if isinstance(raw_factors, list):
-        risk_factors = [
-            str(item).strip()
-            for item in raw_factors[:3]
-            if str(item).strip()
-            and not _is_generic_ai_disclaimer(str(item).strip())
-        ]
-
-    if not risk_factors:
-        risk_factors = [
-            f"Price is {format_usd(current_price)} and the 24h move is "
-            f"{format_percentage(change_24h)}.",
-            f"24h trading volume is {format_usd(volume_24h)}; compare it "
-            "with market capitalization when assessing liquidity.",
-            f"Composite risk is {composite_score}/100 with liquidity risk at "
-            f"{risk_profile.get('liquidity_risk', 0)}/100.",
-        ]
-
-    problem_solved = str(
-        data.get(
-            "problem_solved",
-            "CryptoRisk AI organizes complex cryptocurrency risk information into a concise intelligence report.",
+    stress_description = str(
+        stress_test.get(
+            "description",
+            "Stress-test interpretation.",
         )
     ).strip()
 
-    predicted_price = str(
-        data.get(
-            "predicted_price",
-            format_usd(current_price),
+    stress_evidence = str(
+        stress_test.get(
+            "evidence",
+            stress_data.get(
+                "summary",
+                "Stress-test evidence unavailable.",
+            ),
         )
     ).strip()
 
-    # ------------------------------------------------------
-    # RISKS
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # EXECUTIVE VERDICT
+    # --------------------------------------------------------
 
-    raw_risks = data.get(
-        "key_risks",
-        data.get("fatal_flaws", data.get("top_risk_drivers", [])),
+    executive_score = _bounded_score(
+        executive.get(
+            "score",
+            risk_data.get(
+                "composite",
+                50,
+            ),
+        )
     )
 
-    key_risks = []
-
-    if isinstance(raw_risks, list):
-
-        for item in raw_risks[:3]:
-
-            if isinstance(item, str):
-                explanation = item.strip()
-                if explanation and not _is_generic_ai_disclaimer(explanation):
-                    key_risks.append(
-                        {
-                            "title": "Quantified risk driver",
-                            "explanation": explanation,
-                        }
-                    )
-
-            elif isinstance(item, dict):
-
-                title = str(
-                    item.get(
-                        "title",
-                        "Risk factor",
-                    )
-                ).strip()
-
-                explanation = str(
-                    item.get(
-                        "explanation",
-                        "",
-                    )
-                ).strip()
-
-                if title and explanation:
-
-                    if _is_generic_ai_disclaimer(explanation):
-                        continue
-
-                    key_risks.append(
-                        {
-                            "title": title,
-                            "explanation": explanation,
-                        }
-                    )
-
-    # ------------------------------------------------------
-    # SIGNALS
-    # ------------------------------------------------------
-
-    raw_signals = data.get(
-        "key_signals",
-        data.get("signal_to_remember", []),
+    executive_severity = safe_severity(
+        executive.get(
+            "severity"
+        ),
+        safe_severity(
+            risk_data.get(
+                "severity",
+                "Moderate",
+            ),
+            "Moderate",
+        ),
     )
 
-    if isinstance(raw_signals, str):
-        raw_signals = [raw_signals]
+    executive_summary = str(
+        executive.get(
+            "summary",
+            (
+                "Risk assessment generated "
+                "from available market and "
+                "security evidence."
+            ),
+        )
+    ).strip()
 
-    key_signals = []
-
-    if isinstance(raw_signals, list):
-
-        for item in raw_signals[:3]:
-
-            if isinstance(item, str):
-                explanation = item.strip()
-                if explanation and not _is_generic_ai_disclaimer(explanation):
-                    key_signals.append(
-                        {
-                            "title": "Quantified market signal",
-                            "explanation": explanation,
-                        }
-                    )
-
-            elif isinstance(item, dict):
-
-                title = str(
-                    item.get(
-                        "title",
-                        "Market signal",
-                    )
-                ).strip()
-
-                explanation = str(
-                    item.get(
-                        "explanation",
-                        "",
-                    )
-                ).strip()
-
-                if title and explanation:
-
-                    if _is_generic_ai_disclaimer(explanation):
-                        continue
-
-                    key_signals.append(
-                        {
-                            "title": title,
-                            "explanation": explanation,
-                        }
-                    )
-
-    # ------------------------------------------------------
-    # WATCH NEXT
-    # ------------------------------------------------------
-
-    raw_watch = data.get(
-        "watch_next",
-        [],
-    )
-
-    watch_next = []
-
-    if isinstance(raw_watch, list):
-
-        for item in raw_watch[:3]:
-
-            item_text = str(item).strip()
-
-            if item_text:
-                watch_next.append(
-                    item_text
-                )
-
-    # ------------------------------------------------------
-    # FALLBACK RISKS
-    # ------------------------------------------------------
-
-    if not key_risks:
-
-        key_risks = [
-
-            {
-                "title": "Price movement",
-                "explanation":
-                    f"The asset moved {format_percentage(change_24h)} over 24 hours "
-                    f"at a reference price of {format_usd(current_price)}."
-            },
-
-            {
-                "title": "Trading liquidity",
-                "explanation":
-                    f"24h trading volume is {format_usd(volume_24h)}, which should "
-                    "be evaluated against market capitalization."
-            },
-
-            {
-                "title": "Risk score",
-                "explanation":
-                    f"The scoring engine assigned a risk score of {data.get('risk_score', 'not supplied')}."
-            },
-
-        ]
-
-    # ------------------------------------------------------
-    # FALLBACK SIGNALS
-    # ------------------------------------------------------
-
-    if not key_signals:
-
-        key_signals = [
-
-            {
-                "title": "24h direction",
-                "explanation":
-                    f"The current 24h price change is {format_percentage(change_24h)}."
-            },
-
-            {
-                "title": "Reference price",
-                "explanation":
-                    f"The live reference price is {format_usd(current_price)}."
-            },
-
-            {
-                "title": "Volume context",
-                "explanation":
-                    f"The latest 24h trading volume is {format_usd(volume_24h)}."
-            },
-
-        ]
-
-    # ------------------------------------------------------
-    # FALLBACK WATCH ITEMS
-    # ------------------------------------------------------
-
-    if not watch_next:
-
-        watch_next = [
-
-            "Major market developments",
-            "Changes in the asset's ecosystem",
-            "New risk or regulatory information",
-
-        ]
-
-    normalized_risk_profile = {
-        "volatility_risk": max(0, min(100, int(risk_profile.get("volatility_risk", 0)))),
-        "liquidity_risk": max(0, min(100, int(risk_profile.get("liquidity_risk", 0)))),
-        "contract_risk": max(0, min(100, int(risk_profile.get("contract_risk", 0)))),
-        "composite_score": max(0, min(100, int(risk_profile.get("composite_score", composite_score)))),
-        "turnover_ratio": float(risk_profile.get("turnover_ratio", 0.0)),
-    }
-
-    normalized_stress_test = {
-        "simulated_shock": float(stress_test.get("simulated_shock", -10.0)),
-        "beta": float(stress_test.get("beta", 1.0)),
-        "expected_drawdown": float(stress_test.get("expected_drawdown", -10.0)),
-        "resilience_label": stress_test.get("resilience_label", "Moderate"),
-    }
-
-    card_momentum = (
-        f"The asset moved {format_percentage(change_24h)} over 24 hours "
-        f"and carries a {format_percentage(change_7d)} 7-day move against "
-        f"a volatility score of {normalized_risk_profile['volatility_risk']}/100."
-    )
-    card_liquidity = (
-        f"Turnover is {normalized_risk_profile['turnover_ratio']:.4f} with a "
-        f"liquidity risk score of {normalized_risk_profile['liquidity_risk']}/100, "
-        "which frames execution depth and slippage exposure."
-    )
-    card_macro = (
-        f"A {normalized_stress_test['beta']:.2f}x beta implies an estimated "
-        f"{normalized_stress_test['expected_drawdown']:.2f}% drawdown under the modeled BTC shock. "
-        f"Contract flags: honeypot={security_data.get('is_honeypot', False)}, "
-        f"cannot_sell_all={security_data.get('cannot_sell_all', False)}."
-    )
-    forensic_cards = [
-        {"title": "Momentum & Drawdown Risk", "body": card_momentum},
-        {"title": "Liquidity Depth & Slippage Risk", "body": card_liquidity},
-        {"title": "Macro & Contract Sensitivity", "body": card_macro},
-    ]
-
-    autopsy = {
-        "autopsy_summary": autopsy_summary,
-        "cards": forensic_cards,
-        "stress_verdict": stress_verdict,
-    }
+    # --------------------------------------------------------
+    # FINAL STABLE REPORT
+    # --------------------------------------------------------
 
     return {
+        "executive_verdict": {
+            "severity": executive_severity,
+            "score": executive_score,
+            "summary": executive_summary,
+        },
 
-        "token": token_symbol,
+        "market_structure": {
+            "severity": market_structure_severity,
+            "description": market_structure_description,
+            "evidence": market_structure_evidence,
+            "score": volatility_score,
+        },
 
-        "risk_score_value": {
-            "low": 20,
-            "medium": 50,
-            "high": 75,
-            "extreme": 95,
-        }.get(risk_score.lower(), 50),
+        "contract_risk": {
+            "severity": contract_severity,
+            "description": contract_description,
+            "evidence": contract_evidence,
+            "score": contract_score,
+        },
 
-        "trend": trend,
+        "liquidity_risk": {
+            "severity": liquidity_severity,
+            "description": liquidity_description,
+            "evidence": liquidity_evidence,
+            "score": liquidity_score,
+        },
 
-        "risk": risk_score,
+        "holder_risk": {
+            "severity": holder_severity,
+            "description": holder_description,
+            "evidence": holder_evidence,
+            "score": holder_score,
+        },
 
-        "price": predicted_price,
+        "stress_test": {
+            "verdict": stress_verdict,
+            "description": stress_description,
+            "evidence": stress_evidence,
+        },
 
-        "current_price_usd": float(current_price),
+        "key_findings": normalize_text_list(
+            report.get(
+                "key_findings"
+            ),
+            limit=8,
+        ),
 
-        "current_price_display": format_usd(current_price),
+        "investigation_notes": normalize_text_list(
+            report.get(
+                "investigation_notes"
+            ),
+            limit=8,
+        ),
 
-        "volume_24h_usd": float(volume_24h),
+        "market_data": sanitize_market_data(
+            market_data
+        ),
 
-        "volume_24h_display": format_usd(volume_24h),
+        "risk_data": risk_data,
 
-        "change_24h_display": format_percentage(change_24h),
-
-        "change_7d_display": format_percentage(change_7d),
-
-        "summary": autopsy_summary,
-
-        "autopsy_summary": autopsy_summary,
-
-        "fatal_flaws": risk_factors[:3],
-
-        "stress_verdict": stress_verdict,
-
-        "risk_profile": normalized_risk_profile,
-
-        "stress_test": normalized_stress_test,
-
-        "autopsy": autopsy,
+        "stress_data": stress_data,
 
         "security_data": security_data,
-
-        "key_insight": key_insight,
-
-        "risk_factors": risk_factors,
-
-        "problem_solved": problem_solved,
-
-        "key_risks": key_risks,
-
-        "key_signals": key_signals,
-
-        "watch_next": watch_next,
-
     }
 
 
-# ==========================================================
-# DASHBOARD
-# ==========================================================
 
-def authenticated_user_id() -> Optional[int]:
-    """Return the JWT user id first, with Google session fallback."""
-
-    identity = get_jwt_identity()
-    if identity is not None:
-        return int(identity)
-
-    return session.get("user_id")
+# ============================================================
+# CRYPTORISK AI — BACKEND
+# PART 3 / 3
+# DASHBOARD → ANALYSIS → HISTORY → DELETE → LOGOUT → START
+# ============================================================
 
 
-def auth_user_payload(user: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": user["id"],
-        "username": user.get("username", "User"),
-        "name": user.get("name") or user.get("username", "User"),
-        "email": user.get("email", ""),
-        "picture": user.get("picture") or "",
-    }
+# ============================================================
+# DASHBOARD / MAIN ANALYSIS ENGINE
+# ============================================================
 
-
-def load_user_payload(user_id: int) -> dict[str, Any]:
-    connection = get_db()
-    if not connection:
-        return {}
-
-    cursor = connection.cursor()
-    try:
-        cursor.execute(
-            "SELECT id, username, email, name, picture FROM users WHERE id = %s",
-            (user_id,),
-        )
-        user = cursor.fetchone()
-        return auth_user_payload(user) if user else {}
-    finally:
-        cursor.close()
-        connection.close()
-
-
-@app.route("/api/signup", methods=["POST"])
-def signup():
-    payload = request.get_json(silent=True) or {}
-    username = str(payload.get("username", "")).strip()
-    email = str(payload.get("email", "")).strip().lower()
-    password = str(payload.get("password", ""))
-
-    if not username or not email or len(password) < 8:
-        return jsonify({
-            "success": False,
-            "message": "Username and email are required; password must be at least 8 characters.",
-        }), 400
-
-    connection = get_db()
-    if not connection:
-        return jsonify({"success": False, "message": "Database unavailable."}), 503
-
-    cursor = connection.cursor()
-    try:
-        cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
-        if cursor.fetchone():
-            return jsonify({"success": False, "message": "An account with that email already exists."}), 409
-
-        cursor.execute(
-            """
-            INSERT INTO users (username, email, password, name)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id, username, email, name, picture
-            """,
-            (username, email, generate_password_hash(password), username),
-        )
-        user = cursor.fetchone()
-        connection.commit()
-
-        token = create_access_token(identity=str(user["id"]))
-        session.update({
-            "user_id": user["id"],
-            "username": user["username"],
-            "email": user["email"],
-            "name": user.get("name") or user["username"],
-            "picture": user.get("picture") or "",
-        })
-        return jsonify({"success": True, "token": token, "user": auth_user_payload(user)}), 201
-    except Exception:
-        connection.rollback()
-        logger.exception("Signup failed.")
-        return jsonify({"success": False, "message": "Unable to create account."}), 500
-    finally:
-        cursor.close()
-        connection.close()
-
-
-@app.route("/api/login", methods=["POST"])
-def login():
-    payload = request.get_json(silent=True) or {}
-    email = str(payload.get("email", "")).strip().lower()
-    password = str(payload.get("password", ""))
-
-    connection = get_db()
-    if not connection:
-        return jsonify({"success": False, "message": "Database unavailable."}), 503
-
-    cursor = connection.cursor()
-    try:
-        cursor.execute(
-            "SELECT id, username, email, password, name, picture FROM users WHERE email = %s",
-            (email,),
-        )
-        user = cursor.fetchone()
-        if not user or not user.get("password") or not check_password_hash(user["password"], password):
-            return jsonify({"success": False, "message": "Invalid email or password."}), 401
-
-        token = create_access_token(identity=str(user["id"]))
-        session.update({
-            "user_id": user["id"],
-            "username": user["username"],
-            "email": user["email"],
-            "name": user.get("name") or user["username"],
-            "picture": user.get("picture") or "",
-        })
-        return jsonify({"success": True, "token": token, "user": auth_user_payload(user)})
-    finally:
-        cursor.close()
-        connection.close()
-
-@app.route("/api/health")
-def health_check():
-    return jsonify({"status": "ok"})
-
-
-@app.route("/api/session")
-@jwt_required(optional=True)
-def session_info():
-    user_id = authenticated_user_id()
-    if not user_id:
-        return jsonify({"authenticated": False}), 401
-
-    return jsonify({
-        "authenticated": True,
-        "user": load_user_payload(user_id),
-    })
-
-@app.route(
-    "/dashboard",
-    methods=["GET", "POST"],
-)
 @app.route(
     "/api/dashboard",
-    methods=["GET", "POST"],
+    methods=["GET", "POST", "OPTIONS"],
+)
+@app.route(
+    "/dashboard",
+    methods=["GET", "POST", "OPTIONS"],
 )
 @jwt_required(optional=True)
 def dashboard():
 
+    if request.method == "OPTIONS":
+        return "", 204
+
+    api_request = is_api_request()
+
+    # --------------------------------------------------------
+    # AUTHENTICATION
+    # --------------------------------------------------------
+
     user_id = authenticated_user_id()
+
     if not user_id:
 
-        if request.path.startswith("/api/"):
-            return jsonify({"success": False, "message": "Authentication required."}), 401
+        if api_request:
+            return jsonify(
+                {
+                    "success": False,
+                    "authenticated": False,
+                    "error": "Authentication required.",
+                }
+            ), 401
 
         return redirect(
-            frontend_location()
+            f"{FRONTEND_URL}/login"
         )
 
-    latest_analysis = None
-    risk_score = None
+    user = get_user_by_id(
+        user_id
+    )
 
-    # ======================================================
-    # NEW ANALYSIS
-    # ======================================================
+    if not user:
 
-    if request.method == "POST":
-
-        request_data = request.get_json(silent=True) or {}
-        token_symbol = (
-            request_data.get("token_symbol", "")
-            if request.is_json
-            else request.form.get("token_symbol", "")
-        ).strip().upper()
-
-        # --------------------------------------------------
-        # VALIDATION
-        # --------------------------------------------------
-
-        if not token_symbol:
-
-            flash(
-                "Please enter a cryptocurrency symbol.",
-                "danger",
-            )
-
-            return redirect(
-                url_for("dashboard")
-            )
-
-        if len(token_symbol) > 15:
-
-            flash(
-                "Invalid cryptocurrency symbol.",
-                "danger",
-            )
-
-            return redirect(
-                url_for("dashboard")
-            )
-
-        if not re.match(
-            r"^[A-Z0-9._-]+$",
-            token_symbol,
-        ):
-
-            flash(
-                "Invalid cryptocurrency symbol.",
-                "danger",
-            )
-
-            return redirect(
-                url_for("dashboard")
-            )
-
-        # --------------------------------------------------
-        # GEMINI CHECK
-        # --------------------------------------------------
-
-        if not client:
-
-            flash(
-                "Gemini AI is not configured.",
-                "danger",
-            )
-
-            return redirect(
-                url_for("dashboard")
-            )
-
-        # --------------------------------------------------
-        # BUILD PROMPT
-        # --------------------------------------------------
-
-        market_data = fetch_crypto_market_data(token_symbol) or {
-            "ticker": token_symbol,
-        }
-        market_data = sanitize_market_data(market_data)
-        security_data = {}
-        risk_profile = evaluate_risk_profile(
-            market_data,
-            security_data,
-        )
-        risk_score = risk_profile["composite_score"]
-        btc_market_data = fetch_crypto_market_data("BTC")
-        stress_test = simulate_stress_test(
-            market_data.get("price_change_percentage_7d", 0),
-            btc_market_data.get("price_change_percentage_7d", 0),
+        session.pop(
+            "user_id",
+            None,
         )
 
-        prompt = build_crypto_prompt(
-            market_data,
-            security_data,
-            risk_profile,
-            stress_test,
+        if api_request:
+            return jsonify(
+                {
+                    "success": False,
+                    "authenticated": False,
+                    "error": "User account not found.",
+                }
+            ), 401
+
+        return redirect(
+            f"{FRONTEND_URL}/login"
         )
+
+    # --------------------------------------------------------
+    # GET = LOAD LATEST REPORT
+    # POST = RUN NEW ANALYSIS
+    # --------------------------------------------------------
+
+    if request.method == "GET":
 
         try:
-
-            logger.info(
-                "Starting Gemini analysis: %s",
-                token_symbol,
-            )
-
-            executor = ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(
-                client.models.generate_content,
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    response_mime_type="application/json",
-                ),
-            )
-
-            try:
-                response = future.result(timeout=45)
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
-
-            raw_result = (
-                response.text.strip()
-                if response.text
-                else ""
-            )
-
-            if not raw_result:
-
-                raise ValueError(
-                    "Gemini returned an empty response."
-                )
-
-            # --------------------------------------------------
-            # PARSE JSON
-            # --------------------------------------------------
-
-            ai_data = extract_json(
-                raw_result
-            )
-
-            latest_analysis = normalize_report(
-                ai_data,
-                token_symbol,
-                market_data,
-                risk_profile,
-                stress_test,
-                security_data,
-            )
-            latest_analysis["security_data"] = security_data
-            latest_analysis["risk_score_value"] = risk_score
-
-            # ==================================================
-            # SAVE TO POSTGRESQL
-            # ==================================================
-
-            connection = get_db()
-
-            if not connection:
-
-                flash(
-                    "Analysis generated, but the database is unavailable.",
-                    "warning",
-                )
-
-            else:
-
-                cursor = connection.cursor()
-
-                try:
-
-                    cursor.execute(
-                        """
-                        INSERT INTO predictions (
-                            user_id,
-                            token_symbol,
-                            trend,
-                            risk_score,
-                            predicted_price,
-                            summary
-                        )
-                        VALUES (
-                            %s,
-                            %s,
-                            %s,
-                            %s,
-                            %s,
-                            %s
-                        )
-                        RETURNING id
-                        """,
-                        (
-                            user_id,
-                            token_symbol,
-                            latest_analysis["trend"],
-                            latest_analysis["risk"],
-                            latest_analysis["price"],
-                            latest_analysis["summary"],
-                        ),
-                    )
-
-                    saved_prediction = cursor.fetchone()
-                    if saved_prediction:
-                        latest_analysis["id"] = saved_prediction["id"]
-
-                    connection.commit()
-
-                    logger.info(
-                        "Analysis saved: user=%s asset=%s",
-                        user_id,
-                        token_symbol,
-                    )
-
-                except Exception:
-
-                    connection.rollback()
-
-                    logger.exception(
-                        "Prediction database insert failed."
-                    )
-
-                    flash(
-                        "Analysis generated but could not be saved.",
-                        "warning",
-                    )
-
-                finally:
-
-                    cursor.close()
-                    connection.close()
-
-            if (
-                request.headers.get("X-Requested-With") == "XMLHttpRequest"
-                and not request.path.startswith("/api/")
-            ):
-                return jsonify({"success": True})
-
-        # ==================================================
-        # JSON ERROR
-        # ==================================================
-
-        except TimeoutError:
-
-            logger.error("Gemini analysis timed out for %s.", token_symbol)
-
-            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                return jsonify({
-                    "success": False,
-                    "message": "Analysis timed out. Please try again.",
-                }), 504
-
-            flash("Analysis timed out. Please try again.", "danger")
-
-        except json.JSONDecodeError:
-
-            logger.exception(
-                "Gemini returned invalid JSON."
-            )
-
-            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                return jsonify({
-                    "success": False,
-                    "message": "AI returned an invalid report. Please try again.",
-                }), 502
-
-            flash("AI returned an invalid report. Please try again.", "danger")
-
-        # ==================================================
-        # GEMINI QUOTA ERROR
-        # ==================================================
-
-        except Exception as error:
-
-            error_text = str(error)
-
-            if (
-                "429" in error_text
-                or "RESOURCE_EXHAUSTED" in error_text
-                or "quota" in error_text.lower()
-            ):
-
-                logger.warning(
-                    "Gemini quota exceeded for %s.",
-                    token_symbol,
-                )
-
-                message = "Gemini is temporarily rate-limited. Please wait and try again."
-
-                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                    return jsonify({"success": False, "message": message}), 429
-
-                flash(message, "warning")
-
-            else:
-
-                logger.exception(
-                    "Gemini cryptocurrency analysis failed."
-                )
-
-                message = "Unable to generate cryptocurrency analysis. Please try again."
-
-                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                    return jsonify({"success": False, "message": message}), 502
-
-                flash(message, "danger")
-
-    # ======================================================
-    # HISTORY
-    # ======================================================
-
-    history = []
-
-    connection = get_db()
-
-    if connection:
-
-        cursor = connection.cursor()
-
-        try:
+            connection = get_db_connection()
+            cursor = connection.cursor()
 
             cursor.execute(
                 """
@@ -2340,321 +3213,1286 @@ def dashboard():
                 FROM predictions
                 WHERE user_id = %s
                 ORDER BY created_at DESC
+                LIMIT 25
                 """,
-                (
-                    user_id,
-                ),
+                (user_id,),
             )
 
-            history = cursor.fetchall()
-
-        except Exception:
-
-            logger.exception(
-                "Prediction history retrieval failed."
-            )
-
-            flash(
-                "Unable to load prediction history.",
-                "danger",
-            )
-
-        finally:
+            rows = cursor.fetchall()
 
             cursor.close()
             connection.close()
 
-    if not latest_analysis and history:
-        latest_row = history[0]
-        latest_analysis = normalize_report(
-            {
-                "trend": latest_row["trend"],
-                "risk_score": latest_row["risk_score"],
-                "predicted_price": latest_row["predicted_price"],
-                "summary": latest_row["summary"],
-            },
-            latest_row["token_symbol"],
-            fetch_crypto_market_data(latest_row["token_symbol"]) or {},
-        )
-        latest_analysis["id"] = latest_row["id"]
+            history = []
 
-    if latest_analysis:
-        latest_analysis["market_data"] = (
-            fetch_crypto_market_data(latest_analysis["token"])
-            or {}
-        )
-        latest_analysis["market_data"] = format_market_data_for_display(
-            latest_analysis["market_data"]
-        )
+            for row in rows:
 
-        if not latest_analysis.get("risk_profile"):
-            latest_analysis["risk_profile"] = evaluate_risk_profile(
-                latest_analysis["market_data"],
+                history.append(
+                    {
+                        "id": row[0],
+                        "token_symbol": row[1],
+                        "trend": row[2],
+                        "risk_score": _bounded_score(
+                            row[3],
+                            50,
+                        ),
+                        "predicted_price": (
+                            _numeric_value(
+                                row[4],
+                                0,
+                            )
+                        ),
+                        "summary": row[5] or "",
+                        "created_at": (
+                            row[6].isoformat()
+                            if row[6]
+                            else None
+                        ),
+                    }
+                )
+
+            latest = (
+                history[0]
+                if history
+                else None
             )
 
-        if not latest_analysis.get("stress_test"):
-            btc_market_data = fetch_crypto_market_data("BTC")
-            latest_analysis["stress_test"] = simulate_stress_test(
-                latest_analysis["market_data"].get(
-                    "price_change_percentage_7d",
-                    0,
+            latest_analysis = None
+
+            if latest:
+
+                latest_token = str(
+                    latest.get(
+                        "token_symbol",
+                        "",
+                    )
+                ).upper()
+
+                try:
+                    latest_market = (
+                        fetch_crypto_market_data(
+                            latest_token
+                        )
+                    )
+
+                    if not latest_market.get(
+                        "market_data_available",
+                        False,
+                    ):
+                        raise ValueError(
+                            "Latest market data unavailable."
+                        )
+
+                    latest_risk = (
+                        evaluate_risk_profile(
+                            latest_market,
+                            {},
+                        )
+                    )
+
+                    btc_market = (
+                        fetch_crypto_market_data(
+                            "BTC"
+                        )
+                    )
+
+                    btc_change = (
+                        _numeric_value(
+                            btc_market.get(
+                                "price_change_percentage_7d",
+                                0,
+                            )
+                        )
+                    )
+
+                    latest_stress = (
+                        simulate_stress_test(
+                            latest_market.get(
+                                "price_change_percentage_7d",
+                                0,
+                            ),
+                            btc_change,
+                            -10,
+                        )
+                    )
+
+                    latest_data = {
+                        "autopsy_summary": (
+                            latest.get(
+                                "summary",
+                                "",
+                            )
+                        ),
+                        "predicted_price": (
+                            latest.get(
+                                "predicted_price",
+                                latest_market.get(
+                                    "current_price",
+                                    0,
+                                ),
+                            )
+                        ),
+                    }
+
+                    latest_analysis = (
+                        normalize_report(
+                            latest_data,
+                            latest_token,
+                            latest_market,
+                            latest_risk,
+                            latest_stress,
+                            {},
+                        )
+                    )
+
+                    # Preserve the historical database score
+                    # only when it exists and is valid.
+                    stored_score = _bounded_score(
+                        latest.get(
+                            "risk_score",
+                            latest_analysis[
+                                "risk_profile"
+                            ]["composite_score"],
+                        )
+                    )
+
+                    latest_analysis[
+                        "risk_profile"
+                    ][
+                        "composite_score"
+                    ] = stored_score
+
+                    latest_analysis[
+                        "id"
+                    ] = latest.get("id")
+
+                    latest_analysis[
+                        "created_at"
+                    ] = latest.get(
+                        "created_at"
+                    )
+
+                except Exception:
+                    logger.exception(
+                        "Failed to hydrate latest report."
+                    )
+
+                    # Do not destroy the user's saved report
+                    # just because live market data is temporarily
+                    # unavailable.
+                    latest_analysis = {
+                        "token": latest_token,
+                        "summary": latest.get(
+                            "summary",
+                            "",
+                        ),
+                        "autopsy_summary": latest.get(
+                            "summary",
+                            "",
+                        ),
+                        "predicted_price": (
+                            latest.get(
+                                "predicted_price",
+                                0,
+                            )
+                        ),
+                        "risk_profile": {
+                            "composite_score": (
+                                _bounded_score(
+                                    latest.get(
+                                        "risk_score",
+                                        50,
+                                    )
+                                )
+                            ),
+                        },
+                        "market_data": {
+                            "market_data_available": False,
+                            "data_source": "unavailable",
+                        },
+                        "autopsy": [],
+                        "fatal_flaws": [],
+                        "stress_test": {},
+                        "stress_verdict": (
+                            "Live market data temporarily unavailable."
+                        ),
+                        "id": latest.get("id"),
+                        "created_at": latest.get(
+                            "created_at"
+                        ),
+                    }
+
+            response = {
+                "success": True,
+                "authenticated": True,
+                "user": public_user_payload(
+                    user
                 ),
-                btc_market_data.get("price_change_percentage_7d", 0),
+                "history": history,
+                "latest_analysis": latest_analysis,
+            }
+
+            if api_request:
+                return jsonify(
+                    response
+                ), 200
+
+            return render_template(
+                "dashboard.html",
+                user=public_user_payload(
+                    user
+                ),
+                history=history,
+                latest_analysis=latest_analysis,
             )
 
-        if risk_score is None:
-            risk_score = latest_analysis["risk_profile"]["composite_score"]
+        except Exception:
+            logger.exception(
+                "Dashboard GET failed."
+            )
 
-        latest_analysis["risk_score_value"] = latest_analysis[
-            "risk_profile"
-        ]["composite_score"]
-        latest_analysis.setdefault("security_data", {})
-        latest_analysis["autopsy"] = {
-            "autopsy_summary": latest_analysis.get(
-                "autopsy_summary",
-                latest_analysis.get("summary", ""),
-            ),
-            "cards": [
-                {
-                    "title": "Momentum & Drawdown Risk",
-                    "body": (
-                        f"The asset moved {format_percentage(latest_analysis['market_data'].get('price_change_percentage_24h', 0))} "
-                        f"over 24 hours and carries a {format_percentage(latest_analysis['market_data'].get('price_change_percentage_7d', 0))} "
-                        f"7-day move against a volatility score of {latest_analysis['risk_profile']['volatility_risk']}/100."
-                    ),
-                },
-                {
-                    "title": "Liquidity Depth & Slippage Risk",
-                    "body": (
-                        f"Turnover is {latest_analysis['risk_profile'].get('turnover_ratio', 0):.4f} with a "
-                        f"liquidity risk score of {latest_analysis['risk_profile']['liquidity_risk']}/100, "
-                        "which frames execution depth and slippage exposure."
-                    ),
-                },
-                {
-                    "title": "Macro & Contract Sensitivity",
-                    "body": (
-                        f"A {latest_analysis['stress_test']['beta']:.2f}x beta implies an estimated "
-                        f"{latest_analysis['stress_test']['expected_drawdown']:.2f}% drawdown under the modeled BTC shock. "
-                        f"Contract flags: honeypot={latest_analysis['security_data'].get('is_honeypot', False)}, "
-                        f"cannot_sell_all={latest_analysis['security_data'].get('cannot_sell_all', False)}."
-                    ),
-                },
-            ],
-            "stress_verdict": latest_analysis.get(
-                "stress_verdict",
-                f"A {latest_analysis['stress_test']['simulated_shock']:.2f}% BTC shock implies a "
-                f"{latest_analysis['stress_test']['expected_drawdown']:.2f}% drawdown at "
-                f"{latest_analysis['stress_test']['beta']:.2f}x beta.",
-            ),
-        }
+            if api_request:
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": (
+                            "Unable to load dashboard."
+                        ),
+                    }
+                ), 500
 
-    if request.path.startswith("/api/"):
-        serialized_history = [
-            {
-                **dict(history_row),
-                "created_at": str(history_row.get("created_at", "")),
-            }
-            for history_row in history
-        ]
+            flash(
+                "Unable to load dashboard.",
+                "error",
+            )
 
-        return jsonify({
-            "success": True,
-            "user": load_user_payload(user_id),
-            "latest": latest_analysis,
-            "history": serialized_history,
-        })
+            return render_template(
+                "dashboard.html",
+                user=public_user_payload(
+                    user
+                ),
+                history=[],
+                latest_analysis=None,
+            )
 
-    # ======================================================
-    # RENDER
-    # ======================================================
+    # ========================================================
+    # POST — NEW CRYPTO ANALYSIS
+    # ========================================================
 
-    return render_template(
-        "dashboard.html",
-        username=session.get("username", "User"),
-        name=session.get("name", "User"),
-        email=session.get("email", ""),
-        picture=session.get("picture", ""),
-        latest=latest_analysis,
-        risk_score=risk_score,
-        history=history,
+    data = request.get_json(
+        silent=True
     )
 
+    if not isinstance(
+        data,
+        dict,
+    ):
+        data = request.form.to_dict()
 
-# ==========================================================
-# DELETE REPORT
-# ==========================================================
-
-@app.route(
-    "/delete-report/<int:prediction_id>",
-    methods=["POST"],
-)
-@app.route(
-    "/api/history/<int:prediction_id>/delete",
-    methods=["POST"],
-)
-@jwt_required(optional=True)
-def delete_report(prediction_id):
-
-    user_id = authenticated_user_id()
-    if not user_id:
-
-        if request.path.startswith("/api/"):
-            return jsonify({"success": False, "message": "Authentication required."}), 401
-
-        return redirect(
-            frontend_location()
+    token = str(
+        data.get(
+            "token",
+            data.get(
+                "symbol",
+                data.get(
+                    "ticker",
+                    "",
+                ),
+            ),
         )
+        or ""
+    ).strip().upper()
 
-    connection = get_db()
+    # --------------------------------------------------------
+    # VALIDATION
+    # --------------------------------------------------------
 
-    if not connection:
+    if not token:
 
-        if request.path.startswith("/api/"):
-            return jsonify({"success": False, "message": "Database unavailable."}), 503
+        return jsonify(
+            {
+                "success": False,
+                "error": "Enter a cryptocurrency symbol.",
+            }
+        ), 400
 
-        flash(
-            "Database is currently unavailable.",
-            "danger",
+    if (
+        not re.fullmatch(
+            r"[A-Z0-9]{2,15}",
+            token,
         )
+    ):
 
-        return redirect(
-            url_for("dashboard")
-        )
+        return jsonify(
+            {
+                "success": False,
+                "error": "Invalid cryptocurrency symbol.",
+            }
+        ), 400
 
-    cursor = connection.cursor()
+    # --------------------------------------------------------
+    # MARKET DATA
+    # --------------------------------------------------------
 
     try:
+
+        market_data = (
+            fetch_crypto_market_data(
+                token
+            )
+        )
+
+    except Exception:
+        logger.exception(
+            "Market data request failed for %s.",
+            token,
+        )
+
+        return jsonify(
+            {
+                "success": False,
+                "error": (
+                    "Unable to fetch market data."
+                ),
+            }
+        ), 502
+
+    if not market_data.get(
+        "market_data_available",
+        False,
+    ):
+
+        return jsonify(
+            {
+                "success": False,
+                "error": (
+                    f"Live market data for "
+                    f"{token} is temporarily unavailable."
+                ),
+                "data_source": market_data.get(
+                    "data_source",
+                    "unavailable",
+                ),
+            }
+        ), 503
+
+    # --------------------------------------------------------
+    # CONTRACT SECURITY
+    # --------------------------------------------------------
+    #
+    # IMPORTANT:
+    #
+    # A ticker alone does not uniquely identify a smart
+    # contract. Therefore we DO NOT invent a contract address
+    # or incorrectly call GoPlus for native assets.
+    #
+    # If your frontend later supplies:
+    #
+    #   chain_id
+    #   contract_address
+    #
+    # this section automatically supports GoPlus.
+    # --------------------------------------------------------
+
+    chain_id = str(
+        data.get(
+            "chain_id",
+            "",
+        )
+        or ""
+    ).strip()
+
+    contract_address = str(
+        data.get(
+            "contract_address",
+            "",
+        )
+        or ""
+    ).strip()
+
+    security_data = {}
+
+    if (
+        chain_id
+        and contract_address
+    ):
+
+        security_data = (
+            fetch_token_security(
+                chain_id,
+                contract_address,
+            )
+        )
+
+    # --------------------------------------------------------
+    # RISK ENGINE
+    # --------------------------------------------------------
+
+    risk_profile = evaluate_risk_profile(
+        market_data,
+        security_data,
+    )
+
+    # --------------------------------------------------------
+    # BTC BENCHMARK
+    # --------------------------------------------------------
+
+    try:
+
+        btc_market_data = (
+            fetch_crypto_market_data(
+                "BTC"
+            )
+        )
+
+        btc_change_7d = (
+            _numeric_value(
+                btc_market_data.get(
+                    "price_change_percentage_7d",
+                    0,
+                )
+            )
+        )
+
+        btc_available = bool(
+            btc_market_data.get(
+                "market_data_available",
+                False,
+            )
+        )
+
+    except Exception:
+
+        logger.exception(
+            "BTC benchmark fetch failed."
+        )
+
+        btc_change_7d = 0.0
+        btc_available = False
+
+    # --------------------------------------------------------
+    # STRESS TEST
+    # --------------------------------------------------------
+
+    stress_test = simulate_stress_test(
+        market_data.get(
+            "price_change_percentage_7d",
+            0,
+        ),
+        btc_change_7d,
+        -10.0,
+    )
+
+    stress_test[
+        "benchmark_available"
+    ] = btc_available and bool(
+        stress_test.get(
+            "benchmark_available",
+            False,
+        )
+    )
+
+    # --------------------------------------------------------
+    # AI ANALYSIS
+    # --------------------------------------------------------
+
+    ai_data = {}
+
+    if gemini_client:
+
+        prompt = build_crypto_prompt(
+            token,
+            market_data,
+            risk_profile,
+            stress_test,
+            security_data,
+        )
+
+        executor = ThreadPoolExecutor(
+            max_workers=1
+        )
+
+        future = executor.submit(
+            run_gemini_analysis,
+            prompt,
+        )
+
+        try:
+
+            ai_data = future.result(
+                timeout=45
+            )
+
+        except FuturesTimeoutError:
+
+            logger.warning(
+                "Gemini analysis timed out for %s.",
+                token,
+            )
+
+            future.cancel()
+
+            ai_data = {}
+
+        except Exception:
+
+            logger.exception(
+                "Gemini analysis failed for %s.",
+                token,
+            )
+
+            ai_data = {}
+
+        finally:
+
+            try:
+                executor.shutdown(
+                    wait=False,
+                    cancel_futures=True,
+                )
+            except TypeError:
+                # Compatibility fallback for older Python.
+                executor.shutdown(
+                    wait=False
+                )
+
+    # --------------------------------------------------------
+    # NORMALIZE REPORT
+    # --------------------------------------------------------
+
+    report = normalize_report(
+        ai_data,
+        token,
+        market_data,
+        risk_profile,
+        stress_test,
+        security_data,
+    )
+
+    report[
+        "btc_benchmark"
+    ] = {
+        "change_7d": btc_change_7d,
+        "change_7d_display": format_percentage(
+            btc_change_7d
+        ),
+        "available": btc_available,
+    }
+
+    # --------------------------------------------------------
+    # SAVE ANALYSIS
+    # --------------------------------------------------------
+
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO predictions (
+                user_id,
+                token_symbol,
+                trend,
+                risk_score,
+                predicted_price,
+                summary
+            )
+            VALUES (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s
+            )
+            RETURNING id, created_at
+            """,
+            (
+                user_id,
+                token,
+                report.get(
+                    "trend",
+                    "Neutral",
+                ),
+                _bounded_score(
+                    report.get(
+                        "risk_profile",
+                        {}
+                    ).get(
+                        "composite_score",
+                        50,
+                    )
+                ),
+                _numeric_value(
+                    report.get(
+                        "predicted_price",
+                        market_data.get(
+                            "current_price",
+                            0,
+                        ),
+                    )
+                ),
+                report.get(
+                    "summary",
+                    "",
+                ),
+            ),
+        )
+
+        saved_row = cursor.fetchone()
+
+        connection.commit()
+
+    except Exception:
+
+        if connection:
+            connection.rollback()
+
+        logger.exception(
+            "Failed to save analysis."
+        )
+
+        return jsonify(
+            {
+                "success": False,
+                "error": (
+                    "Analysis completed, but "
+                    "saving the report failed."
+                ),
+                "analysis": report,
+            }
+        ), 500
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+    # --------------------------------------------------------
+    # RESPONSE
+    # --------------------------------------------------------
+
+    report["id"] = (
+        saved_row[0]
+        if saved_row
+        else None
+    )
+
+    report["created_at"] = (
+        saved_row[1].isoformat()
+        if saved_row and saved_row[1]
+        else None
+    )
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "Analysis completed.",
+            "analysis": report,
+            "latest_analysis": report,
+        }
+    ), 200
+
+
+# ============================================================
+# HISTORY
+# ============================================================
+
+@app.route(
+    "/api/history",
+    methods=["GET", "OPTIONS"],
+)
+@jwt_required(optional=True)
+def api_history():
+
+    if request.method == "OPTIONS":
+        return "", 204
+
+    user_id = authenticated_user_id()
+
+    if not user_id:
+        return jsonify(
+            {
+                "success": False,
+                "authenticated": False,
+                "error": "Authentication required.",
+            }
+        ), 401
+
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                id,
+                token_symbol,
+                trend,
+                risk_score,
+                predicted_price,
+                summary,
+                created_at
+            FROM predictions
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 100
+            """,
+            (user_id,),
+        )
+
+        rows = cursor.fetchall()
+
+        history = []
+
+        for row in rows:
+
+            history.append(
+                {
+                    "id": row[0],
+                    "token_symbol": row[1],
+                    "trend": row[2],
+                    "risk_score": _bounded_score(
+                        row[3],
+                        50,
+                    ),
+                    "predicted_price": _numeric_value(
+                        row[4],
+                        0,
+                    ),
+                    "predicted_price_display": format_usd(
+                        row[4]
+                    ),
+                    "summary": row[5] or "",
+                    "created_at": (
+                        row[6].isoformat()
+                        if row[6]
+                        else None
+                    ),
+                }
+            )
+
+        return jsonify(
+            {
+                "success": True,
+                "history": history,
+            }
+        ), 200
+
+    except Exception:
+
+        logger.exception(
+            "History fetch failed."
+        )
+
+        return jsonify(
+            {
+                "success": False,
+                "error": "Unable to load history.",
+            }
+        ), 500
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+# ============================================================
+# DELETE SINGLE REPORT
+# ============================================================
+
+@app.route(
+    "/api/history/<int:report_id>",
+    methods=["DELETE", "POST", "OPTIONS"],
+)
+@jwt_required(optional=True)
+def delete_history_report(
+    report_id: int,
+):
+
+    if request.method == "OPTIONS":
+        return "", 204
+
+    user_id = authenticated_user_id()
+
+    if not user_id:
+        return jsonify(
+            {
+                "success": False,
+                "error": "Authentication required.",
+            }
+        ), 401
+
+    if report_id <= 0:
+        return jsonify(
+            {
+                "success": False,
+                "error": "Invalid report ID.",
+            }
+        ), 400
+
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = get_db_connection()
+        cursor = connection.cursor()
 
         cursor.execute(
             """
             DELETE FROM predictions
             WHERE id = %s
-            AND user_id = %s
+              AND user_id = %s
+            RETURNING id
             """,
             (
-                prediction_id,
+                report_id,
                 user_id,
             ),
         )
 
-        if cursor.rowcount == 0:
+        deleted = cursor.fetchone()
+
+        if not deleted:
 
             connection.rollback()
 
-            flash(
-                "Report not found.",
-                "warning",
-            )
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Report not found.",
+                }
+            ), 404
 
-        else:
+        connection.commit()
 
-            connection.commit()
-
-            logger.info(
-                "Report deleted: user=%s report=%s",
-                user_id,
-                prediction_id,
-            )
-
-            flash(
-                "Analysis report deleted successfully.",
-                "success",
-            )
+        return jsonify(
+            {
+                "success": True,
+                "message": "Report deleted.",
+                "id": report_id,
+            }
+        ), 200
 
     except Exception:
 
-        connection.rollback()
+        if connection:
+            connection.rollback()
 
         logger.exception(
-            "Prediction deletion failed."
+            "Report deletion failed."
         )
 
-        flash(
-            "Unable to delete the report.",
-            "danger",
-        )
+        return jsonify(
+            {
+                "success": False,
+                "error": "Unable to delete report.",
+            }
+        ), 500
 
     finally:
 
-        cursor.close()
-        connection.close()
+        if cursor:
+            cursor.close()
 
-    if request.path.startswith("/api/"):
-        return jsonify({"success": True})
-
-    return redirect(url_for("dashboard"))
+        if connection:
+            connection.close()
 
 
-# ==========================================================
+# ============================================================
+# DELETE ALL REPORTS
+# ============================================================
+
+@app.route(
+    "/api/history",
+    methods=["DELETE"],
+)
+@jwt_required(optional=True)
+def delete_all_history():
+
+    user_id = authenticated_user_id()
+
+    if not user_id:
+        return jsonify(
+            {
+                "success": False,
+                "error": "Authentication required.",
+            }
+        ), 401
+
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            DELETE FROM predictions
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+
+        deleted_count = (
+            cursor.rowcount
+        )
+
+        connection.commit()
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "History cleared.",
+                "deleted_count": deleted_count,
+            }
+        ), 200
+
+    except Exception:
+
+        if connection:
+            connection.rollback()
+
+        logger.exception(
+            "Delete-all history failed."
+        )
+
+        return jsonify(
+            {
+                "success": False,
+                "error": (
+                    "Unable to clear history."
+                ),
+            }
+        ), 500
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+# ============================================================
+# LEGACY DELETE REPORT COMPATIBILITY
+# ============================================================
+
+@app.route(
+    "/delete-report",
+    methods=["POST", "OPTIONS"],
+)
+@jwt_required(optional=True)
+def delete_report_legacy():
+
+    if request.method == "OPTIONS":
+        return "", 204
+
+    user_id = authenticated_user_id()
+
+    if not user_id:
+
+        if is_api_request():
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Authentication required.",
+                }
+            ), 401
+
+        return redirect(
+            f"{FRONTEND_URL}/login"
+        )
+
+    data = request.get_json(
+        silent=True
+    ) or request.form.to_dict()
+
+    report_id = _numeric_value(
+        data.get(
+            "id",
+            data.get(
+                "report_id",
+                0,
+            ),
+        ),
+        0,
+    )
+
+    if report_id <= 0:
+
+        return jsonify(
+            {
+                "success": False,
+                "error": "Invalid report ID.",
+            }
+        ), 400
+
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            DELETE FROM predictions
+            WHERE id = %s
+              AND user_id = %s
+            RETURNING id
+            """,
+            (
+                int(report_id),
+                user_id,
+            ),
+        )
+
+        deleted = cursor.fetchone()
+
+        if not deleted:
+
+            connection.rollback()
+
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Report not found.",
+                }
+            ), 404
+
+        connection.commit()
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Report deleted.",
+                "id": int(report_id),
+            }
+        ), 200
+
+    except Exception:
+
+        if connection:
+            connection.rollback()
+
+        logger.exception(
+            "Legacy report deletion failed."
+        )
+
+        return jsonify(
+            {
+                "success": False,
+                "error": "Unable to delete report.",
+            }
+        ), 500
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+# ============================================================
 # LOGOUT
-# ==========================================================
+# ============================================================
 
-@app.route("/logout")
+@app.route(
+    "/api/logout",
+    methods=["POST", "GET", "OPTIONS"],
+)
+@jwt_required(optional=True)
+def api_logout():
+
+    if request.method == "OPTIONS":
+        return "", 204
+
+    session.pop(
+        "user_id",
+        None,
+    )
+
+    session.clear()
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "Logged out successfully.",
+        }
+    ), 200
+
+
+@app.route(
+    "/logout",
+    methods=["GET", "POST"],
+)
+@jwt_required(optional=True)
 def logout():
 
     session.clear()
 
+    if is_api_request():
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Logged out successfully.",
+            }
+        ), 200
+
     return redirect(
-        frontend_location()
+        f"{FRONTEND_URL}/login"
     )
 
 
-# ==========================================================
-# DATABASE INITIALIZATION
-# ==========================================================
+# ============================================================
+# ROOT
+# ============================================================
 
-_db_initialized = False
+@app.route(
+    "/",
+    methods=["GET"],
+)
+def index():
 
-_db_init_lock = Lock()
+    # If the backend still serves its own landing page,
+    # use index.html. Otherwise redirect to the frontend.
+    try:
 
+        return render_template(
+            "index.html"
+        )
 
-@app.before_request
-def ensure_database_initialized():
+    except Exception:
 
-    global _db_initialized
-
-    if _db_initialized:
-        return
-
-    with _db_init_lock:
-
-        if _db_initialized:
-            return
-
-        if init_db():
-
-            _db_initialized = True
+        return redirect(
+            FRONTEND_URL
+        )
 
 
-# ==========================================================
-# APPLICATION ENTRY POINT
-# ==========================================================
+# ============================================================
+# 404 API HANDLER
+# ============================================================
+
+@app.errorhandler(404)
+def handle_not_found(error):
+
+    if is_api_request():
+
+        return jsonify(
+            {
+                "success": False,
+                "error": "Endpoint not found.",
+            }
+        ), 404
+
+    return error
+
+
+# ============================================================
+# 405 API HANDLER
+# ============================================================
+
+@app.errorhandler(405)
+def handle_method_not_allowed(error):
+
+    if is_api_request():
+
+        return jsonify(
+            {
+                "success": False,
+                "error": "Method not allowed.",
+            }
+        ), 405
+
+    return error
+
+
+# ============================================================
+# 500 API HANDLER
+# ============================================================
+
+@app.errorhandler(500)
+def handle_internal_error(error):
+
+    logger.exception(
+        "Unhandled Flask error."
+    )
+
+    if is_api_request():
+
+        return jsonify(
+            {
+                "success": False,
+                "error": "Internal server error.",
+            }
+        ), 500
+
+    return error
+
+
+# ============================================================
+# APPLICATION STARTUP
+# ============================================================
 
 if __name__ == "__main__":
 
-    mock_market_data = {
-        "change_7d": 24.5,
-        "volume": 1_500_000,
-        "market_cap": 10_000_000,
-    }
+    port = int(
+        os.getenv(
+            "PORT",
+            "5000",
+        )
+    )
 
-    mock_security_data = {
-        "is_honeypot": False,
-        "buy_tax": 4,
-        "sell_tax": 8,
-    }
+    host = os.getenv(
+        "HOST",
+        "0.0.0.0",
+    )
 
-    print(
-        "Mock risk score:",
-        calculate_risk_score(
-            mock_market_data,
-            mock_security_data,
-        ),
+    debug = (
+        os.getenv(
+            "FLASK_DEBUG",
+            "false",
+        ).lower()
+        == "true"
+    )
+
+    logger.info(
+        "Starting CryptoRisk AI backend on %s:%s",
+        host,
+        port,
     )
 
     app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=True,
+        host=host,
+        port=port,
+        debug=debug,
     )
+
+
+# ============================================================
+# END OF APP.PY — PART 3 / 3
+# ============================================================
