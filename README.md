@@ -67,6 +67,7 @@ Crypto-Risk-AI/
 To run or deploy this project locally, configure the following environment variables in your environment or `.env` file:
 
 SECRET_KEY=your_flask_session_secret
+JWT_SECRET_KEY=your_jwt_secret
 DATABASE_URL=postgresql://user:password@host:port/dbname
 GEMINI_API_KEY=your_google_gemini_api_key
 GOOGLE_CLIENT_ID=your_google_oauth_client_id

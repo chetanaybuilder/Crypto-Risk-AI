@@ -25,6 +25,12 @@ import requests
 from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
 from flask_cors import CORS
+from flask_jwt_extended import (
+    JWTManager,
+    create_access_token,
+    get_jwt_identity,
+    jwt_required,
+)
 from flask import (
     Flask,
     flash,
@@ -37,6 +43,7 @@ from flask import (
 )
 from google import genai
 from google.genai import types
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 # ==========================================================
@@ -52,6 +59,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", SECRET_KEY)
 
 
 required_environment = {
@@ -627,14 +635,16 @@ def simulate_stress_test(
 
 app = Flask(__name__)
 
-if FRONTEND_URL:
-    CORS(
-        app,
-        resources={r"/api/*": {"origins": FRONTEND_URL}},
-        supports_credentials=True,
-    )
+CORS(
+    app,
+    resources={r"/api/*": {"origins": FRONTEND_URL or "*"}},
+    supports_credentials=bool(FRONTEND_URL),
+)
 
 app.secret_key = SECRET_KEY
+app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = 60 * 60 * 24 * 7
+JWTManager(app)
 
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -1706,24 +1716,144 @@ def normalize_report(
 # DASHBOARD
 # ==========================================================
 
+def authenticated_user_id() -> Optional[int]:
+    """Return the JWT user id first, with Google session fallback."""
+
+    identity = get_jwt_identity()
+    if identity is not None:
+        return int(identity)
+
+    return session.get("user_id")
+
+
+def auth_user_payload(user: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": user["id"],
+        "username": user.get("username", "User"),
+        "name": user.get("name") or user.get("username", "User"),
+        "email": user.get("email", ""),
+        "picture": user.get("picture") or "",
+    }
+
+
+def load_user_payload(user_id: int) -> dict[str, Any]:
+    connection = get_db()
+    if not connection:
+        return {}
+
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT id, username, email, name, picture FROM users WHERE id = %s",
+            (user_id,),
+        )
+        user = cursor.fetchone()
+        return auth_user_payload(user) if user else {}
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route("/api/signup", methods=["POST"])
+def signup():
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username", "")).strip()
+    email = str(payload.get("email", "")).strip().lower()
+    password = str(payload.get("password", ""))
+
+    if not username or not email or len(password) < 8:
+        return jsonify({
+            "success": False,
+            "message": "Username and email are required; password must be at least 8 characters.",
+        }), 400
+
+    connection = get_db()
+    if not connection:
+        return jsonify({"success": False, "message": "Database unavailable."}), 503
+
+    cursor = connection.cursor()
+    try:
+        cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
+        if cursor.fetchone():
+            return jsonify({"success": False, "message": "An account with that email already exists."}), 409
+
+        cursor.execute(
+            """
+            INSERT INTO users (username, email, password, name)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, username, email, name, picture
+            """,
+            (username, email, generate_password_hash(password), username),
+        )
+        user = cursor.fetchone()
+        connection.commit()
+
+        token = create_access_token(identity=str(user["id"]))
+        session.update({
+            "user_id": user["id"],
+            "username": user["username"],
+            "email": user["email"],
+            "name": user.get("name") or user["username"],
+            "picture": user.get("picture") or "",
+        })
+        return jsonify({"success": True, "token": token, "user": auth_user_payload(user)}), 201
+    except Exception:
+        connection.rollback()
+        logger.exception("Signup failed.")
+        return jsonify({"success": False, "message": "Unable to create account."}), 500
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    payload = request.get_json(silent=True) or {}
+    email = str(payload.get("email", "")).strip().lower()
+    password = str(payload.get("password", ""))
+
+    connection = get_db()
+    if not connection:
+        return jsonify({"success": False, "message": "Database unavailable."}), 503
+
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT id, username, email, password, name, picture FROM users WHERE email = %s",
+            (email,),
+        )
+        user = cursor.fetchone()
+        if not user or not user.get("password") or not check_password_hash(user["password"], password):
+            return jsonify({"success": False, "message": "Invalid email or password."}), 401
+
+        token = create_access_token(identity=str(user["id"]))
+        session.update({
+            "user_id": user["id"],
+            "username": user["username"],
+            "email": user["email"],
+            "name": user.get("name") or user["username"],
+            "picture": user.get("picture") or "",
+        })
+        return jsonify({"success": True, "token": token, "user": auth_user_payload(user)})
+    finally:
+        cursor.close()
+        connection.close()
+
 @app.route("/api/health")
 def health_check():
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/session")
+@jwt_required(optional=True)
 def session_info():
-    if "user_id" not in session:
+    user_id = authenticated_user_id()
+    if not user_id:
         return jsonify({"authenticated": False}), 401
 
     return jsonify({
         "authenticated": True,
-        "user": {
-            "username": session.get("username", "User"),
-            "name": session.get("name", "User"),
-            "email": session.get("email", ""),
-            "picture": session.get("picture", ""),
-        },
+        "user": load_user_payload(user_id),
     })
 
 @app.route(
@@ -1734,9 +1864,11 @@ def session_info():
     "/api/dashboard",
     methods=["GET", "POST"],
 )
+@jwt_required(optional=True)
 def dashboard():
 
-    if "user_id" not in session:
+    user_id = authenticated_user_id()
+    if not user_id:
 
         if request.path.startswith("/api/"):
             return jsonify({"success": False, "message": "Authentication required."}), 401
@@ -1936,7 +2068,7 @@ def dashboard():
                         )
                         """,
                         (
-                            session["user_id"],
+                            user_id,
                             token_symbol,
                             latest_analysis["trend"],
                             latest_analysis["risk"],
@@ -1949,7 +2081,7 @@ def dashboard():
 
                     logger.info(
                         "Analysis saved: user=%s asset=%s",
-                        session["user_id"],
+                        user_id,
                         token_symbol,
                     )
 
@@ -2075,7 +2207,7 @@ def dashboard():
                 ORDER BY created_at DESC
                 """,
                 (
-                    session["user_id"],
+                    user_id,
                 ),
             )
 
@@ -2154,12 +2286,7 @@ def dashboard():
 
         return jsonify({
             "success": True,
-            "user": {
-                "username": session.get("username", "User"),
-                "name": session.get("name", "User"),
-                "email": session.get("email", ""),
-                "picture": session.get("picture", ""),
-            },
+            "user": load_user_payload(user_id),
             "latest": latest_analysis,
             "history": serialized_history,
         })
@@ -2192,9 +2319,11 @@ def dashboard():
     "/api/history/<int:prediction_id>/delete",
     methods=["POST"],
 )
+@jwt_required(optional=True)
 def delete_report(prediction_id):
 
-    if "user_id" not in session:
+    user_id = authenticated_user_id()
+    if not user_id:
 
         if request.path.startswith("/api/"):
             return jsonify({"success": False, "message": "Authentication required."}), 401
@@ -2231,7 +2360,7 @@ def delete_report(prediction_id):
             """,
             (
                 prediction_id,
-                session["user_id"],
+                user_id,
             ),
         )
 
@@ -2250,7 +2379,7 @@ def delete_report(prediction_id):
 
             logger.info(
                 "Report deleted: user=%s report=%s",
-                session["user_id"],
+                user_id,
                 prediction_id,
             )
 

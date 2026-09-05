@@ -43,7 +43,7 @@
             <span class="status-dot"></span>
             <span>AI RISK INTELLIGENCE</span>
         </div>
-        <a href="https://cryptorisk-ai-backend.onrender.com/auth/google" class="nav-login-button">
+        <a href="#auth" class="nav-login-button" data-google-login>
             Sign in
             <span>→</span>
         </a>
@@ -67,7 +67,7 @@
                     cut through market noise and surface what matters.
                 </p>
                 <div class="hero-actions">
-                    <a href="https://cryptorisk-ai-backend.onrender.com/auth/google" class="hero-primary-button">
+                    <a href="#auth" class="hero-primary-button" data-google-login>
                         <span class="button-glow"></span>
                         <span class="button-content">
                             <span class="button-icon">◈</span>
@@ -80,6 +80,23 @@
                         <span>↓</span>
                     </a>
                 </div>
+                <section class="auth-panel" id="auth">
+                    <form id="login-form">
+                        <h2>Sign in</h2>
+                        <input type="email" name="email" placeholder="Email" autocomplete="email" required>
+                        <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+                        <button type="submit">Sign in</button>
+                    </form>
+                    <form id="signup-form">
+                        <h2>Create account</h2>
+                        <input type="text" name="username" placeholder="Username" autocomplete="username" required>
+                        <input type="email" name="email" placeholder="Email" autocomplete="email" required>
+                        <input type="password" name="password" placeholder="Password (8+ characters)" autocomplete="new-password" minlength="8" required>
+                        <button type="submit">Sign up</button>
+                    </form>
+                    <p id="auth-message" role="status" aria-live="polite"></p>
+                    <a href="#" data-google-login>Continue with Google</a>
+                </section>
                 <div class="hero-trust-row">
                     <div class="trust-item">
                         <span class="trust-icon">✦</span>
@@ -263,7 +280,7 @@
                 <span class="section-kicker">TERMINAL READY</span>
                 <h2>Stop chasing the noise. <span>Understand the risk.</span></h2>
                 <p>Enter the intelligence terminal and generate your first cryptocurrency risk report.</p>
-                <a href="/auth/google" class="hero-primary-button final-button">
+                <a href="#auth" class="hero-primary-button final-button" data-google-login>
                     <span class="button-glow"></span>
                     <span class="button-content">
                         <span class="button-icon">◈</span>

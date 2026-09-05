@@ -1,10 +1,70 @@
 document.addEventListener("DOMContentLoaded", () => {
 
     const backendUrl = (
-        window.APP_CONFIG?.backendUrl || ""
+        window.CONFIG?.API_BASE_URL || ""
     ).replace(/\/$/, "");
 
     const apiUrl = (path) => `${backendUrl}${path}`;
+
+    const getAuthToken = () => localStorage.getItem("auth_token");
+
+    const requestOptions = (options = {}) => ({
+        ...options,
+        credentials: "include",
+        headers: {
+            ...(options.headers || {}),
+            ...(getAuthToken()
+                ? { Authorization: `Bearer ${getAuthToken()}` }
+                : {}),
+        },
+    });
+
+    function setupAuthentication() {
+        document.querySelectorAll("[data-google-login]").forEach((link) => {
+            link.href = apiUrl("/auth/google");
+        });
+
+        const message = document.querySelector("#auth-message");
+        const submitAuth = async (form, endpoint) => {
+            const data = Object.fromEntries(new FormData(form).entries());
+            const response = await fetch(
+                apiUrl(endpoint),
+                requestOptions({
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(data),
+                })
+            );
+            const payload = await response.json();
+
+            if (!response.ok || !payload.success) {
+                throw new Error(payload.message || "Authentication failed.");
+            }
+
+            localStorage.setItem("auth_token", payload.token);
+            window.location.href = "dashboard.html";
+        };
+
+        document.querySelector("#login-form")?.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            try {
+                await submitAuth(event.currentTarget, "/api/login");
+            } catch (error) {
+                if (message) message.textContent = error.message;
+            }
+        });
+
+        document.querySelector("#signup-form")?.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            try {
+                await submitAuth(event.currentTarget, "/api/signup");
+            } catch (error) {
+                if (message) message.textContent = error.message;
+            }
+        });
+    }
+
+    setupAuthentication();
 
     /*
     ==========================================================
@@ -49,6 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function handleLogout() {
 
+        localStorage.removeItem("auth_token");
         window.location.href = apiUrl("/logout");
 
     }
@@ -349,9 +410,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
     async function loadDashboard() {
-        const response = await fetch(apiUrl("/api/dashboard"), {
-            credentials: "include",
-        });
+        const response = await fetch(
+            apiUrl("/api/dashboard"),
+            requestOptions()
+        );
 
         if (response.status === 401) {
             window.location.href = apiUrl("/auth/google");
@@ -500,16 +562,14 @@ document.addEventListener("DOMContentLoaded", () => {
             startProgress();
 
             try {
-                const response = await fetch(apiUrl("/api/dashboard"), {
+                const response = await fetch(apiUrl("/api/dashboard"), requestOptions({
                     method: "POST",
-                    credentials: "include",
                     headers: {
                         "Content-Type": "application/json",
                         "X-Requested-With": "XMLHttpRequest",
                     },
                     body: JSON.stringify({ token_symbol: token }),
-                });
-
+                }));
                 const payload = await response.json();
                 if (!response.ok || !payload.success) {
                     throw new Error(payload.message || "Analysis failed.");

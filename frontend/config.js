@@ -1,3 +1,5 @@
-window.APP_CONFIG = {
-    backendUrl: "https://cryptorisk-ai-backend.onrender.com",
+const CONFIG = {
+    API_BASE_URL: "https://crypto-risk-ai-j1ag.onrender.com",
 };
+
+window.CONFIG = CONFIG;
