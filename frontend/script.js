@@ -23,45 +23,6 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll("[data-google-login]").forEach((link) => {
             link.href = apiUrl("/auth/google");
         });
-
-        const message = document.querySelector("#auth-message");
-        const submitAuth = async (form, endpoint) => {
-            const data = Object.fromEntries(new FormData(form).entries());
-            const response = await fetch(
-                apiUrl(endpoint),
-                requestOptions({
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(data),
-                })
-            );
-            const payload = await response.json();
-
-            if (!response.ok || !payload.success) {
-                throw new Error(payload.message || "Authentication failed.");
-            }
-
-            localStorage.setItem("auth_token", payload.token);
-            window.location.href = "dashboard.html";
-        };
-
-        document.querySelector("#login-form")?.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            try {
-                await submitAuth(event.currentTarget, "/api/login");
-            } catch (error) {
-                if (message) message.textContent = error.message;
-            }
-        });
-
-        document.querySelector("#signup-form")?.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            try {
-                await submitAuth(event.currentTarget, "/api/signup");
-            } catch (error) {
-                if (message) message.textContent = error.message;
-            }
-        });
     }
 
     setupAuthentication();
@@ -509,33 +470,18 @@ document.addEventListener("DOMContentLoaded", () => {
             progressStages[0]
         );
 
-        progressTimer = setInterval(
-            () => {
+        const advanceProgress = () => {
+            if (currentStage >= progressStages.length - 1) {
+                progressTimer = null;
+                return;
+            }
 
-                if (
-                    currentStage <
-                    progressStages.length - 1
-                ) {
+            currentStage += 1;
+            updateProgress(progressStages[currentStage]);
+            progressTimer = window.setTimeout(advanceProgress, 1600);
+        };
 
-                    currentStage++;
-
-                    updateProgress(
-                        progressStages[
-                            currentStage
-                        ]
-                    );
-
-                } else {
-
-                    clearInterval(
-                        progressTimer
-                    );
-
-                }
-
-            },
-            1600
-        );
+        progressTimer = window.setTimeout(advanceProgress, 1600);
 
     }
 
