@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="landing-page">
 
@@ -35,7 +35,7 @@
 
     <!-- NAVBAR -->
     <header class="landing-navbar">
-        <a href="index.html" class="brand">
+        <a href="{{ url_for('home') }}" class="brand">
             <div class="brand-mark">CR</div>
             <div class="brand-name">CryptoRisk<span> AI</span></div>
         </a>
@@ -43,7 +43,7 @@
             <span class="status-dot"></span>
             <span>AI RISK INTELLIGENCE</span>
         </div>
-        <a href="https://cryptorisk-ai-backend.onrender.com/auth/google" class="nav-login-button">
+        <a href="{{ url_for('google_login') }}" class="nav-login-button">
             Sign in
             <span>→</span>
         </a>
@@ -67,7 +67,7 @@
                     cut through market noise and surface what matters.
                 </p>
                 <div class="hero-actions">
-                    <a href="https://cryptorisk-ai-backend.onrender.com/auth/google" class="hero-primary-button">
+                    <a href="{{ url_for('google_login') }}" class="hero-primary-button">
                         <span class="button-glow"></span>
                         <span class="button-content">
                             <span class="button-icon">◈</span>
@@ -285,7 +285,6 @@
         <span>Educational use only.</span>
     </footer>
 
-    <script src="config.js"></script>
-    <script src="script.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

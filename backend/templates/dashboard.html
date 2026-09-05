@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="dashboard-page">
 
@@ -36,7 +36,7 @@
 
     <!-- NAVBAR -->
     <header class="dashboard-navbar">
-        <a href="dashboard.html" class="brand">
+        <a href="{{ url_for('dashboard') }}" class="brand">
             <div class="brand-mark">CR</div>
             <div class="brand-name">CryptoRisk<span> AI</span></div>
         </a>
@@ -321,7 +321,6 @@
         </footer>
     </main>
 
-    <script src="config.js"></script>
-    <script src="script.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

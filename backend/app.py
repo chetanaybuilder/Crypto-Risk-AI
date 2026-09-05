@@ -24,6 +24,7 @@ import psycopg2.extras
 import requests
 from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
+from flask_cors import CORS
 from flask import (
     Flask,
     flash,
@@ -50,6 +51,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")
 
 
 required_environment = {
@@ -623,16 +625,30 @@ def simulate_stress_test(
 # FLASK
 # ==========================================================
 
-app = Flask(
-    __name__,
-    template_folder=os.path.join(PROJECT_ROOT, "frontend"),
-    static_folder=os.path.join(PROJECT_ROOT, "frontend"),
-)
+app = Flask(__name__)
+
+if FRONTEND_URL:
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": FRONTEND_URL}},
+        supports_credentials=True,
+    )
 
 app.secret_key = SECRET_KEY
 
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = bool(FRONTEND_URL)
+
+
+def frontend_location(path: str = "") -> str:
+    """Return a frontend URL when the UI is deployed separately."""
+
+    if FRONTEND_URL:
+        return f"{FRONTEND_URL}/{path.lstrip('/')}" if path else FRONTEND_URL
+
+    return url_for("home")
+
 
 # For production HTTPS:
 # app.config["SESSION_COOKIE_SECURE"] = True
@@ -820,7 +836,7 @@ def google_login():
 
     if "user_id" in session:
         return redirect(
-            url_for("dashboard")
+            frontend_location("dashboard.html")
         )
 
     redirect_uri = url_for(
@@ -1030,7 +1046,7 @@ def google_callback():
             )
 
             return redirect(
-                url_for("dashboard")
+                frontend_location("dashboard.html")
             )
 
         except Exception:
@@ -1047,7 +1063,7 @@ def google_callback():
             )
 
             return redirect(
-                url_for("home")
+                frontend_location()
             )
 
         finally:
@@ -1067,7 +1083,7 @@ def google_callback():
         )
 
         return redirect(
-            url_for("home")
+            frontend_location()
         )
 
 
@@ -1080,12 +1096,10 @@ def home():
 
     if "user_id" in session:
         return redirect(
-            url_for("dashboard")
+            frontend_location("dashboard.html")
         )
 
-    return render_template(
-        "index.html"
-    )
+    return render_template("index.html")
 
 
 # ==========================================================
@@ -1692,16 +1706,43 @@ def normalize_report(
 # DASHBOARD
 # ==========================================================
 
+@app.route("/api/health")
+def health_check():
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/session")
+def session_info():
+    if "user_id" not in session:
+        return jsonify({"authenticated": False}), 401
+
+    return jsonify({
+        "authenticated": True,
+        "user": {
+            "username": session.get("username", "User"),
+            "name": session.get("name", "User"),
+            "email": session.get("email", ""),
+            "picture": session.get("picture", ""),
+        },
+    })
+
 @app.route(
     "/dashboard",
+    methods=["GET", "POST"],
+)
+@app.route(
+    "/api/dashboard",
     methods=["GET", "POST"],
 )
 def dashboard():
 
     if "user_id" not in session:
 
+        if request.path.startswith("/api/"):
+            return jsonify({"success": False, "message": "Authentication required."}), 401
+
         return redirect(
-            url_for("home")
+            frontend_location()
         )
 
     latest_analysis = None
@@ -1713,15 +1754,12 @@ def dashboard():
 
     if request.method == "POST":
 
+        request_data = request.get_json(silent=True) or {}
         token_symbol = (
-            request.form
-            .get(
-                "token_symbol",
-                "",
-            )
-            .strip()
-            .upper()
-        )
+            request_data.get("token_symbol", "")
+            if request.is_json
+            else request.form.get("token_symbol", "")
+        ).strip().upper()
 
         # --------------------------------------------------
         # VALIDATION
@@ -1933,7 +1971,10 @@ def dashboard():
                     cursor.close()
                     connection.close()
 
-            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            if (
+                request.headers.get("X-Requested-With") == "XMLHttpRequest"
+                and not request.path.startswith("/api/")
+            ):
                 return jsonify({"success": True})
 
         # ==================================================
@@ -2102,40 +2143,39 @@ def dashboard():
         ]["composite_score"]
         latest_analysis.setdefault("security_data", {})
 
+    if request.path.startswith("/api/"):
+        serialized_history = [
+            {
+                **dict(history_row),
+                "created_at": str(history_row.get("created_at", "")),
+            }
+            for history_row in history
+        ]
+
+        return jsonify({
+            "success": True,
+            "user": {
+                "username": session.get("username", "User"),
+                "name": session.get("name", "User"),
+                "email": session.get("email", ""),
+                "picture": session.get("picture", ""),
+            },
+            "latest": latest_analysis,
+            "history": serialized_history,
+        })
+
     # ======================================================
     # RENDER
     # ======================================================
 
     return render_template(
         "dashboard.html",
-
-        username=session.get(
-            "username",
-            "User",
-        ),
-
-        name=session.get(
-            "name",
-            session.get(
-                "username",
-                "User",
-            ),
-        ),
-
-        email=session.get(
-            "email",
-            "",
-        ),
-
-        picture=session.get(
-            "picture",
-            "",
-        ),
-
+        username=session.get("username", "User"),
+        name=session.get("name", "User"),
+        email=session.get("email", ""),
+        picture=session.get("picture", ""),
         latest=latest_analysis,
-
         risk_score=risk_score,
-
         history=history,
     )
 
@@ -2148,17 +2188,27 @@ def dashboard():
     "/delete-report/<int:prediction_id>",
     methods=["POST"],
 )
+@app.route(
+    "/api/history/<int:prediction_id>/delete",
+    methods=["POST"],
+)
 def delete_report(prediction_id):
 
     if "user_id" not in session:
 
+        if request.path.startswith("/api/"):
+            return jsonify({"success": False, "message": "Authentication required."}), 401
+
         return redirect(
-            url_for("home")
+            frontend_location()
         )
 
     connection = get_db()
 
     if not connection:
+
+        if request.path.startswith("/api/"):
+            return jsonify({"success": False, "message": "Database unavailable."}), 503
 
         flash(
             "Database is currently unavailable.",
@@ -2227,9 +2277,10 @@ def delete_report(prediction_id):
         cursor.close()
         connection.close()
 
-    return redirect(
-        url_for("dashboard")
-    )
+    if request.path.startswith("/api/"):
+        return jsonify({"success": True})
+
+    return redirect(url_for("dashboard"))
 
 
 # ==========================================================
@@ -2242,7 +2293,7 @@ def logout():
     session.clear()
 
     return redirect(
-        url_for("home")
+        frontend_location()
     )
 
 

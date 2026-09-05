@@ -47,13 +47,17 @@ The project uses a monorepo layout with a clear boundary between browser code an
 
 Crypto-Risk-AI/
 ├── frontend/
-│   ├── dashboard.html       # Dashboard page
-│   ├── index.html           # Landing page
-│   ├── script.js            # Client-side behavior
+│   ├── config.js            # Backend service URL
+│   ├── dashboard.html       # Static dashboard page
+│   ├── index.html           # Static landing page
+│   ├── script.js            # API client and UI behavior
 │   └── style.css            # UI styles
 ├── backend/
 │   ├── app.py               # Flask application and API integration
-│   └── requirements.txt     # Python runtime dependencies
+│   ├── requirements.txt     # Python runtime dependencies
+│   ├── static/               # Backend-served browser assets
+│   └── templates/            # Backend Jinja templates
+├── render.yaml              # Render frontend, backend, and database setup
 └── README.md
 
 ---
@@ -67,6 +71,7 @@ DATABASE_URL=postgresql://user:password@host:port/dbname
 GEMINI_API_KEY=your_google_gemini_api_key
 GOOGLE_CLIENT_ID=your_google_oauth_client_id
 GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
+FRONTEND_URL=http://localhost:8080
 
 ---
 
@@ -80,11 +85,14 @@ GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
    cd backend
    pip install -r requirements.txt
 
-3. **Run the Flask application:**
+3. **Run the Flask backend:**
    python app.py
 
-4. **Access the platform:**
-   Navigate to `http://localhost:5000` in your browser.
+4. **Serve the frontend:**
+   From the project root, run `python -m http.server 8080 --directory frontend`.
+
+5. **Access the platform:**
+   Navigate to `http://localhost:8080` in your browser.
 
 ## GitHub Setup
 
@@ -100,3 +108,20 @@ git push -u origin main
 ```
 
 Replace the remote URL with the repository you created on GitHub. Keep `.env` local; it is excluded by `.gitignore` and must not be committed.
+
+## Render Deployment
+
+This repository includes `render.yaml` for a Render Blueprint deployment.
+
+1. Push the repository to GitHub.
+2. In Render, choose **New > Blueprint** and select this repository.
+3. Deploy the Blueprint. It creates a static frontend, Flask backend, and PostgreSQL database.
+4. In the backend web service's Environment settings, add these secret values:
+   - `GEMINI_API_KEY`
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+5. Update `frontend/config.js` if Render assigns a different frontend or backend URL than the defaults in `render.yaml`.
+6. In Google Cloud Console, add the backend callback URL to the OAuth authorized redirect URIs:
+   `https://cryptorisk-ai-backend.onrender.com/auth/google/callback`
+
+Render uses `gunicorn --chdir backend app:app --bind 0.0.0.0:$PORT` for the backend and publishes `frontend/` as a static site. The backend exposes `/api/session`, `/api/dashboard`, `/api/history/<id>/delete`, and `/api/health` for the frontend.
