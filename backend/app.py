@@ -229,6 +229,43 @@ def format_market_data_for_display(
     }
 
 
+def fetch_binance_market_data(ticker: str) -> dict[str, Any]:
+    """Fetch a public 24h USDT ticker when CoinGecko is unavailable."""
+
+    symbol = ticker.strip().upper()
+
+    try:
+        response = requests.get(
+            "https://api.binance.com/api/v3/ticker/24hr",
+            params={"symbol": f"{symbol}USDT"},
+            timeout=COINGECKO_REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        current_price = float(payload["lastPrice"])
+        volume_24h = float(payload["quoteVolume"])
+        change_24h = float(payload["priceChangePercent"])
+
+        if current_price <= 0 or volume_24h <= 0:
+            raise ValueError("Binance returned empty ticker metrics.")
+
+        return sanitize_market_data({
+            "ticker": symbol,
+            "symbol": symbol,
+            "coin_id": f"binance:{symbol}USDT",
+            "current_price_usd": current_price,
+            "volume_24h_usd": volume_24h,
+            "price_change_percentage_24h": change_24h,
+            "change_24h": change_24h,
+            "price": current_price,
+            "volume": volume_24h,
+        })
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        logger.exception("Binance market data fallback failed for %s.", symbol)
+        return sanitize_market_data({"ticker": symbol, "symbol": symbol})
+
+
 def fetch_crypto_market_data(
     ticker: str,
 ) -> dict[str, Any]:
@@ -257,13 +294,13 @@ def fetch_crypto_market_data(
 
             if search_response.status_code == 429:
                 logger.warning("CoinGecko rate limit reached during ticker search.")
-                return sanitize_market_data({"symbol": normalized_ticker.upper()})
+                return fetch_binance_market_data(normalized_ticker)
 
             search_response.raise_for_status()
             search_payload = search_response.json()
 
             if not isinstance(search_payload, dict):
-                return sanitize_market_data({"symbol": normalized_ticker.upper()})
+                return fetch_binance_market_data(normalized_ticker)
 
             matching_coin = next(
                 (
@@ -280,7 +317,7 @@ def fetch_crypto_market_data(
             coin_id = matching_coin["id"] if matching_coin else None
 
         if not coin_id:
-            return sanitize_market_data({"symbol": normalized_ticker.upper()})
+            return fetch_binance_market_data(normalized_ticker)
 
         market_response = requests.get(
             f"{COINGECKO_API_URL}/coins/markets",
@@ -294,13 +331,13 @@ def fetch_crypto_market_data(
 
         if market_response.status_code == 429:
             logger.warning("CoinGecko rate limit reached during market lookup.")
-            return sanitize_market_data({"symbol": normalized_ticker.upper()})
+            return fetch_binance_market_data(normalized_ticker)
 
         market_response.raise_for_status()
         market_payload = market_response.json()
 
         if not isinstance(market_payload, list) or not market_payload:
-            return sanitize_market_data({"symbol": normalized_ticker.upper()})
+            return fetch_binance_market_data(normalized_ticker)
 
         market_data = market_payload[0]
         required_fields = {
@@ -315,9 +352,9 @@ def fetch_crypto_market_data(
             market_data.get(source_field) is None
             for source_field in required_fields
         ):
-            return sanitize_market_data({"symbol": normalized_ticker.upper()})
+            return fetch_binance_market_data(normalized_ticker)
 
-        return sanitize_market_data({
+        normalized_market_data = sanitize_market_data({
             "ticker": normalized_ticker.upper(),
             "symbol": normalized_ticker.upper(),
             "coin_id": coin_id,
@@ -329,21 +366,29 @@ def fetch_crypto_market_data(
             },
         })
 
+        if (
+            normalized_market_data["current_price_usd"] <= 0
+            or normalized_market_data["volume_24h_usd"] <= 0
+        ):
+            return fetch_binance_market_data(normalized_ticker)
+
+        return normalized_market_data
+
     except requests.Timeout:
         logger.warning("CoinGecko request timed out for ticker %s.", normalized_ticker)
-        return sanitize_market_data({"symbol": normalized_ticker.upper()})
+        return fetch_binance_market_data(normalized_ticker)
     except requests.RequestException:
         logger.exception(
             "CoinGecko market data request failed for ticker %s.",
             normalized_ticker,
         )
-        return sanitize_market_data({"symbol": normalized_ticker.upper()})
+        return fetch_binance_market_data(normalized_ticker)
     except (ValueError, TypeError, KeyError):
         logger.exception(
             "CoinGecko market data request failed for ticker %s.",
             normalized_ticker,
         )
-        return sanitize_market_data({"symbol": normalized_ticker.upper()})
+        return fetch_binance_market_data(normalized_ticker)
 
 
 GOPLUS_API_URL = "https://api.gopluslabs.io/api/v1/token_security"
@@ -1364,6 +1409,27 @@ def normalize_report(
     current_price = market_data.get("current_price_usd", 0)
     volume_24h = market_data.get("volume_24h_usd", 0)
     change_24h = market_data.get("price_change_percentage_24h", 0)
+    change_7d = market_data.get("price_change_percentage_7d", 0)
+
+    if not risk_profile or not any(
+        risk_profile.get(key, 0)
+        for key in (
+            "volatility_risk",
+            "liquidity_risk",
+            "contract_risk",
+            "composite_score",
+        )
+    ):
+        risk_profile = evaluate_risk_profile(market_data, security_data)
+
+    if not stress_test or not any(
+        stress_test.get(key) is not None
+        for key in ("beta", "expected_drawdown", "resilience_label")
+    ):
+        stress_test = simulate_stress_test(
+            change_7d,
+            market_data.get("btc_change_7d", 0),
+        )
 
     composite_score = int(risk_profile.get("composite_score", 50))
     risk_score = (
@@ -1419,7 +1485,6 @@ def normalize_report(
             ),
         )
     ).strip()
-
     if _is_generic_ai_disclaimer(stress_verdict):
         stress_verdict = (
             f"The stress test estimates a {stress_test.get('expected_drawdown', -10.0):.2f}% "
@@ -1689,32 +1754,26 @@ def normalize_report(
         "resilience_label": stress_test.get("resilience_label", "Moderate"),
     }
 
+    card_momentum = (
+        f"The asset moved {format_percentage(change_24h)} over 24 hours "
+        f"and carries a {format_percentage(change_7d)} 7-day move against "
+        f"a volatility score of {normalized_risk_profile['volatility_risk']}/100."
+    )
+    card_liquidity = (
+        f"Turnover is {normalized_risk_profile['turnover_ratio']:.4f} with a "
+        f"liquidity risk score of {normalized_risk_profile['liquidity_risk']}/100, "
+        "which frames execution depth and slippage exposure."
+    )
+    card_macro = (
+        f"A {normalized_stress_test['beta']:.2f}x beta implies an estimated "
+        f"{normalized_stress_test['expected_drawdown']:.2f}% drawdown under the modeled BTC shock. "
+        f"Contract flags: honeypot={security_data.get('is_honeypot', False)}, "
+        f"cannot_sell_all={security_data.get('cannot_sell_all', False)}."
+    )
     forensic_cards = [
-        {
-            "title": "Momentum & Drawdown Risk",
-            "body": (
-                f"The asset moved {format_percentage(change_24h)} over 24 hours "
-                f"and carries a {format_percentage(market_data.get('price_change_percentage_7d', 0))} "
-                f"7-day move against a volatility score of {normalized_risk_profile['volatility_risk']}/100."
-            ),
-        },
-        {
-            "title": "Liquidity Depth & Slippage Risk",
-            "body": (
-                f"Turnover is {normalized_risk_profile['turnover_ratio']:.4f} with a "
-                f"liquidity risk score of {normalized_risk_profile['liquidity_risk']}/100, "
-                "which frames execution depth and slippage exposure."
-            ),
-        },
-        {
-            "title": "Macro & Contract Sensitivity",
-            "body": (
-                f"A {normalized_stress_test['beta']:.2f}x beta implies an estimated "
-                f"{normalized_stress_test['expected_drawdown']:.2f}% drawdown under the modeled BTC shock. "
-                f"Contract flags: honeypot={security_data.get('is_honeypot', False)}, "
-                f"cannot_sell_all={security_data.get('cannot_sell_all', False)}."
-            ),
-        },
+        {"title": "Momentum & Drawdown Risk", "body": card_momentum},
+        {"title": "Liquidity Depth & Slippage Risk", "body": card_liquidity},
+        {"title": "Macro & Contract Sensitivity", "body": card_macro},
     ]
 
     autopsy = {
@@ -1739,6 +1798,18 @@ def normalize_report(
         "risk": risk_score,
 
         "price": predicted_price,
+
+        "current_price_usd": float(current_price),
+
+        "current_price_display": format_usd(current_price),
+
+        "volume_24h_usd": float(volume_24h),
+
+        "volume_24h_display": format_usd(volume_24h),
+
+        "change_24h_display": format_percentage(change_24h),
+
+        "change_7d_display": format_percentage(change_7d),
 
         "summary": autopsy_summary,
 
@@ -1904,7 +1975,7 @@ def health_check():
 
 
 @app.route("/api/session")
-@jwt_required()
+@jwt_required(optional=True)
 def session_info():
     user_id = authenticated_user_id()
     if not user_id:
@@ -1923,7 +1994,7 @@ def session_info():
     "/api/dashboard",
     methods=["GET", "POST"],
 )
-@jwt_required()
+@jwt_required(optional=True)
 def dashboard():
 
     user_id = authenticated_user_id()
@@ -2422,7 +2493,7 @@ def dashboard():
     "/api/history/<int:prediction_id>/delete",
     methods=["POST"],
 )
-@jwt_required()
+@jwt_required(optional=True)
 def delete_report(prediction_id):
 
     user_id = authenticated_user_id()
