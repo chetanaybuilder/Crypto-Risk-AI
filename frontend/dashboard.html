@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="CryptoRisk AI — AI-powered cryptocurrency risk intelligence terminal.">
+    <meta name="description" content="CryptoRisk AI — Quantitative Risk Terminal">
     <title>CryptoRisk AI — Intelligence Terminal</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,27 +12,6 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="dashboard-page">
-
-    <div class="ambient-canvas" aria-hidden="true"></div>
-    <div class="physics-tokens" aria-hidden="true">
-        <span class="physics-token token-btc">₿</span>
-        <span class="physics-token token-eth">◆</span>
-        <span class="physics-token token-sol">S</span>
-        <span class="physics-token token-node">+</span>
-    </div>
-
-    <!-- 3D AMBIENT SPACE -->
-    <div class="scene">
-        <div class="scene-glow scene-glow-one"></div>
-        <div class="scene-glow scene-glow-two"></div>
-        <div class="scene-glow scene-glow-three"></div>
-        <div class="floating-object object-one"></div>
-        <div class="floating-object object-two"></div>
-        <div class="floating-object object-three"></div>
-        <div class="floating-object object-four"></div>
-        <div class="floating-object object-five"></div>
-        <div class="grid-background"></div>
-    </div>
 
     <!-- NAVBAR -->
     <header class="dashboard-navbar">
@@ -45,8 +24,8 @@
             <span>AI INTELLIGENCE</span>
         </div>
         <div class="user-info">
-            <div class="user-avatar user-avatar-fallback">C</div>
-            <span class="user-name">User</span>
+            <div class="user-avatar" id="user-avatar">C</div>
+            <span class="user-name" id="user-name">User</span>
             <button type="button" class="logout-btn" id="logout-button">Logout</button>
         </div>
     </header>
@@ -70,50 +49,28 @@
         </section>
 
         <!-- SEARCH / ANALYSIS INPUT -->
-        <section class="search-card glass-card">
+        <section class="search-card">
             <div class="search-card-top">
                 <div>
                     <span class="search-label">NEW ANALYSIS</span>
                     <h2>Analyze a cryptocurrency</h2>
                     <p>Enter a ticker and generate a structured cryptocurrency risk intelligence report.</p>
                 </div>
-                <div class="search-terminal-icon">◈</div>
             </div>
             <form id="analysis-form">
                 <div class="search-input-wrap">
                     <span class="search-prefix">$</span>
                     <input type="text" name="token_symbol" id="token-symbol" placeholder="BTC" maxlength="15" autocomplete="off" spellcheck="false" required>
-                    <span class="input-status">READY</span>
+                    <span class="input-status" id="input-status">READY</span>
                 </div>
                 <button type="submit" class="analyze-button" id="analyze-button">
                     <span class="button-text">Analyze</span>
                     <span class="button-arrow">→</span>
                 </button>
             </form>
-
-            <!-- ANALYSIS PROGRESS -->
-            <div class="analysis-progress" id="analysis-progress" aria-hidden="true">
-                <div class="progress-top">
-                    <div class="progress-status">
-                        <span class="progress-pulse"></span>
-                        <span id="progress-title">Initializing intelligence engine</span>
-                    </div>
-                    <span class="progress-percent" id="progress-percent">0%</span>
-                </div>
-                <div class="progress-track">
-                    <div class="progress-fill" id="progress-fill"></div>
-                    <div class="progress-shine"></div>
-                </div>
-                <div class="progress-steps">
-                    <span class="progress-step active" data-step="1"><i></i>INPUT</span>
-                    <span class="progress-step" data-step="2"><i></i>AI ENGINE</span>
-                    <span class="progress-step" data-step="3"><i></i>ANALYSIS</span>
-                    <span class="progress-step" data-step="4"><i></i>REPORT</span>
-                </div>
-            </div>
         </section>
 
-        <!-- REPORT CONTAINER (POPULATED VIA JS OR STATIC PREVIEW) -->
+        <!-- REPORT CONTAINER -->
         <section class="intelligence-report" id="intelligence-report">
             <div class="report-header">
                 <div>
@@ -130,22 +87,22 @@
                 </div>
             </div>
 
-            <!-- CORE METRICS -->
+            <!-- CORE METRICS (TOP 3 CARDS) -->
             <div class="risk-overview">
-                <div class="risk-hero-card glass-card">
+                <div class="metric-card risk-score-card">
                     <div class="metric-label">RISK SCORE</div>
-                    <div class="risk-score-badge risk-score-red" id="report-risk-score">
-                        <strong>75</strong>
+                    <div class="risk-score-badge" id="report-risk-score">
+                        <strong>50</strong>
                         <span>/ 100</span>
                     </div>
                     <div class="metric-description">AI-assessed uncertainty and downside exposure.</div>
                 </div>
-                <div class="metric-card glass-card">
+                <div class="metric-card">
                     <div class="metric-label">MARKET OUTLOOK</div>
-                    <div class="metric-value trend-value neutral" id="report-outlook">NEUTRAL</div>
+                    <div class="metric-value trend-value" id="report-outlook">NEUTRAL</div>
                     <div class="metric-description">Analytical directional outlook.</div>
                 </div>
-                <div class="metric-card glass-card">
+                <div class="metric-card">
                     <div class="metric-label">REFERENCE PRICE</div>
                     <div class="reference-price-row">
                         <div class="metric-value price-value" id="report-price">—</div>
@@ -154,14 +111,10 @@
                     <div class="reference-volume" id="report-volume">24H VOL <strong>—</strong></div>
                 </div>
             </div>
-            <div class="report-loading-skeleton" id="report-loading-skeleton" aria-hidden="true">
-                <span class="skeleton-line skeleton-line-wide"></span>
-                <span class="skeleton-line skeleton-line-medium"></span>
-                <span class="skeleton-block"></span>
-            </div>
 
-            <!-- FOUR-PILLAR RADAR + DOWNSIDE SIMULATOR -->
+            <!-- MID GRID: FOUR-PILLAR RADAR + DOWNSIDE SIMULATOR -->
             <div class="terminal-mid-grid">
+                <!-- RADAR -->
                 <section class="terminal-panel radar-panel">
                     <div class="panel-header">
                         <div>
@@ -172,24 +125,37 @@
                     </div>
                     <div class="pillar-list">
                         <div class="pillar-row">
-                            <div class="pillar-label"><span>Volatility</span><strong id="pillar-volatility-value">0/100</strong></div>
+                            <div class="pillar-label">
+                                <span>Volatility</span>
+                                <strong id="pillar-volatility-value">0/100</strong>
+                            </div>
                             <div class="pillar-track"><span id="pillar-volatility-bar"></span></div>
                         </div>
                         <div class="pillar-row">
-                            <div class="pillar-label"><span>Liquidity</span><strong id="pillar-liquidity-value">0/100</strong></div>
+                            <div class="pillar-label">
+                                <span>Liquidity</span>
+                                <strong id="pillar-liquidity-value">0/100</strong>
+                            </div>
                             <div class="pillar-track"><span id="pillar-liquidity-bar"></span></div>
                         </div>
                         <div class="pillar-row">
-                            <div class="pillar-label"><span>Contract</span><strong id="pillar-contract-value">0/100</strong></div>
+                            <div class="pillar-label">
+                                <span>Contract</span>
+                                <strong id="pillar-contract-value">0/100</strong>
+                            </div>
                             <div class="pillar-track"><span id="pillar-contract-bar"></span></div>
                         </div>
                         <div class="pillar-row composite-row">
-                            <div class="pillar-label"><span>Composite score</span><strong id="pillar-composite-value">0/100</strong></div>
+                            <div class="pillar-label">
+                                <span>Composite score</span>
+                                <strong id="pillar-composite-value">0/100</strong>
+                            </div>
                             <div class="pillar-track"><span id="pillar-composite-bar"></span></div>
                         </div>
                     </div>
                 </section>
 
+                <!-- DOWNSIDE SIMULATOR -->
                 <section class="terminal-panel simulator-panel">
                     <div class="panel-header">
                         <div>
@@ -199,14 +165,20 @@
                         <span class="resilience-badge" id="stress-resilience">Moderate</span>
                     </div>
                     <div class="simulator-metrics">
-                        <div><span>HISTORICAL BETA</span><strong id="stress-beta">1.00x</strong></div>
-                        <div><span>EST. DRAWDOWN</span><strong id="stress-drawdown">-10.00%</strong></div>
+                        <div>
+                            <span>HISTORICAL BETA</span>
+                            <strong id="stress-beta">1.00x</strong>
+                        </div>
+                        <div>
+                            <span>EST. DRAWDOWN</span>
+                            <strong id="stress-drawdown">-10.00%</strong>
+                        </div>
                     </div>
                     <p class="simulator-subtitle">A modeled BTC shock translated through this asset's observed 7-day sensitivity.</p>
                 </section>
             </div>
 
-            <!-- FORENSIC SYNTHESIS -->
+            <!-- FORENSIC SYNTHESIS (RISK AUTOPSY) -->
             <section class="autopsy-section">
                 <div class="autopsy-header">
                     <div>
@@ -217,9 +189,21 @@
                 </div>
                 <p class="autopsy-summary" id="autopsy-summary">Awaiting live evidence.</p>
                 <div class="forensic-grid" id="forensic-cards">
-                    <article class="forensic-card"><span class="forensic-index">01</span><h4>Momentum &amp; Drawdown Risk</h4><p>Awaiting live evidence.</p></article>
-                    <article class="forensic-card"><span class="forensic-index">02</span><h4>Liquidity Depth &amp; Slippage Risk</h4><p>Awaiting live evidence.</p></article>
-                    <article class="forensic-card"><span class="forensic-index">03</span><h4>Macro &amp; Contract Sensitivity</h4><p>Awaiting live evidence.</p></article>
+                    <article class="forensic-card">
+                        <span class="forensic-index">01</span>
+                        <h4>Momentum &amp; Drawdown Risk</h4>
+                        <p>Awaiting live evidence.</p>
+                    </article>
+                    <article class="forensic-card">
+                        <span class="forensic-index">02</span>
+                        <h4>Liquidity Depth &amp; Slippage Risk</h4>
+                        <p>Awaiting live evidence.</p>
+                    </article>
+                    <article class="forensic-card">
+                        <span class="forensic-index">03</span>
+                        <h4>Macro &amp; Contract Sensitivity</h4>
+                        <p>Awaiting live evidence.</p>
+                    </article>
                 </div>
                 <div class="stress-verdict-banner">
                     <span>STRESS VERDICT</span>
@@ -232,14 +216,14 @@
             </div>
         </section>
 
-        <!-- HISTORY -->
+        <!-- ANALYSIS HISTORY -->
         <section class="history-card">
             <div class="history-header">
                 <div>
                     <span class="section-kicker">YOUR ACTIVITY</span>
                     <h2>Analysis history</h2>
                 </div>
-                <span class="history-count">1 REPORT</span>
+                <span class="history-count" id="history-count">0 REPORTS</span>
             </div>
             <div class="table-wrapper">
                 <table>
@@ -254,18 +238,7 @@
                         </tr>
                     </thead>
                     <tbody id="history-tbody">
-                        <tr>
-                            <td><strong class="history-token">BTC</strong></td>
-                            <td><span class="neutral">Neutral</span></td>
-                            <td><span class="high">High</span></td>
-                            <td>$64,250</td>
-                            <td>30 Aug 2026 · 21:00</td>
-                            <td>
-                                <button type="button" class="history-delete-button" title="Delete report" aria-label="Delete report">
-                                    <span>×</span>
-                                </button>
-                            </td>
-                        </tr>
+                        <!-- Populated by script.js -->
                     </tbody>
                 </table>
             </div>
