@@ -18,6 +18,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Lock
 from typing import Any, Optional
+from urllib.parse import quote
 
 import psycopg2
 import psycopg2.extras
@@ -639,6 +640,8 @@ CORS(
     app,
     resources={r"/api/*": {"origins": FRONTEND_URL or "*"}},
     supports_credentials=bool(FRONTEND_URL),
+    allow_headers=["Authorization", "Content-Type"],
+    methods=["GET", "POST", "OPTIONS"],
 )
 
 app.secret_key = SECRET_KEY
@@ -845,8 +848,9 @@ def init_db():
 def google_login():
 
     if "user_id" in session:
+        token = create_access_token(identity=str(session["user_id"]))
         return redirect(
-            frontend_location("dashboard.html")
+            f"{frontend_location('dashboard.html')}?token={quote(token)}"
         )
 
     redirect_uri = url_for(
@@ -1055,8 +1059,11 @@ def google_callback():
                 email,
             )
 
+            token = create_access_token(identity=str(user_id))
+            dashboard_url = frontend_location("dashboard.html")
+
             return redirect(
-                frontend_location("dashboard.html")
+                f"{dashboard_url}?token={quote(token)}"
             )
 
         except Exception:
@@ -1105,8 +1112,9 @@ def google_callback():
 def home():
 
     if "user_id" in session:
+        token = create_access_token(identity=str(session["user_id"]))
         return redirect(
-            frontend_location("dashboard.html")
+            f"{frontend_location('dashboard.html')}?token={quote(token)}"
         )
 
     return render_template("index.html")
@@ -1845,7 +1853,7 @@ def health_check():
 
 
 @app.route("/api/session")
-@jwt_required(optional=True)
+@jwt_required()
 def session_info():
     user_id = authenticated_user_id()
     if not user_id:
@@ -1864,7 +1872,7 @@ def session_info():
     "/api/dashboard",
     methods=["GET", "POST"],
 )
-@jwt_required(optional=True)
+@jwt_required()
 def dashboard():
 
     user_id = authenticated_user_id()
@@ -2319,7 +2327,7 @@ def dashboard():
     "/api/history/<int:prediction_id>/delete",
     methods=["POST"],
 )
-@jwt_required(optional=True)
+@jwt_required()
 def delete_report(prediction_id):
 
     user_id = authenticated_user_id()

@@ -22,7 +22,7 @@ services:
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: FRONTEND_URL
-        value: https://cryptorisk-ai-frontend.onrender.com
+        value: https://crypto-risk-ai.vercel.app
 
   - type: static_site
     name: cryptorisk-ai-frontend

@@ -23,6 +23,23 @@ document.addEventListener("DOMContentLoaded", () => {
         window.location.href = "index.html";
     }
 
+    const isDashboardPage = document.body.classList.contains("dashboard-page");
+    const queryToken = new URLSearchParams(window.location.search).get("token");
+
+    if (isDashboardPage && queryToken) {
+        localStorage.setItem("token", queryToken);
+        window.history.replaceState(
+            {},
+            document.title,
+            window.location.pathname
+        );
+    }
+
+    if (isDashboardPage && !getAuthToken()) {
+        logoutAndStop();
+        return;
+    }
+
     const requestOptions = (options = {}) => ({
         ...options,
         credentials: "include",
