@@ -6,7 +6,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const apiUrl = (path) => `${backendUrl}${path}`;
 
-    const getAuthToken = () => localStorage.getItem("auth_token");
+    const getAuthToken = () =>
+        localStorage.getItem("token")
+        || localStorage.getItem("auth_token");
+
+    let hasSignedOut = false;
+
+    function logoutAndStop() {
+        if (hasSignedOut) {
+            return;
+        }
+
+        hasSignedOut = true;
+        localStorage.removeItem("token");
+        localStorage.removeItem("auth_token");
+        window.location.href = "index.html";
+    }
 
     const requestOptions = (options = {}) => ({
         ...options,
@@ -70,6 +85,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function handleLogout() {
 
+        localStorage.removeItem("token");
         localStorage.removeItem("auth_token");
         window.location.href = apiUrl("/logout");
 
@@ -377,15 +393,37 @@ document.addEventListener("DOMContentLoaded", () => {
         );
 
         if (response.status === 401) {
-            window.location.href = apiUrl("/auth/google");
-            return;
+            logoutAndStop();
+            return null;
         }
 
-        if (!response.ok) throw new Error("Unable to load dashboard.");
+        if (!response.ok) {
+            throw new Error("Unable to load dashboard.");
+        }
 
         const payload = await response.json();
         renderDashboard(payload);
         renderHistory(payload.history || []);
+        return payload;
+    }
+
+    let dashboardInitialized = false;
+
+    async function initializeDashboardOnce() {
+        if (
+            dashboardInitialized
+            || !document.body.classList.contains("dashboard-page")
+        ) {
+            return;
+        }
+
+        dashboardInitialized = true;
+
+        try {
+            await loadDashboard();
+        } catch (error) {
+            console.error("Dashboard initialization failed.", error);
+        }
     }
 
     function updateProgress(stageData) {
@@ -516,6 +554,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     },
                     body: JSON.stringify({ token_symbol: token }),
                 }));
+                if (response.status === 401) {
+                    logoutAndStop();
+                    return;
+                }
+
                 const payload = await response.json();
                 if (!response.ok || !payload.success) {
                     throw new Error(payload.message || "Analysis failed.");
@@ -535,9 +578,9 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
 
-        loadDashboard().catch((error) => console.error(error));
-
     }
+
+    initializeDashboardOnce();
 
 
     /*
@@ -559,8 +602,13 @@ document.addEventListener("DOMContentLoaded", () => {
             try {
                 const response = await fetch(
                     apiUrl(`/api/history/${button.dataset.deleteReport}/delete`),
-                    { method: "POST", credentials: "include" }
+                    requestOptions({ method: "POST" })
                 );
+
+                if (response.status === 401) {
+                    logoutAndStop();
+                    return;
+                }
 
                 if (!response.ok) throw new Error("Unable to delete report.");
                 await loadDashboard();
