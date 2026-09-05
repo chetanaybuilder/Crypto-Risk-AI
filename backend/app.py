@@ -1674,6 +1674,55 @@ def normalize_report(
 
         ]
 
+    normalized_risk_profile = {
+        "volatility_risk": max(0, min(100, int(risk_profile.get("volatility_risk", 0)))),
+        "liquidity_risk": max(0, min(100, int(risk_profile.get("liquidity_risk", 0)))),
+        "contract_risk": max(0, min(100, int(risk_profile.get("contract_risk", 0)))),
+        "composite_score": max(0, min(100, int(risk_profile.get("composite_score", composite_score)))),
+        "turnover_ratio": float(risk_profile.get("turnover_ratio", 0.0)),
+    }
+
+    normalized_stress_test = {
+        "simulated_shock": float(stress_test.get("simulated_shock", -10.0)),
+        "beta": float(stress_test.get("beta", 1.0)),
+        "expected_drawdown": float(stress_test.get("expected_drawdown", -10.0)),
+        "resilience_label": stress_test.get("resilience_label", "Moderate"),
+    }
+
+    forensic_cards = [
+        {
+            "title": "Momentum & Drawdown Risk",
+            "body": (
+                f"The asset moved {format_percentage(change_24h)} over 24 hours "
+                f"and carries a {format_percentage(market_data.get('price_change_percentage_7d', 0))} "
+                f"7-day move against a volatility score of {normalized_risk_profile['volatility_risk']}/100."
+            ),
+        },
+        {
+            "title": "Liquidity Depth & Slippage Risk",
+            "body": (
+                f"Turnover is {normalized_risk_profile['turnover_ratio']:.4f} with a "
+                f"liquidity risk score of {normalized_risk_profile['liquidity_risk']}/100, "
+                "which frames execution depth and slippage exposure."
+            ),
+        },
+        {
+            "title": "Macro & Contract Sensitivity",
+            "body": (
+                f"A {normalized_stress_test['beta']:.2f}x beta implies an estimated "
+                f"{normalized_stress_test['expected_drawdown']:.2f}% drawdown under the modeled BTC shock. "
+                f"Contract flags: honeypot={security_data.get('is_honeypot', False)}, "
+                f"cannot_sell_all={security_data.get('cannot_sell_all', False)}."
+            ),
+        },
+    ]
+
+    autopsy = {
+        "autopsy_summary": autopsy_summary,
+        "cards": forensic_cards,
+        "stress_verdict": stress_verdict,
+    }
+
     return {
 
         "token": token_symbol,
@@ -1699,9 +1748,11 @@ def normalize_report(
 
         "stress_verdict": stress_verdict,
 
-        "risk_profile": risk_profile,
+        "risk_profile": normalized_risk_profile,
 
-        "stress_test": stress_test,
+        "stress_test": normalized_stress_test,
+
+        "autopsy": autopsy,
 
         "security_data": security_data,
 
@@ -2074,6 +2125,7 @@ def dashboard():
                             %s,
                             %s
                         )
+                        RETURNING id
                         """,
                         (
                             user_id,
@@ -2084,6 +2136,10 @@ def dashboard():
                             latest_analysis["summary"],
                         ),
                     )
+
+                    saved_prediction = cursor.fetchone()
+                    if saved_prediction:
+                        latest_analysis["id"] = saved_prediction["id"]
 
                     connection.commit()
 
@@ -2282,6 +2338,45 @@ def dashboard():
             "risk_profile"
         ]["composite_score"]
         latest_analysis.setdefault("security_data", {})
+        latest_analysis["autopsy"] = {
+            "autopsy_summary": latest_analysis.get(
+                "autopsy_summary",
+                latest_analysis.get("summary", ""),
+            ),
+            "cards": [
+                {
+                    "title": "Momentum & Drawdown Risk",
+                    "body": (
+                        f"The asset moved {format_percentage(latest_analysis['market_data'].get('price_change_percentage_24h', 0))} "
+                        f"over 24 hours and carries a {format_percentage(latest_analysis['market_data'].get('price_change_percentage_7d', 0))} "
+                        f"7-day move against a volatility score of {latest_analysis['risk_profile']['volatility_risk']}/100."
+                    ),
+                },
+                {
+                    "title": "Liquidity Depth & Slippage Risk",
+                    "body": (
+                        f"Turnover is {latest_analysis['risk_profile'].get('turnover_ratio', 0):.4f} with a "
+                        f"liquidity risk score of {latest_analysis['risk_profile']['liquidity_risk']}/100, "
+                        "which frames execution depth and slippage exposure."
+                    ),
+                },
+                {
+                    "title": "Macro & Contract Sensitivity",
+                    "body": (
+                        f"A {latest_analysis['stress_test']['beta']:.2f}x beta implies an estimated "
+                        f"{latest_analysis['stress_test']['expected_drawdown']:.2f}% drawdown under the modeled BTC shock. "
+                        f"Contract flags: honeypot={latest_analysis['security_data'].get('is_honeypot', False)}, "
+                        f"cannot_sell_all={latest_analysis['security_data'].get('cannot_sell_all', False)}."
+                    ),
+                },
+            ],
+            "stress_verdict": latest_analysis.get(
+                "stress_verdict",
+                f"A {latest_analysis['stress_test']['simulated_shock']:.2f}% BTC shock implies a "
+                f"{latest_analysis['stress_test']['expected_drawdown']:.2f}% drawdown at "
+                f"{latest_analysis['stress_test']['beta']:.2f}x beta.",
+            ),
+        }
 
     if request.path.startswith("/api/"):
         serialized_history = [

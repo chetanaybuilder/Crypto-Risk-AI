@@ -6,7 +6,39 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const apiUrl = (path) => `${backendUrl}${path}`;
 
-    const getAuthToken = () => localStorage.getItem("auth_token");
+    const getAuthToken = () =>
+        localStorage.getItem("token")
+        || localStorage.getItem("auth_token");
+
+    let hasSignedOut = false;
+
+    function logoutAndStop() {
+        if (hasSignedOut) {
+            return;
+        }
+
+        hasSignedOut = true;
+        localStorage.removeItem("token");
+        localStorage.removeItem("auth_token");
+        window.location.href = "index.html";
+    }
+
+    const isDashboardPage = document.body.classList.contains("dashboard-page");
+    const queryToken = new URLSearchParams(window.location.search).get("token");
+
+    if (isDashboardPage && queryToken) {
+        localStorage.setItem("token", queryToken);
+        window.history.replaceState(
+            {},
+            document.title,
+            window.location.pathname
+        );
+    }
+
+    if (isDashboardPage && !getAuthToken()) {
+        logoutAndStop();
+        return;
+    }
 
     const requestOptions = (options = {}) => ({
         ...options,
@@ -22,45 +54,6 @@ document.addEventListener("DOMContentLoaded", () => {
     function setupAuthentication() {
         document.querySelectorAll("[data-google-login]").forEach((link) => {
             link.href = apiUrl("/auth/google");
-        });
-
-        const message = document.querySelector("#auth-message");
-        const submitAuth = async (form, endpoint) => {
-            const data = Object.fromEntries(new FormData(form).entries());
-            const response = await fetch(
-                apiUrl(endpoint),
-                requestOptions({
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(data),
-                })
-            );
-            const payload = await response.json();
-
-            if (!response.ok || !payload.success) {
-                throw new Error(payload.message || "Authentication failed.");
-            }
-
-            localStorage.setItem("auth_token", payload.token);
-            window.location.href = "dashboard.html";
-        };
-
-        document.querySelector("#login-form")?.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            try {
-                await submitAuth(event.currentTarget, "/api/login");
-            } catch (error) {
-                if (message) message.textContent = error.message;
-            }
-        });
-
-        document.querySelector("#signup-form")?.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            try {
-                await submitAuth(event.currentTarget, "/api/signup");
-            } catch (error) {
-                if (message) message.textContent = error.message;
-            }
         });
     }
 
@@ -109,6 +102,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function handleLogout() {
 
+        localStorage.removeItem("token");
         localStorage.removeItem("auth_token");
         window.location.href = apiUrl("/logout");
 
@@ -230,26 +224,36 @@ document.addEventListener("DOMContentLoaded", () => {
         DOGE: "dogecoin",
     };
 
+    let currentReportId = null;
+
     function setText(selector, value) {
         const element = document.querySelector(selector);
         if (element) element.textContent = value ?? "—";
     }
 
-    function renderInsights(selector, items, className) {
-        const container = document.querySelector(selector);
+    function renderPillar(key, value) {
+        const score = Math.max(0, Math.min(100, Number(value) || 0));
+        setText(`#pillar-${key}-value`, `${Math.round(score)}/100`);
+        const bar = document.querySelector(`#pillar-${key}-bar`);
+        if (bar) bar.style.width = `${score}%`;
+    }
+
+    function renderForensicCards(cards) {
+        const container = document.querySelector("#forensic-cards");
         if (!container) return;
 
         container.replaceChildren();
-        (items || []).forEach((item, index) => {
-            const wrapper = document.createElement("div");
-            wrapper.className = `insight-item ${className}`;
-            wrapper.innerHTML = `
-                <div class="insight-index">${String(index + 1).padStart(2, "0")}</div>
-                <div><h4></h4><p></p></div>
+        (cards || []).slice(0, 3).forEach((card, index) => {
+            const article = document.createElement("article");
+            article.className = "forensic-card";
+            article.innerHTML = `
+                <span class="forensic-index">${String(index + 1).padStart(2, "0")}</span>
+                <h4></h4>
+                <p></p>
             `;
-            wrapper.querySelector("h4").textContent = item.title || "Insight";
-            wrapper.querySelector("p").textContent = item.explanation || "";
-            container.appendChild(wrapper);
+            article.querySelector("h4").textContent = card.title || "Forensic finding";
+            article.querySelector("p").textContent = card.body || "Awaiting live evidence.";
+            container.appendChild(article);
         });
     }
 
@@ -263,30 +267,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (!latest) return;
 
+        currentReportId = latest.id || currentReportId;
+
+        const profile = latest.risk_profile || {};
+        const stress = latest.stress_test || {};
+        const autopsy = latest.autopsy || {};
+
         setText("#report-token", latest.token);
         setText("#report-outlook", latest.trend);
-        setText("#report-summary", latest.summary);
-        setText("#report-problem", latest.problem_solved);
+        setText("#autopsy-token", `${latest.token || "ASSET"} / LIVE EVIDENCE`);
+        setText("#autopsy-summary", autopsy.autopsy_summary || latest.autopsy_summary || latest.summary);
+        setText("#stress-beta", `${Number(stress.beta || 1).toFixed(2)}x`);
+        setText("#stress-drawdown", `${Number(stress.expected_drawdown ?? -10).toFixed(2)}%`);
+        setText("#stress-resilience", stress.resilience_label || "Moderate");
+        setText("#stress-verdict", autopsy.stress_verdict || latest.stress_verdict || "Awaiting modeled BTC shock.");
+
+        renderPillar("volatility", profile.volatility_risk);
+        renderPillar("liquidity", profile.liquidity_risk);
+        renderPillar("contract", profile.contract_risk);
+        renderPillar("composite", profile.composite_score);
+        renderForensicCards(autopsy.cards);
 
         if (reportRiskScore) {
             reportRiskScore.querySelector("strong").textContent =
                 latest.risk_score_value ?? latest.risk ?? "—";
         }
 
-        renderInsights("#report-risks", latest.key_risks, "risk-item");
-        renderInsights("#report-signals", latest.key_signals, "signal-item");
-
-        const watchContainer = document.querySelector("#report-watch");
-        if (watchContainer) {
-            watchContainer.replaceChildren();
-            (latest.watch_next || []).forEach((item, index) => {
-                const row = document.createElement("div");
-                row.className = "watch-item";
-                row.innerHTML = `<span class="watch-number">${String(index + 1).padStart(2, "0")}</span><span></span>`;
-                row.querySelector("span:last-child").textContent = item;
-                watchContainer.appendChild(row);
-            });
-        }
     }
 
     function renderHistory(history) {
@@ -294,6 +300,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!body) return;
 
         body.replaceChildren();
+        currentReportId = history[0]?.id || currentReportId;
         history.forEach((item) => {
             const row = document.createElement("tr");
             row.innerHTML = `
@@ -416,15 +423,37 @@ document.addEventListener("DOMContentLoaded", () => {
         );
 
         if (response.status === 401) {
-            window.location.href = apiUrl("/auth/google");
-            return;
+            logoutAndStop();
+            return null;
         }
 
-        if (!response.ok) throw new Error("Unable to load dashboard.");
+        if (!response.ok) {
+            throw new Error("Unable to load dashboard.");
+        }
 
         const payload = await response.json();
         renderDashboard(payload);
         renderHistory(payload.history || []);
+        return payload;
+    }
+
+    let dashboardInitialized = false;
+
+    async function initializeDashboardOnce() {
+        if (
+            dashboardInitialized
+            || !document.body.classList.contains("dashboard-page")
+        ) {
+            return;
+        }
+
+        dashboardInitialized = true;
+
+        try {
+            await loadDashboard();
+        } catch (error) {
+            console.error("Dashboard initialization failed.", error);
+        }
     }
 
     function updateProgress(stageData) {
@@ -509,33 +538,18 @@ document.addEventListener("DOMContentLoaded", () => {
             progressStages[0]
         );
 
-        progressTimer = setInterval(
-            () => {
+        const advanceProgress = () => {
+            if (currentStage >= progressStages.length - 1) {
+                progressTimer = null;
+                return;
+            }
 
-                if (
-                    currentStage <
-                    progressStages.length - 1
-                ) {
+            currentStage += 1;
+            updateProgress(progressStages[currentStage]);
+            progressTimer = window.setTimeout(advanceProgress, 1600);
+        };
 
-                    currentStage++;
-
-                    updateProgress(
-                        progressStages[
-                            currentStage
-                        ]
-                    );
-
-                } else {
-
-                    clearInterval(
-                        progressTimer
-                    );
-
-                }
-
-            },
-            1600
-        );
+        progressTimer = window.setTimeout(advanceProgress, 1600);
 
     }
 
@@ -570,6 +584,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     },
                     body: JSON.stringify({ token_symbol: token }),
                 }));
+                if (response.status === 401) {
+                    logoutAndStop();
+                    return;
+                }
+
                 const payload = await response.json();
                 if (!response.ok || !payload.success) {
                     throw new Error(payload.message || "Analysis failed.");
@@ -589,9 +608,9 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
 
-        loadDashboard().catch((error) => console.error(error));
-
     }
+
+    initializeDashboardOnce();
 
 
     /*
@@ -613,14 +632,49 @@ document.addEventListener("DOMContentLoaded", () => {
             try {
                 const response = await fetch(
                     apiUrl(`/api/history/${button.dataset.deleteReport}/delete`),
-                    { method: "POST", credentials: "include" }
+                    requestOptions({ method: "POST" })
                 );
+
+                if (response.status === 401) {
+                    logoutAndStop();
+                    return;
+                }
 
                 if (!response.ok) throw new Error("Unable to delete report.");
                 await loadDashboard();
             } catch (error) {
                 console.error(error);
                 button.disabled = false;
+                window.alert(error.message);
+            }
+        });
+    }
+
+    const deleteCurrentButton = document.querySelector("#delete-current-report");
+    if (deleteCurrentButton) {
+        deleteCurrentButton.addEventListener("click", async (event) => {
+            event.preventDefault();
+            if (!currentReportId || !window.confirm("Delete this analysis report? This cannot be undone.")) {
+                return;
+            }
+
+            deleteCurrentButton.disabled = true;
+            try {
+                const response = await fetch(
+                    apiUrl(`/api/history/${currentReportId}/delete`),
+                    requestOptions({ method: "POST" })
+                );
+
+                if (response.status === 401) {
+                    logoutAndStop();
+                    return;
+                }
+
+                if (!response.ok) throw new Error("Unable to delete report.");
+                await loadDashboard();
+            } catch (error) {
+                console.error(error);
+                deleteCurrentButton.disabled = false;
                 window.alert(error.message);
             }
         });

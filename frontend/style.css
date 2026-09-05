@@ -152,9 +152,9 @@ h1, h2, h3, h4 { color: var(--text); font-family: var(--font-display); line-heig
 .report-panel,
 .problem-card,
 .watch-card {
-    border: 1px solid var(--border);
+    border: 1px solid #1e293b;
     border-radius: 12px;
-    background: rgba(15, 23, 42, .92);
+    background: #0d1527;
 }
 .search-card { padding: 24px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .search-card-top h2 { margin-top: 7px; font-size: 24px; }
@@ -189,7 +189,7 @@ h1, h2, h3, h4 { color: var(--text); font-family: var(--font-display); line-heig
 .report-meta { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-family: var(--font-mono); font-size: 9px; }
 .report-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--blue); }
 .risk-overview { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 14px; margin-top: 24px; }
-.risk-hero-card, .metric-card { min-height: 148px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.risk-hero-card, .metric-card { min-height: 148px; padding: 20px; border: 1px solid #1e293b; border-radius: 12px; background: #0d1527; }
 .risk-score-badge { display: flex; align-items: baseline; gap: 5px; margin-top: 14px; }
 .risk-score-badge strong { color: var(--red); font-family: var(--font-display); font-size: 48px; line-height: 1; }
 .risk-score-badge span { color: var(--text-muted); }
@@ -198,6 +198,214 @@ h1, h2, h3, h4 { color: var(--text); font-family: var(--font-display); line-heig
 .reference-volume { margin-top: 12px; color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
 .reference-volume strong { color: var(--text-soft); }
 .report-loading-skeleton { display: none; }
+
+.terminal-mid-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 20px;
+}
+
+.terminal-panel {
+    padding: 22px;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    background: #0d1527;
+}
+
+.pillar-list {
+    display: grid;
+    gap: 18px;
+    margin-top: 24px;
+}
+
+.pillar-label {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    color: var(--text-soft);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.pillar-label strong {
+    color: var(--cyan);
+    font-weight: 600;
+}
+
+.pillar-track {
+    height: 8px;
+    margin-top: 8px;
+    overflow: hidden;
+    border-radius: 5px;
+    background: #1e293b;
+}
+
+.pillar-track span {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #2563eb, #38bdf8);
+    transition: width 240ms ease;
+}
+
+.composite-row {
+    padding-top: 16px;
+    border-top: 1px solid #1e293b;
+}
+
+.resilience-badge {
+    padding: 5px 9px;
+    border: 1px solid rgba(251, 191, 36, .35);
+    border-radius: 999px;
+    color: var(--yellow);
+    background: rgba(251, 191, 36, .08);
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+.simulator-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 32px;
+}
+
+.simulator-metrics div {
+    padding: 14px;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    background: #111c32;
+}
+
+.simulator-metrics span {
+    display: block;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+}
+
+.simulator-metrics strong {
+    display: block;
+    margin-top: 8px;
+    color: var(--cyan);
+    font-family: var(--font-display);
+    font-size: 25px;
+}
+
+.simulator-subtitle {
+    margin-top: 20px;
+    color: var(--text-soft);
+    font-size: 12px;
+}
+
+.autopsy-section {
+    margin-top: 20px;
+    padding: 26px;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    background: #0d1527;
+}
+
+.autopsy-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.autopsy-header h3 {
+    margin-top: 6px;
+    font-size: 28px;
+}
+
+.autopsy-token {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+.autopsy-summary {
+    max-width: 820px;
+    margin-top: 16px;
+    color: var(--text-soft);
+    font-size: 14px;
+}
+
+.forensic-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.forensic-card {
+    min-height: 174px;
+    padding: 18px;
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    background: #0d1527;
+}
+
+.forensic-index {
+    color: var(--blue);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.forensic-card h4 {
+    margin-top: 18px;
+    font-size: 17px;
+}
+
+.forensic-card p {
+    margin-top: 10px;
+    color: var(--text-soft);
+    font-size: 12px;
+}
+
+.stress-verdict-banner {
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    gap: 16px;
+    margin-top: 16px;
+    padding: 16px;
+    border-left: 3px solid var(--cyan);
+    background: #101f38;
+}
+
+.stress-verdict-banner > span {
+    color: var(--cyan);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.stress-verdict-banner p {
+    color: var(--text-soft);
+    font-size: 13px;
+}
+
+.report-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 12px;
+}
+
+.delete-current-button {
+    padding: 9px 13px;
+    border: 1px solid rgba(251, 113, 133, .35);
+    border-radius: 7px;
+    color: var(--red);
+    background: transparent;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.delete-current-button:hover {
+    background: rgba(251, 113, 133, .08);
+}
 
 .report-section, .problem-card, .report-panel, .watch-card { margin-top: 20px; padding: 22px; }
 .section-title-row, .problem-card, .watch-header { display: flex; gap: 14px; }
@@ -276,11 +484,11 @@ th { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; f
     .dashboard-navbar, .landing-navbar, .dashboard-container, .hero-section, .landing-section, .process-section, .final-cta, .landing-footer { width: min(100% - 28px, 680px); }
     .dashboard-live-status, .landing-nav-status { display: none; }
     .terminal-header, .report-header, .history-header, .search-card-top, .process-header { flex-direction: column; align-items: flex-start; }
-    .risk-overview, .intelligence-columns, .feature-grid, .process-grid, .hero-section { grid-template-columns: 1fr; }
+    .risk-overview, .terminal-mid-grid, .intelligence-columns, .forensic-grid, .feature-grid, .process-grid, .hero-section { grid-template-columns: 1fr; }
     .hero-section { min-height: auto; padding-top: 36px; }
     .search-card form { grid-template-columns: 1fr; }
     .analyze-button { width: 100%; }
-    .watch-grid, .analysis-disclaimer { grid-template-columns: 1fr; }
+    .watch-grid, .analysis-disclaimer, .stress-verdict-banner { grid-template-columns: 1fr; }
     .dashboard-footer { align-items: flex-start; flex-direction: column; }
 }
 

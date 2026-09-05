@@ -224,26 +224,36 @@ document.addEventListener("DOMContentLoaded", () => {
         DOGE: "dogecoin",
     };
 
+    let currentReportId = null;
+
     function setText(selector, value) {
         const element = document.querySelector(selector);
         if (element) element.textContent = value ?? "—";
     }
 
-    function renderInsights(selector, items, className) {
-        const container = document.querySelector(selector);
+    function renderPillar(key, value) {
+        const score = Math.max(0, Math.min(100, Number(value) || 0));
+        setText(`#pillar-${key}-value`, `${Math.round(score)}/100`);
+        const bar = document.querySelector(`#pillar-${key}-bar`);
+        if (bar) bar.style.width = `${score}%`;
+    }
+
+    function renderForensicCards(cards) {
+        const container = document.querySelector("#forensic-cards");
         if (!container) return;
 
         container.replaceChildren();
-        (items || []).forEach((item, index) => {
-            const wrapper = document.createElement("div");
-            wrapper.className = `insight-item ${className}`;
-            wrapper.innerHTML = `
-                <div class="insight-index">${String(index + 1).padStart(2, "0")}</div>
-                <div><h4></h4><p></p></div>
+        (cards || []).slice(0, 3).forEach((card, index) => {
+            const article = document.createElement("article");
+            article.className = "forensic-card";
+            article.innerHTML = `
+                <span class="forensic-index">${String(index + 1).padStart(2, "0")}</span>
+                <h4></h4>
+                <p></p>
             `;
-            wrapper.querySelector("h4").textContent = item.title || "Insight";
-            wrapper.querySelector("p").textContent = item.explanation || "";
-            container.appendChild(wrapper);
+            article.querySelector("h4").textContent = card.title || "Forensic finding";
+            article.querySelector("p").textContent = card.body || "Awaiting live evidence.";
+            container.appendChild(article);
         });
     }
 
@@ -257,30 +267,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (!latest) return;
 
+        currentReportId = latest.id || currentReportId;
+
+        const profile = latest.risk_profile || {};
+        const stress = latest.stress_test || {};
+        const autopsy = latest.autopsy || {};
+
         setText("#report-token", latest.token);
         setText("#report-outlook", latest.trend);
-        setText("#report-summary", latest.summary);
-        setText("#report-problem", latest.problem_solved);
+        setText("#autopsy-token", `${latest.token || "ASSET"} / LIVE EVIDENCE`);
+        setText("#autopsy-summary", autopsy.autopsy_summary || latest.autopsy_summary || latest.summary);
+        setText("#stress-beta", `${Number(stress.beta || 1).toFixed(2)}x`);
+        setText("#stress-drawdown", `${Number(stress.expected_drawdown ?? -10).toFixed(2)}%`);
+        setText("#stress-resilience", stress.resilience_label || "Moderate");
+        setText("#stress-verdict", autopsy.stress_verdict || latest.stress_verdict || "Awaiting modeled BTC shock.");
+
+        renderPillar("volatility", profile.volatility_risk);
+        renderPillar("liquidity", profile.liquidity_risk);
+        renderPillar("contract", profile.contract_risk);
+        renderPillar("composite", profile.composite_score);
+        renderForensicCards(autopsy.cards);
 
         if (reportRiskScore) {
             reportRiskScore.querySelector("strong").textContent =
                 latest.risk_score_value ?? latest.risk ?? "—";
         }
 
-        renderInsights("#report-risks", latest.key_risks, "risk-item");
-        renderInsights("#report-signals", latest.key_signals, "signal-item");
-
-        const watchContainer = document.querySelector("#report-watch");
-        if (watchContainer) {
-            watchContainer.replaceChildren();
-            (latest.watch_next || []).forEach((item, index) => {
-                const row = document.createElement("div");
-                row.className = "watch-item";
-                row.innerHTML = `<span class="watch-number">${String(index + 1).padStart(2, "0")}</span><span></span>`;
-                row.querySelector("span:last-child").textContent = item;
-                watchContainer.appendChild(row);
-            });
-        }
     }
 
     function renderHistory(history) {
@@ -288,6 +300,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!body) return;
 
         body.replaceChildren();
+        currentReportId = history[0]?.id || currentReportId;
         history.forEach((item) => {
             const row = document.createElement("tr");
             row.innerHTML = `
@@ -632,6 +645,36 @@ document.addEventListener("DOMContentLoaded", () => {
             } catch (error) {
                 console.error(error);
                 button.disabled = false;
+                window.alert(error.message);
+            }
+        });
+    }
+
+    const deleteCurrentButton = document.querySelector("#delete-current-report");
+    if (deleteCurrentButton) {
+        deleteCurrentButton.addEventListener("click", async (event) => {
+            event.preventDefault();
+            if (!currentReportId || !window.confirm("Delete this analysis report? This cannot be undone.")) {
+                return;
+            }
+
+            deleteCurrentButton.disabled = true;
+            try {
+                const response = await fetch(
+                    apiUrl(`/api/history/${currentReportId}/delete`),
+                    requestOptions({ method: "POST" })
+                );
+
+                if (response.status === 401) {
+                    logoutAndStop();
+                    return;
+                }
+
+                if (!response.ok) throw new Error("Unable to delete report.");
+                await loadDashboard();
+            } catch (error) {
+                console.error(error);
+                deleteCurrentButton.disabled = false;
                 window.alert(error.message);
             }
         });

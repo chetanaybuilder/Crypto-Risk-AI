@@ -160,115 +160,75 @@
                 <span class="skeleton-block"></span>
             </div>
 
-            <!-- EXECUTIVE SUMMARY -->
-            <div class="report-section summary-section">
-                <div class="section-title-row">
-                    <div class="section-icon">✦</div>
-                    <div>
-                        <span class="section-kicker">EXECUTIVE INTELLIGENCE</span>
-                        <h3>Summary</h3>
-                    </div>
-                </div>
-                <div class="summary-content">
-                    <p id="report-summary">
-                        Bitcoin demonstrates strong market leadership but faces near-term macroeconomic uncertainty and localized volatility around liquidity zones.
-                    </p>
-                </div>
-            </div>
-
-            <!-- PROBLEM SOLVED -->
-            <div class="problem-card">
-                <div class="problem-icon">◎</div>
-                <div class="problem-content">
-                    <span class="section-kicker">WHY THIS MATTERS</span>
-                    <h3>Problem this analysis solves</h3>
-                    <p id="report-problem">Filters noise and synthesizes underlying network, liquidity, and sentiment metrics into concise risk vectors.</p>
-                </div>
-            </div>
-
-            <!-- RISKS + SIGNALS -->
-            <div class="intelligence-columns">
-                <div class="report-panel">
+            <!-- FOUR-PILLAR RADAR + DOWNSIDE SIMULATOR -->
+            <div class="terminal-mid-grid">
+                <section class="terminal-panel radar-panel">
                     <div class="panel-header">
                         <div>
-                            <span class="section-kicker">DOWNSIDE</span>
-                            <h3>Key Risks</h3>
+                            <span class="section-kicker">RISK PROFILE</span>
+                            <h3>Four-pillar radar</h3>
                         </div>
-                        <span class="panel-number">02</span>
+                        <span class="panel-number">04</span>
                     </div>
-                    <div class="insight-list" id="report-risks">
-                        <div class="insight-item risk-item">
-                            <div class="insight-index">01</div>
-                            <div>
-                                <h4>Macro Sensitivity</h4>
-                                <p>High correlation with interest rate adjustments and global capital flows.</p>
-                            </div>
+                    <div class="pillar-list">
+                        <div class="pillar-row">
+                            <div class="pillar-label"><span>Volatility</span><strong id="pillar-volatility-value">0/100</strong></div>
+                            <div class="pillar-track"><span id="pillar-volatility-bar"></span></div>
                         </div>
-                        <div class="insight-item risk-item">
-                            <div class="insight-index">02</div>
-                            <div>
-                                <h4>Liquidity Concentration</h4>
-                                <p>Significant derivative leverage around major psychological resistance levels.</p>
-                            </div>
+                        <div class="pillar-row">
+                            <div class="pillar-label"><span>Liquidity</span><strong id="pillar-liquidity-value">0/100</strong></div>
+                            <div class="pillar-track"><span id="pillar-liquidity-bar"></span></div>
+                        </div>
+                        <div class="pillar-row">
+                            <div class="pillar-label"><span>Contract</span><strong id="pillar-contract-value">0/100</strong></div>
+                            <div class="pillar-track"><span id="pillar-contract-bar"></span></div>
+                        </div>
+                        <div class="pillar-row composite-row">
+                            <div class="pillar-label"><span>Composite score</span><strong id="pillar-composite-value">0/100</strong></div>
+                            <div class="pillar-track"><span id="pillar-composite-bar"></span></div>
                         </div>
                     </div>
-                </div>
+                </section>
 
-                <div class="report-panel">
+                <section class="terminal-panel simulator-panel">
                     <div class="panel-header">
                         <div>
-                            <span class="section-kicker">MARKET INTELLIGENCE</span>
-                            <h3>Key Signals</h3>
+                            <span class="section-kicker">DOWNSIDE SIMULATOR</span>
+                            <h3>What if BTC drops -10%?</h3>
                         </div>
-                        <span class="panel-number">02</span>
+                        <span class="resilience-badge" id="stress-resilience">Moderate</span>
                     </div>
-                    <div class="insight-list" id="report-signals">
-                        <div class="insight-item signal-item">
-                            <div class="insight-index">01</div>
-                            <div>
-                                <h4>Network Hashrate</h4>
-                                <p>Consistent miner participation and sustained baseline security.</p>
-                            </div>
-                        </div>
-                        <div class="insight-item signal-item">
-                            <div class="insight-index">02</div>
-                            <div>
-                                <h4>Institutional Inflows</h4>
-                                <p>Stable accumulation through spot ETF vehicles.</p>
-                            </div>
-                        </div>
+                    <div class="simulator-metrics">
+                        <div><span>HISTORICAL BETA</span><strong id="stress-beta">1.00x</strong></div>
+                        <div><span>EST. DRAWDOWN</span><strong id="stress-drawdown">-10.00%</strong></div>
                     </div>
-                </div>
+                    <p class="simulator-subtitle">A modeled BTC shock translated through this asset's observed 7-day sensitivity.</p>
+                </section>
             </div>
 
-            <!-- WHAT TO WATCH -->
-            <div class="watch-card">
-                <div class="watch-header">
+            <!-- FORENSIC SYNTHESIS -->
+            <section class="autopsy-section">
+                <div class="autopsy-header">
                     <div>
-                        <span class="section-kicker">MONITOR</span>
-                        <h3>What to watch next</h3>
+                        <span class="section-kicker">FORENSIC SYNTHESIS</span>
+                        <h3>Risk autopsy</h3>
                     </div>
-                    <div class="watch-icon">◌</div>
+                    <span class="autopsy-token" id="autopsy-token">BTC / LIVE EVIDENCE</span>
                 </div>
-                <div class="watch-grid" id="report-watch">
-                    <div class="watch-item">
-                        <span class="watch-number">01</span>
-                        <span>Key support defense levels</span>
-                    </div>
-                    <div class="watch-item">
-                        <span class="watch-number">02</span>
-                        <span>Federal Reserve macro statements</span>
-                    </div>
+                <p class="autopsy-summary" id="autopsy-summary">Awaiting live evidence.</p>
+                <div class="forensic-grid" id="forensic-cards">
+                    <article class="forensic-card"><span class="forensic-index">01</span><h4>Momentum &amp; Drawdown Risk</h4><p>Awaiting live evidence.</p></article>
+                    <article class="forensic-card"><span class="forensic-index">02</span><h4>Liquidity Depth &amp; Slippage Risk</h4><p>Awaiting live evidence.</p></article>
+                    <article class="forensic-card"><span class="forensic-index">03</span><h4>Macro &amp; Contract Sensitivity</h4><p>Awaiting live evidence.</p></article>
                 </div>
-            </div>
+                <div class="stress-verdict-banner">
+                    <span>STRESS VERDICT</span>
+                    <p id="stress-verdict">Awaiting modeled BTC shock.</p>
+                </div>
+            </section>
 
-            <!-- DISCLAIMER -->
-            <div class="analysis-disclaimer">
-                <span>AI-GENERATED ANALYSIS</span>
-                <p>
-                    CryptoRisk AI provides educational risk intelligence, not financial advice. 
-                    Cryptocurrency markets are volatile. Independently verify current market data.
-                </p>
+            <div class="report-actions">
+                <button type="button" class="delete-current-button" id="delete-current-report">Delete report</button>
             </div>
         </section>
 
