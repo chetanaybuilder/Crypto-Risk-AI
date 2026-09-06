@@ -137,10 +137,7 @@ app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
 
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = bool(
-    request.environ.get("HTTPS") == "on"
-)
-
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV", "production") == "production"
 
 jwt = JWTManager(app)
 bcrypt = Bcrypt(app)
