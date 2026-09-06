@@ -51,6 +51,7 @@ from urllib.parse import quote
 
 import psycopg2
 import requests
+from werkzeug.middleware.proxy_fix import ProxyFix
 from authlib.integrations.flask_client import OAuth
 from flask import (
     Flask,
@@ -153,6 +154,8 @@ app = Flask(
     template_folder="templates",
     static_folder="static",
 )
+
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 app.secret_key = SECRET_KEY
 
