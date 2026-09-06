@@ -1,6 +1,23 @@
 # ============================================================
-# CryptoRisk AI — Backend v2
+# CryptoRisk AI — Backend v2 (FIXED)
 # PART 1 / 3
+#
+# FIX APPLIED: Google OAuth MismatchingStateError
+# ------------------------------------------------------------
+# Root cause: SESSION_COOKIE_SAMESITE="None" requires
+# SESSION_COOKIE_SECURE=True. Since SECURE was only True when
+# FLASK_ENV=="production" literally, any other environment
+# (local dev, missing/misconfigured env var, plain http)
+# caused the browser to silently DROP the session cookie that
+# stores the OAuth "state" value. When Google redirected back
+# to /api/auth/google/callback, Authlib had nothing to compare
+# the returned state against -> MismatchingStateError.
+#
+# Fix: derive SAMESITE/SECURE together based on an explicit
+# IS_PRODUCTION flag. In non-production, use SameSite="Lax"
+# and Secure=False, which works fine over plain http for this
+# same-site redirect flow. In production (https), we still use
+# SameSite="None" + Secure=True.
 #
 # Architecture:
 # Market Data
@@ -103,6 +120,19 @@ FRONTEND_URL = os.getenv(
     "",
 ).rstrip("/")
 
+# ------------------------------------------------------------
+# FIX: single source of truth for "are we in production".
+# Log it at startup so a misconfigured env var is obvious
+# instead of silently breaking OAuth again later.
+# ------------------------------------------------------------
+IS_PRODUCTION = os.getenv("FLASK_ENV", "production").strip().lower() == "production"
+
+logger.info(
+    "Startup environment check -> FLASK_ENV=%r, IS_PRODUCTION=%s",
+    os.getenv("FLASK_ENV"),
+    IS_PRODUCTION,
+)
+
 
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY is required.")
@@ -136,8 +166,23 @@ app.config["JWT_HEADER_TYPE"] = "Bearer"
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
 
 app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "None"
-app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV", "production") == "production"
+
+# ------------------------------------------------------------
+# FIX: SameSite and Secure must move together.
+#
+# - Production (https): SameSite="None", Secure=True
+#   (needed if frontend and backend are on different domains)
+# - Non-production (http/local dev): SameSite="Lax", Secure=False
+#   (browsers reject SameSite=None cookies without Secure, which
+#   was silently dropping the OAuth "state" session cookie and
+#   causing MismatchingStateError on the Google callback)
+# ------------------------------------------------------------
+if IS_PRODUCTION:
+    app.config["SESSION_COOKIE_SAMESITE"] = "None"
+    app.config["SESSION_COOKIE_SECURE"] = True
+else:
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = False
 
 jwt = JWTManager(app)
 bcrypt = Bcrypt(app)
@@ -219,6 +264,11 @@ if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
         client_kwargs={
             "scope": "openid email profile",
         },
+    )
+else:
+    logger.warning(
+        "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not set — "
+        "Google login endpoints will return 503."
     )
 
 
@@ -1181,9 +1231,8 @@ def calculate_quant_metrics(
             "window_days": 30,
         },
     }
-
 # ============================================================
-# CryptoRisk AI — Backend v2
+# CryptoRisk AI — Backend v2 (FIXED)
 # PART 2 / 3
 # ============================================================
 
@@ -1950,7 +1999,6 @@ def build_stress_test(
             else 15
         ),
     }
-
 
 # ============================================================
 # RISK CHANGE DETECTION
@@ -3608,9 +3656,19 @@ def google_callback():
             )
         )
 
+    # ------------------------------------------------------
+    # FIX: surface the real Authlib error in logs so a future
+    # MismatchingStateError (or redirect_uri mismatch, expired
+    # code, etc.) is instantly visible instead of only showing
+    # up as a generic 500 with no context.
+    # ------------------------------------------------------
     except Exception:
         logger.exception(
-            "Google OAuth callback failed."
+            "Google OAuth callback failed. "
+            "Common causes: session cookie not persisted "
+            "(SameSite/Secure mismatch or non-https in "
+            "production), redirect URI mismatch in Google "
+            "Cloud Console, or an expired/reused auth code."
         )
 
         return jsonify({
