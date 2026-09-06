@@ -1,9 +1,9 @@
 Flask
 Flask-Cors
+Flask-Bcrypt
 Flask-JWT-Extended
-Authlib
 psycopg2-binary
-python-dotenv
+requests
+Authlib
 google-genai
 gunicorn
-requests

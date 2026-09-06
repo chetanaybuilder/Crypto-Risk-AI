@@ -1,1736 +1,2428 @@
-document.addEventListener("DOMContentLoaded", () => {
-"use strict";
+/* ============================================================
+   CRYPTORISK AI
+   FRONTEND INTELLIGENCE TERMINAL
+   PART 1 / 2
+   ============================================================ */
 
-/*
-==========================================================
-CONFIGURATION
-==========================================================
-*/
-const backendUrl = (
-    window.CONFIG?.API_BASE_URL || ""
-).replace(/\/$/, "");
-const apiUrl = (path) => `${backendUrl}${path}`;
-const getAuthToken = () =>
-    localStorage.getItem("token") ||
-    localStorage.getItem("auth_token");
-const isDashboardPage =
-    document.body.classList.contains("dashboard-page");
-let hasSignedOut = false;
-let currentReportId = null;
-let dashboardInitialized = false;
-let progressTimer = null;
-/*
-==========================================================
-AUTHENTICATION
-==========================================================
-*/
-function logoutAndStop() {
-    if (hasSignedOut) return;
-    hasSignedOut = true;
-    localStorage.removeItem("token");
-    localStorage.removeItem("auth_token");
-    window.location.href = "index.html";
-}
-const queryToken =
-    new URLSearchParams(window.location.search).get("token");
-if (isDashboardPage && queryToken) {
-    localStorage.setItem("token", queryToken);
-    window.history.replaceState(
-        {},
-        document.title,
-        window.location.pathname
-    );
-}
-if (isDashboardPage && !getAuthToken()) {
-    logoutAndStop();
-    return;
-}
-function requestOptions(options = {}) {
-    const token = getAuthToken();
-    return {
-        ...options,
-        credentials: "include",
-        headers: {
-            ...(options.headers || {}),
-            ...(token
-                ? {
-                    Authorization: `Bearer ${token}`,
-                }
-                : {}),
-        },
+(() => {
+    "use strict";
+
+    /* ---------------------------------------------------------
+       CONFIG
+       --------------------------------------------------------- */
+
+    const CONFIG = window.CONFIG || {};
+
+    const API_BASE_URL = String(
+        CONFIG.API_BASE_URL ||
+        "https://crypto-risk-ai-j1ag.onrender.com"
+    ).replace(/\/+$/, "");
+
+    const API_TIMEOUT =
+        Number(CONFIG.API_TIMEOUT) > 0
+            ? Number(CONFIG.API_TIMEOUT)
+            : 30000;
+
+    const LIVE_REFRESH_INTERVAL =
+        Number(CONFIG.LIVE_REFRESH_INTERVAL) > 0
+            ? Number(CONFIG.LIVE_REFRESH_INTERVAL)
+            : 15000;
+
+    const TOKEN_KEYS = ["token", "auth_token"];
+
+    /* ---------------------------------------------------------
+       APPLICATION STATE
+       --------------------------------------------------------- */
+
+    const state = {
+        token: null,
+        user: null,
+        report: null,
+        history: [],
+        analysisRunning: false,
+        liveTimer: null,
+        liveRefreshing: false
     };
-}
-function setupAuthentication() {
-    document
-        .querySelectorAll("[data-google-login]")
-        .forEach((link) => {
-            link.href = apiUrl("/auth/google");
-        });
-}
-setupAuthentication();
-/*
-==========================================================
-ELEMENTS
-==========================================================
-*/
-const input =
-    document.querySelector(
-        'input[name="token_symbol"]'
-    );
-const form =
-    document.querySelector(
-        ".search-card form"
-    );
-const reportPrice =
-    document.getElementById(
-        "report-price"
-    );
-const reportChange =
-    document.getElementById(
-        "report-change"
-    );
-const reportVolume =
-    document.getElementById(
-        "report-volume"
-    );
-const reportRiskScore =
-    document.getElementById(
-        "report-risk-score"
-    );
-/*
-==========================================================
-CREATE ANALYSIS PROGRESS UI
-==========================================================
-The dashboard HTML currently does not contain a progress
-overlay, so create it dynamically.
-==========================================================
-*/
-function createProgressOverlay() {
-    if (
-        document.getElementById(
-            "analysis-progress"
-        )
-    ) {
-        return;
+
+    /* ---------------------------------------------------------
+       DOM HELPERS
+       --------------------------------------------------------- */
+
+    function getElement(id) {
+        return document.getElementById(id);
     }
-    const overlay =
-        document.createElement("div");
-    overlay.id =
-        "analysis-progress";
-    overlay.setAttribute(
-        "aria-hidden",
-        "true"
-    );
-    overlay.innerHTML = `
-        <div class="analysis-progress-backdrop"></div>
-        <div class="analysis-progress-card"
-             role="status"
-             aria-live="polite">
-            <div class="analysis-progress-header">
-                <span class="analysis-progress-kicker">
-                    CRYPTORISK AI
-                </span>
-                <span
-                    id="progress-percent"
-                    class="analysis-progress-percent">
-                    0%
-                </span>
-            </div>
-            <div class="analysis-progress-title"
-                 id="progress-stage">
-                INITIALIZING
-            </div>
-            <p id="progress-message">
-                Preparing cryptocurrency intelligence request...
-            </p>
-            <div class="analysis-progress-track">
-                <div
-                    id="progress-fill"
-                    class="analysis-progress-fill">
-                </div>
-            </div>
-            <div class="analysis-progress-statuses">
-                <span class="progress-status active">
-                    REQUEST
-                </span>
-                <span class="progress-status">
-                    RESEARCH
-                </span>
-                <span class="progress-status">
-                    AI ANALYSIS
-                </span>
-                <span class="progress-status">
-                    REPORT
-                </span>
-            </div>
-            <div class="analysis-progress-pulse">
-                <span></span>
-                ANALYSIS ENGINE RUNNING
-            </div>
-        </div>
-    `;
-    document.body.appendChild(
-        overlay
-    );
-    injectProgressStyles();
-}
-function injectProgressStyles() {
-    if (
-        document.getElementById(
-            "cryptorisk-progress-styles"
-        )
-    ) {
-        return;
+
+    function query(selector) {
+        return document.querySelector(selector);
     }
-    const style =
-        document.createElement("style");
-    style.id =
-        "cryptorisk-progress-styles";
-    style.textContent = `
-        #analysis-progress {
-            position: fixed;
-            inset: 0;
-            z-index: 99999;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            visibility: hidden;
-            pointer-events: none;
-            transition:
-                opacity .25s ease,
-                visibility .25s ease;
-        }
-        #analysis-progress.is-visible {
-            opacity: 1;
-            visibility: visible;
-            pointer-events: auto;
-        }
-        .analysis-progress-backdrop {
-            position: absolute;
-            inset: 0;
-            background: rgba(5, 8, 15, .88);
-            backdrop-filter: blur(14px);
-        }
-        .analysis-progress-card {
-            position: relative;
-            width: min(520px, calc(100% - 36px));
-            padding: 30px;
-            border: 1px solid rgba(255,255,255,.12);
-            border-radius: 18px;
-            background:
-                linear-gradient(
-                    145deg,
-                    rgba(22,27,38,.98),
-                    rgba(10,14,22,.98)
-                );
-            box-shadow:
-                0 30px 100px rgba(0,0,0,.55);
-        }
-        .analysis-progress-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 20px;
-            margin-bottom: 16px;
-        }
-        .analysis-progress-kicker {
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: .16em;
-            opacity: .65;
-        }
-        .analysis-progress-percent {
-            font-family: "JetBrains Mono", monospace;
-            font-size: 14px;
-            font-weight: 700;
-        }
-        .analysis-progress-title {
-            font-family: "Space Grotesk", sans-serif;
-            font-size: 25px;
-            font-weight: 700;
-            letter-spacing: .02em;
-            margin-bottom: 8px;
-        }
-        .analysis-progress-card p {
-            margin: 0 0 22px;
-            opacity: .65;
-            line-height: 1.6;
-            font-size: 14px;
-        }
-        .analysis-progress-track {
-            width: 100%;
-            height: 7px;
-            overflow: hidden;
-            border-radius: 999px;
-            background: rgba(255,255,255,.08);
-        }
-        .analysis-progress-fill {
-            width: 0%;
-            height: 100%;
-            border-radius: inherit;
-            background: currentColor;
-            transition: width .65s ease;
-            box-shadow: 0 0 18px currentColor;
-        }
-        .analysis-progress-statuses {
-            display: grid;
-            grid-template-columns:
-                repeat(4, 1fr);
-            gap: 8px;
-            margin-top: 18px;
-        }
-        .progress-status {
-            font-size: 9px;
-            font-weight: 700;
-            letter-spacing: .08em;
-            opacity: .3;
-            transition:
-                opacity .2s ease,
-                transform .2s ease;
-        }
-        .progress-status.active {
-            opacity: 1;
-            transform: translateY(-1px);
-        }
-        .progress-status.complete {
-            opacity: .65;
-        }
-        .analysis-progress-pulse {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: 24px;
-            font-family: "JetBrains Mono", monospace;
-            font-size: 10px;
-            letter-spacing: .08em;
-            opacity: .55;
-        }
-        .analysis-progress-pulse span {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: currentColor;
-            animation:
-                cryptoriskPulse 1.1s
-                infinite ease-in-out;
-        }
-        @keyframes cryptoriskPulse {
-            0%, 100% {
-                opacity: .25;
-                transform: scale(.8);
-            }
-            50% {
-                opacity: 1;
-                transform: scale(1.15);
-            }
-        }
-        body.analysis-running {
-            overflow: hidden;
-        }
-        @media (max-width: 600px) {
-            .analysis-progress-card {
-                padding: 24px;
-            }
-            .analysis-progress-title {
-                font-size: 21px;
-            }
-            .analysis-progress-statuses {
-                gap: 5px;
-            }
-            .progress-status {
-                font-size: 8px;
-            }
-        }
-    `;
-    document.head.appendChild(
-        style
-    );
-}
-createProgressOverlay();
-const overlay =
-    document.getElementById(
-        "analysis-progress"
-    );
-const progressFill =
-    document.getElementById(
-        "progress-fill"
-    );
-const progressPercent =
-    document.getElementById(
-        "progress-percent"
-    );
-const progressMessage =
-    document.getElementById(
-        "progress-message"
-    );
-const progressStage =
-    document.getElementById(
-        "progress-stage"
-    );
-const progressStatuses =
-    document.querySelectorAll(
-        ".progress-status"
-    );
-/*
-==========================================================
-LOGOUT
-==========================================================
-*/
-async function handleLogout(event) {
-    event?.preventDefault();
-    localStorage.removeItem("token");
-    localStorage.removeItem("auth_token");
-    try {
-        await fetch(
-            apiUrl("/logout"),
-            requestOptions({
-                method: "GET",
-            })
-        );
-    } catch (error) {
-        console.warn(
-            "Logout request failed:",
-            error
-        );
+
+    function queryAll(selector) {
+        return Array.from(document.querySelectorAll(selector));
     }
-    window.location.href =
-        "index.html";
-}
-const logoutButton =
-    document.getElementById(
-        "logout-button"
-    );
-if (logoutButton) {
-    logoutButton.addEventListener(
-        "click",
-        handleLogout
-    );
-}
-/*
-==========================================================
-TOKEN INPUT
-==========================================================
-*/
-if (input) {
-    input.addEventListener(
-        "input",
-        () => {
-            input.value =
-                input.value
-                    .toUpperCase()
-                    .replace(
-                        /[^A-Z0-9._-]/g,
-                        ""
-                    );
-        }
-    );
-}
-/*
-==========================================================
-PROGRESS ENGINE
-==========================================================
-*/
-const progressStages = [
-    {
-        percent: 12,
-        stage: "INITIALIZING",
-        message:
-            "Preparing cryptocurrency intelligence request...",
-        active: 0,
-    },
-    {
-        percent: 30,
-        stage: "RESEARCHING",
-        message:
-            "Collecting market and asset intelligence...",
-        active: 0,
-    },
-    {
-        percent: 55,
-        stage: "AI ANALYSIS",
-        message:
-            "Gemini is evaluating risk signals and evidence...",
-        active: 1,
-    },
-    {
-        percent: 78,
-        stage: "STRUCTURING",
-        message:
-            "Building the structured intelligence report...",
-        active: 2,
-    },
-    {
-        percent: 92,
-        stage: "SECURING",
-        message:
-            "Saving your analysis securely...",
-        active: 3,
-    },
-];
-function updateProgress(stageData) {
-    if (!stageData) return;
-    if (progressFill) {
-        progressFill.style.width =
-            `${stageData.percent}%`;
+
+    function isDashboardPage() {
+        return document.body.classList.contains("dashboard-page");
     }
-    if (progressPercent) {
-        progressPercent.textContent =
-            `${stageData.percent}%`;
-    }
-    if (progressStage) {
-        progressStage.textContent =
-            stageData.stage;
-    }
-    if (progressMessage) {
-        progressMessage.textContent =
-            stageData.message;
-    }
-    progressStatuses.forEach(
-        (item, index) => {
-            item.classList.remove(
-                "active",
-                "complete"
-            );
-            if (
-                index <
-                stageData.active
-            ) {
-                item.classList.add(
-                    "complete"
-                );
-            }
-            if (
-                index ===
-                stageData.active
-            ) {
-                item.classList.add(
-                    "active"
-                );
-            }
-        }
-    );
-}
-function startProgress() {
-    if (!overlay) return;
-    if (progressTimer) {
-        clearTimeout(
-            progressTimer
-        );
-        progressTimer = null;
-    }
-    overlay.classList.add(
-        "is-visible"
-    );
-    overlay.setAttribute(
-        "aria-hidden",
-        "false"
-    );
-    document.body.classList.add(
-        "analysis-running"
-    );
-    let currentStage = 0;
-    updateProgress(
-        progressStages[0]
-    );
-    const advance = () => {
-        if (
-            currentStage >=
-            progressStages.length - 1
-        ) {
-            progressTimer = null;
+
+    function setText(id, value) {
+        const element = getElement(id);
+
+        if (!element) {
             return;
         }
-        currentStage += 1;
-        updateProgress(
-            progressStages[currentStage]
-        );
-        progressTimer =
-            window.setTimeout(
-                advance,
-                1800
-            );
-    };
-    progressTimer =
-        window.setTimeout(
-            advance,
-            1200
-        );
-}
-function stopProgress() {
-    if (progressTimer) {
-        clearTimeout(
-            progressTimer
-        );
-        progressTimer = null;
-    }
-    if (overlay) {
-        overlay.classList.remove(
-            "is-visible"
-        );
-        overlay.setAttribute(
-            "aria-hidden",
-            "true"
-        );
-    }
-    document.body.classList.remove(
-        "analysis-running"
-    );
-}
-/*
-==========================================================
-UTILITY
-==========================================================
-*/
-function setText(selector, value) {
-    const element =
-        document.querySelector(
-            selector
-        );
-    if (element) {
-        element.textContent =
-            value ?? "—";
-    }
-}
-function safeNumber(
-    value,
-    fallback = 0
-) {
-    const number =
-        Number(value);
-    return Number.isFinite(number)
-        ? number
-        : fallback;
-}
-/*
-==========================================================
-RISK PILLARS
-==========================================================
-*/
-function renderPillar(
-    key,
-    value
-) {
-    const score =
-        Math.max(
-            0,
-            Math.min(
-                100,
-                safeNumber(
-                    value,
-                    0
-                )
-            )
-        );
-    setText(
-        `#pillar-${key}-value`,
-        `${Math.round(score)}/100`
-    );
-    const bar =
-        document.querySelector(
-            `#pillar-${key}-bar`
-        );
-    if (bar) {
-        bar.style.width =
-            `${score}%`;
-    }
-}
-/*
-==========================================================
-FORENSIC CARDS
-==========================================================
-*/
-function renderForensicCards(
-    cards
-) {
-    const container =
-        document.querySelector(
-            "#forensic-cards"
-        );
-    if (!container) return;
-    container.replaceChildren();
-    const safeCards =
-        Array.isArray(cards)
-            ? cards.slice(0, 3)
-            : [];
-    const fallbackTitles = [
-        "Momentum & Drawdown Risk",
-        "Liquidity Depth & Slippage Risk",
-        "Macro & Contract Sensitivity",
-    ];
-    const cardsToRender =
-        safeCards.length
-            ? safeCards
-            : fallbackTitles.map(
-                (title) => ({
-                    title,
-                    body:
-                        "Awaiting live evidence.",
-                })
-            );
-    cardsToRender.forEach(
-        (card, index) => {
-            const article =
-                document.createElement(
-                    "article"
-                );
-            article.className =
-                "forensic-card";
-            const number =
-                document.createElement(
-                    "span"
-                );
-            number.className =
-                "forensic-index";
-            number.textContent =
-                String(index + 1)
-                    .padStart(
-                        2,
-                        "0"
-                    );
-            const heading =
-                document.createElement(
-                    "h4"
-                );
-            heading.textContent =
-                card?.title ||
-                "Forensic finding";
-            const paragraph =
-                document.createElement(
-                    "p"
-                );
-            paragraph.textContent =
-                card?.body ||
-                "Awaiting live evidence.";
-            article.append(
-                number,
-                heading,
-                paragraph
-            );
-            container.appendChild(
-                article
-            );
+
+        if (value === undefined || value === null || value === "") {
+            element.textContent = "—";
+        } else {
+            element.textContent = String(value);
         }
-    );
-}
-/*
-==========================================================
-DASHBOARD RENDER
-==========================================================
-*/
-function renderDashboard(
-    payload
-) {
-    if (
-        !payload ||
-        typeof payload !==
-            "object"
-    ) {
-        return;
     }
-    const latest =
-        payload.latest || null;
-    const user =
-        payload.user || {};
-    document
-        .querySelectorAll(
-            ".user-name"
-        )
-        .forEach(
-            (element) => {
-                element.textContent =
-                    user.name ||
-                    user.username ||
-                    "User";
+
+    function setHidden(id, hidden) {
+        const element = getElement(id);
+
+        if (!element) {
+            return;
+        }
+
+        element.hidden = Boolean(hidden);
+    }
+
+    function addClass(id, className) {
+        const element = getElement(id);
+
+        if (element && className) {
+            element.classList.add(className);
+        }
+    }
+
+    function removeClasses(id, classes) {
+        const element = getElement(id);
+
+        if (!element) {
+            return;
+        }
+
+        classes.forEach((className) => {
+            element.classList.remove(className);
+        });
+    }
+
+    /* ---------------------------------------------------------
+       AUTHENTICATION
+       --------------------------------------------------------- */
+
+    function getToken() {
+        for (const key of TOKEN_KEYS) {
+            const token = localStorage.getItem(key);
+
+            if (token) {
+                return token;
             }
-        );
-    const avatar =
-        document.getElementById(
-            "user-avatar"
-        );
-    if (avatar) {
-        const name =
-            user.name ||
-            user.username ||
-            "User";
-        avatar.textContent =
-            name
-                .charAt(0)
-                .toUpperCase();
-    }
-    if (!latest) {
-        return;
-    }
-    currentReportId =
-        latest.id ||
-        currentReportId;
-    const profile =
-        latest.risk_profile ||
-        {};
-    const stress =
-        latest.stress_test ||
-        {};
-    const autopsy =
-        latest.autopsy ||
-        {};
-    const token =
-        latest.token ||
-        latest.token_symbol ||
-        "ASSET";
-    setText(
-        "#report-token",
-        token
-    );
-    setText(
-        "#report-outlook",
-        latest.trend ||
-        latest.outlook ||
-        "NEUTRAL"
-    );
-    setText(
-        "#autopsy-token",
-        `${token} / LIVE EVIDENCE`
-    );
-    setText(
-        "#autopsy-summary",
-        autopsy.autopsy_summary ||
-        latest.autopsy_summary ||
-        latest.summary ||
-        "Awaiting live evidence."
-    );
-    setText(
-        "#stress-beta",
-        `${safeNumber(
-            stress.beta,
-            1
-        ).toFixed(2)}x`
-    );
-    setText(
-        "#stress-drawdown",
-        `${safeNumber(
-            stress.expected_drawdown,
-            -10
-        ).toFixed(2)}%`
-    );
-    setText(
-        "#stress-resilience",
-        stress.resilience_label ||
-        "Moderate"
-    );
-    setText(
-        "#stress-verdict",
-        autopsy.stress_verdict ||
-        latest.stress_verdict ||
-        "Awaiting modeled BTC shock."
-    );
-    renderPillar(
-        "volatility",
-        profile.volatility_risk
-    );
-    renderPillar(
-        "liquidity",
-        profile.liquidity_risk
-    );
-    renderPillar(
-        "contract",
-        profile.contract_risk
-    );
-    renderPillar(
-        "composite",
-        profile.composite_score
-    );
-    renderForensicCards(
-        autopsy.cards
-    );
-    const riskStrong =
-        reportRiskScore?.querySelector(
-            "strong"
-        );
-    if (riskStrong) {
-        riskStrong.textContent =
-            latest.risk_score_value ??
-            latest.risk_score ??
-            latest.risk ??
-            "—";
-    }
-}
-/*
-==========================================================
-HISTORY RENDER
-==========================================================
-*/
-function renderHistory(
-    history
-) {
-    const body =
-        document.querySelector(
-            "#history-tbody"
-        );
-    const count =
-        document.getElementById(
-            "history-count"
-        );
-    const safeHistory =
-        Array.isArray(history)
-            ? history
-            : [];
-    if (count) {
-        count.textContent =
-            `${safeHistory.length} REPORT${
-                safeHistory.length === 1
-                    ? ""
-                    : "S"
-            }`;
-    }
-    if (!body) return;
-    body.replaceChildren();
-    if (
-        safeHistory.length
-    ) {
-        currentReportId =
-            safeHistory[0]?.id ||
-            currentReportId;
-    }
-    safeHistory.forEach(
-        (item) => {
-            const row =
-                document.createElement(
-                    "tr"
-                );
-            const asset =
-                document.createElement(
-                    "td"
-                );
-            const assetStrong =
-                document.createElement(
-                    "strong"
-                );
-            assetStrong.className =
-                "history-token";
-            assetStrong.textContent =
-                item.token_symbol ||
-                item.token ||
-                "—";
-            asset.appendChild(
-                assetStrong
-            );
-            const outlook =
-                document.createElement(
-                    "td"
-                );
-            const outlookSpan =
-                document.createElement(
-                    "span"
-                );
-            outlookSpan.className =
-                "neutral";
-            outlookSpan.textContent =
-                item.trend ||
-                item.outlook ||
-                "Unknown";
-            outlook.appendChild(
-                outlookSpan
-            );
-            const risk =
-                document.createElement(
-                    "td"
-                );
-            const riskSpan =
-                document.createElement(
-                    "span"
-                );
-            riskSpan.className =
-                "high";
-            riskSpan.textContent =
-                item.risk_score ??
-                item.risk ??
-                "—";
-            risk.appendChild(
-                riskSpan
-            );
-            const price =
-                document.createElement(
-                    "td"
-                );
-            price.textContent =
-                item.predicted_price ??
-                "—";
-            const time =
-                document.createElement(
-                    "td"
-                );
-            time.textContent =
-                item.created_at ||
-                "—";
-            const action =
-                document.createElement(
-                    "td"
-                );
-            const deleteButton =
-                document.createElement(
-                    "button"
-                );
-            deleteButton.type =
-                "button";
-            deleteButton.className =
-                "history-delete-button";
-            deleteButton.dataset.deleteReport =
-                item.id;
-            deleteButton.title =
-                "Delete report";
-            deleteButton.setAttribute(
-                "aria-label",
-                "Delete report"
-            );
-            deleteButton.textContent =
-                "×";
-            action.appendChild(
-                deleteButton
-            );
-            row.append(
-                asset,
-                outlook,
-                risk,
-                price,
-                time,
-                action
-            );
-            body.appendChild(
-                row
-            );
         }
-    );
-}
-/*
-==========================================================
-MARKET DATA
-==========================================================
-*/
-const tickerMap = {
-    BTC: "bitcoin",
-    ETH: "ethereum",
-    SOL: "solana",
-    USDT: "tether",
-    USDC: "usd-coin",
-    BNB: "binancecoin",
-    XRP: "ripple",
-    ADA: "cardano",
-    DOGE: "dogecoin",
-};
-function formatUsd(
-    value
-) {
-    const amount =
-        Number(value);
-    if (
-        !Number.isFinite(
-            amount
-        )
-    ) {
-        return "—";
-    }
-    const absolute =
-        Math.abs(amount);
-    if (
-        absolute >= 1e9
-    ) {
-        return `$${(
-            amount / 1e9
-        ).toFixed(2)}B`;
-    }
-    if (
-        absolute >= 1e6
-    ) {
-        return `$${(
-            amount / 1e6
-        ).toFixed(2)}M`;
-    }
-    if (
-        absolute >= 1e3
-    ) {
-        return `$${(
-            amount / 1e3
-        ).toFixed(2)}K`;
-    }
-    return `$${amount.toFixed(
-        2
-    )}`;
-}
-function calculateMarketRiskScore(
-    marketData
-) {
-    let score = 50;
-    const change7d =
-        Math.abs(
-            safeNumber(
-                marketData
-                    .price_change_percentage_7d_in_currency,
-                0
-            )
-        );
-    const marketCap =
-        safeNumber(
-            marketData.market_cap,
-            1
-        );
-    const volume =
-        safeNumber(
-            marketData.total_volume,
-            0
-        );
-    const turnover =
-        volume /
-        Math.max(
-            marketCap,
-            1
-        );
-    if (change7d > 20) {
-        score += 15;
-    } else if (
-        change7d < 5
-    ) {
-        score -= 10;
-    }
-    if (turnover < 0.02) {
-        score += 15;
-    } else if (
-        turnover > 0.10
-    ) {
-        score -= 10;
-    }
-    return Math.max(
-        1,
-        Math.min(
-            99,
-            Math.trunc(score)
-        )
-    );
-}
-async function loadMarketData(
-    ticker
-) {
-    const normalized =
-        ticker
-            .trim()
-            .toUpperCase();
-    const coinId =
-        tickerMap[
-            normalized
-        ];
-    const controller =
-        new AbortController();
-    const timeout =
-        window.setTimeout(
-            () =>
-                controller.abort(),
-            10000
-        );
-    try {
-        let resolvedCoinId =
-            coinId;
-        if (!resolvedCoinId) {
-            const searchResponse =
-                await fetch(
-                    `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(
-                        normalized
-                    )}`,
-                    {
-                        signal:
-                            controller.signal,
-                    }
-                );
-            if (
-                searchResponse.status ===
-                429
-            ) {
-                throw new Error(
-                    "Market data is rate-limited. Try again shortly."
-                );
-            }
-            if (
-                !searchResponse.ok
-            ) {
-                throw new Error(
-                    "Market search failed."
-                );
-            }
-            const searchData =
-                await searchResponse.json();
-            const coin =
-                (
-                    searchData.coins ||
-                    []
-                ).find(
-                    (item) =>
-                        String(
-                            item.symbol ||
-                            ""
-                        ).toLowerCase() ===
-                        normalized.toLowerCase()
-                );
-            if (!coin) {
-                throw new Error(
-                    "Ticker not found."
-                );
-            }
-            resolvedCoinId =
-                coin.id;
-        }
-        const marketResponse =
-            await fetch(
-                `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(
-                    resolvedCoinId
-                )}&price_change_percentage=7d`,
-                {
-                    signal:
-                        controller.signal,
-                }
-            );
-        if (
-            marketResponse.status ===
-            429
-        ) {
-            throw new Error(
-                "Market data is rate-limited. Try again shortly."
-            );
-        }
-        if (
-            !marketResponse.ok
-        ) {
-            throw new Error(
-                "Market data request failed."
-            );
-        }
-        const data =
-            await marketResponse.json();
-        const marketData =
-            data?.[0];
-        if (!marketData) {
-            throw new Error(
-                "Market data returned no result."
-            );
-        }
-        if (reportPrice) {
-            reportPrice.textContent =
-                formatUsd(
-                    marketData.current_price
-                );
-        }
-        if (reportChange) {
-            const change =
-                safeNumber(
-                    marketData.price_change_percentage_24h,
-                    0
-                );
-            reportChange.textContent =
-                `${
-                    change >= 0
-                        ? "+"
-                        : ""
-                }${change.toFixed(
-                    2
-                )}%`;
-            reportChange.classList.toggle(
-                "positive",
-                change >= 0
-            );
-            reportChange.classList.toggle(
-                "negative",
-                change < 0
-            );
-        }
-        if (reportVolume) {
-            reportVolume.textContent =
-                `24H VOL ${formatUsd(
-                    marketData.total_volume
-                )}`;
-        }
-        if (reportRiskScore) {
-            const score =
-                calculateMarketRiskScore(
-                    marketData
-                );
-            const strong =
-                reportRiskScore.querySelector(
-                    "strong"
-                );
-            if (strong) {
-                strong.textContent =
-                    score;
-            }
-            reportRiskScore.classList.remove(
-                "risk-score-green",
-                "risk-score-yellow",
-                "risk-score-red"
-            );
-            reportRiskScore.classList.add(
-                score <= 35
-                    ? "risk-score-green"
-                    : score <= 69
-                        ? "risk-score-yellow"
-                        : "risk-score-red"
-            );
-        }
-        return marketData;
-    } finally {
-        clearTimeout(
-            timeout
-        );
-    }
-}
-/*
-==========================================================
-DASHBOARD API
-==========================================================
-*/
-async function parseResponse(
-    response
-) {
-    const contentType =
-        response.headers.get(
-            "content-type"
-        ) || "";
-    if (
-        contentType.includes(
-            "application/json"
-        )
-    ) {
-        return await response.json();
-    }
-    const text =
-        await response.text();
-    return {
-        success: false,
-        message:
-            text ||
-            `Request failed with status ${response.status}.`,
-    };
-}
-async function loadDashboard() {
-    const response =
-        await fetch(
-            apiUrl(
-                "/api/dashboard"
-            ),
-            requestOptions({
-                method: "GET",
-                headers: {
-                    Accept:
-                        "application/json",
-                },
-            })
-        );
-    if (
-        response.status ===
-        401
-    ) {
-        logoutAndStop();
+
         return null;
     }
-    const payload =
-        await parseResponse(
-            response
-        );
-    if (!response.ok) {
-        throw new Error(
-            payload.message ||
-            "Unable to load dashboard."
-        );
-    }
-    renderDashboard(
-        payload
-    );
-    renderHistory(
-        payload.history || []
-    );
-    return payload;
-}
-async function initializeDashboardOnce() {
-    if (
-        dashboardInitialized ||
-        !isDashboardPage
-    ) {
-        return;
-    }
-    dashboardInitialized =
-        true;
-    try {
-        await loadDashboard();
-    } catch (error) {
-        console.error(
-            "Dashboard initialization failed:",
-            error
-        );
-    }
-}
-/*
-==========================================================
-ANALYSIS FORM
-==========================================================
-*/
-if (form) {
-    form.addEventListener(
-        "submit",
-        async (event) => {
-            event.preventDefault();
-            const button =
-                form.querySelector(
-                    ".analyze-button"
-                );
-            const buttonText =
-                button?.querySelector(
-                    ".button-text"
-                );
-            const token =
-                input?.value
-                    .trim()
-                    .toUpperCase() ||
-                "";
-            if (
-                !button ||
-                !token ||
-                form.dataset.submitting ===
-                    "true"
-            ) {
-                return;
-            }
-            form.dataset.submitting =
-                "true";
-            button.disabled =
-                true;
-            button.classList.add(
-                "is-loading"
-            );
-            if (buttonText) {
-                buttonText.textContent =
-                    "Analyzing...";
-            }
-            startProgress();
-            try {
-                const response =
-                    await fetch(
-                        apiUrl(
-                            "/api/dashboard"
-                        ),
-                        requestOptions({
-                            method:
-                                "POST",
-                            headers: {
-                                "Content-Type":
-                                    "application/json",
-                                Accept:
-                                    "application/json",
-                                "X-Requested-With":
-                                    "XMLHttpRequest",
-                            },
-                            body:
-                                JSON.stringify(
-                                    {
-                                        token_symbol:
-                                            token,
-                                    }
-                                ),
-                        })
-                    );
-                if (
-                    response.status ===
-                    401
-                ) {
-                    logoutAndStop();
-                    return;
-                }
-                const payload =
-                    await parseResponse(
-                        response
-                    );
-                if (
-                    !response.ok ||
-                    payload.success === false
-                ) {
-                    throw new Error(
-                        payload.message ||
-                        payload.error ||
-                        `Analysis failed (${response.status}).`
-                    );
-                }
-                /*
-                Keep progress visible long enough
-                for the successful transition to feel
-                intentional.
-                */
-                updateProgress({
-                    percent: 100,
-                    stage: "COMPLETE",
-                    message:
-                        "Risk intelligence report ready.",
-                    active: 3,
-                });
-                renderDashboard(
-                    payload
-                );
-                renderHistory(
-                    payload.history ||
-                    []
-                );
-                /*
-                Market data should not destroy an
-                otherwise successful AI analysis.
-                */
-                try {
-                    await loadMarketData(
-                        token
-                    );
-                } catch (
-                    marketError
-                ) {
-                    console.warn(
-                        "Market data unavailable:",
-                        marketError
-                    );
-                }
-                await new Promise(
-                    (resolve) =>
-                        setTimeout(
-                            resolve,
-                            450
-                        )
-                );
-            } catch (error) {
-                console.error(
-                    "Analysis request failed:",
-                    error
-                );
-                window.alert(
-                    error?.message ||
-                    "Unable to complete analysis."
-                );
-            } finally {
-                stopProgress();
-                form.dataset.submitting =
-                    "false";
-                button.disabled =
-                    false;
-                button.classList.remove(
-                    "is-loading"
-                );
-                if (buttonText) {
-                    buttonText.textContent =
-                        "Analyze";
-                }
-            }
-        }
-    );
-}
-/*
-==========================================================
-INITIAL LOAD
-==========================================================
-*/
-initializeDashboardOnce();
-/*
-==========================================================
-HISTORY DELETE
-==========================================================
-*/
-const historyBody =
-    document.querySelector(
-        "#history-tbody"
-    );
-async function deleteReport(
-    reportId,
-    button
-) {
-    if (!reportId) return;
-    if (
-        !window.confirm(
-            "Delete this analysis report? This cannot be undone."
-        )
-    ) {
-        return;
-    }
-    if (button) {
-        button.disabled =
-            true;
-    }
-    try {
-        const response =
-            await fetch(
-                apiUrl(
-                    `/api/history/${encodeURIComponent(
-                        reportId
-                    )}/delete`
-                ),
-                requestOptions({
-                    method:
-                        "POST",
-                    headers: {
-                        Accept:
-                            "application/json",
-                    },
-                })
-            );
-        if (
-            response.status ===
-            401
-        ) {
-            logoutAndStop();
+
+    function saveToken(token) {
+        if (!token) {
             return;
         }
-        const payload =
-            await parseResponse(
-                response
-            );
-        if (!response.ok) {
-            throw new Error(
-                payload.message ||
-                "Unable to delete report."
-            );
+
+        localStorage.setItem("token", token);
+        localStorage.setItem("auth_token", token);
+
+        state.token = token;
+    }
+
+    function clearToken() {
+        TOKEN_KEYS.forEach((key) => {
+            localStorage.removeItem(key);
+        });
+
+        state.token = null;
+    }
+
+    function processOAuthToken() {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get("token");
+
+        if (!token) {
+            return;
         }
-        await loadDashboard();
-    } catch (error) {
-        console.error(
-            "Delete failed:",
-            error
-        );
-        if (button) {
-            button.disabled =
-                false;
-        }
-        window.alert(
-            error.message ||
-            "Unable to delete report."
+
+        saveToken(token);
+
+        params.delete("token");
+
+        const query = params.toString();
+
+        const cleanURL =
+            window.location.pathname +
+            (query ? `?${query}` : "");
+
+        window.history.replaceState(
+            {},
+            document.title,
+            cleanURL
         );
     }
-}
-if (historyBody) {
-    historyBody.addEventListener(
-        "click",
-        async (event) => {
-            const button =
-                event.target.closest(
-                    "[data-delete-report]"
-                );
-            if (!button) return;
-            await deleteReport(
-                button.dataset
-                    .deleteReport,
-                button
+
+    /* ---------------------------------------------------------
+       API
+       --------------------------------------------------------- */
+
+    function buildAPIURL(path) {
+        const normalized =
+            String(path || "").startsWith("/")
+                ? path
+                : `/${path}`;
+
+        return `${API_BASE_URL}${normalized}`;
+    }
+
+    async function apiRequest(path, options = {}) {
+        const controller = new AbortController();
+
+        const timeoutId = window.setTimeout(() => {
+            controller.abort();
+        }, API_TIMEOUT);
+
+        const headers = new Headers(
+            options.headers || {}
+        );
+
+        if (options.body && !headers.has("Content-Type")) {
+            headers.set(
+                "Content-Type",
+                "application/json"
             );
         }
-    );
-}
-const deleteCurrentButton =
-    document.querySelector(
-        "#delete-current-report"
-    );
-if (deleteCurrentButton) {
-    deleteCurrentButton.addEventListener(
-        "click",
-        async (event) => {
-            event.preventDefault();
-            if (!currentReportId) {
-                return;
+
+        const token = state.token || getToken();
+
+        if (token) {
+            headers.set(
+                "Authorization",
+                `Bearer ${token}`
+            );
+        }
+
+        try {
+            const response = await fetch(
+                buildAPIURL(path),
+                {
+                    ...options,
+                    headers,
+                    credentials: "include",
+                    signal: controller.signal
+                }
+            );
+
+            let payload = null;
+
+            const contentType =
+                response.headers.get("content-type") || "";
+
+            if (contentType.includes("application/json")) {
+                try {
+                    payload = await response.json();
+                } catch {
+                    payload = null;
+                }
             }
-            await deleteReport(
-                currentReportId,
-                deleteCurrentButton
+
+            if (response.status === 401) {
+                clearToken();
+
+                if (isDashboardPage()) {
+                    window.location.replace("index.html");
+                }
+
+                throw new Error(
+                    "Your session has expired. Please sign in again."
+                );
+            }
+
+            if (!response.ok) {
+                const message =
+                    payload?.error ||
+                    payload?.message ||
+                    `Request failed (${response.status}).`;
+
+                throw new Error(message);
+            }
+
+            return payload;
+        } catch (error) {
+            if (error.name === "AbortError") {
+                throw new Error(
+                    "The request timed out. Please try again."
+                );
+            }
+
+            throw error;
+        } finally {
+            window.clearTimeout(timeoutId);
+        }
+    }
+
+    /* ---------------------------------------------------------
+       FORM / ERROR UI
+       --------------------------------------------------------- */
+
+    function showError(message) {
+        const element = getElement("analysis-error");
+
+        if (!element) {
+            return;
+        }
+
+        element.textContent = message || "";
+        element.hidden = !message;
+    }
+
+    function setAnalyzeLoading(loading) {
+        const button =
+            getElement("analyze-button");
+
+        const loader =
+            getElement("button-loader");
+
+        if (button) {
+            button.disabled = loading;
+            button.classList.toggle(
+                "is-loading",
+                loading
             );
         }
-    );
-}
-/*
-==========================================================
-3D POINTER EFFECT
-==========================================================
-*/
-const cards =
-    document.querySelectorAll(
-        ".search-card, " +
-        ".intelligence-report, " +
-        ".history-card, " +
-        ".report-panel, " +
-        ".metric-card, " +
-        ".risk-hero-card"
-    );
-cards.forEach(
-    (card) => {
-        card.addEventListener(
-            "pointermove",
-            (event) => {
-                const rect =
-                    card.getBoundingClientRect();
+
+        if (loader) {
+            loader.hidden = !loading;
+        }
+    }
+
+    /* ---------------------------------------------------------
+       GOOGLE LOGIN
+       --------------------------------------------------------- */
+
+    function setupGoogleLogin() {
+        queryAll("[data-google-login]").forEach(
+            (link) => {
+                link.setAttribute(
+                    "href",
+                    buildAPIURL("/api/auth/google")
+                );
+            }
+        );
+    }
+
+    /* ---------------------------------------------------------
+       LOGOUT
+       --------------------------------------------------------- */
+
+    function setupLogout() {
+        const button =
+            getElement("logout-button");
+
+        if (!button) {
+            return;
+        }
+
+        button.addEventListener(
+            "click",
+            async () => {
+                button.disabled = true;
+
+                try {
+                    await apiRequest(
+                        "/api/auth/logout",
+                        {
+                            method: "POST"
+                        }
+                    );
+                } catch (error) {
+                    console.warn(
+                        "Logout request failed:",
+                        error
+                    );
+                } finally {
+                    clearToken();
+
+                    window.location.replace(
+                        "index.html"
+                    );
+                }
+            }
+        );
+    }
+
+    /* ---------------------------------------------------------
+       USER
+       --------------------------------------------------------- */
+
+    function renderUser(user) {
+        if (!user) {
+            return;
+        }
+
+        state.user = user;
+
+        setText(
+            "user-name",
+            user.username ||
+            user.name ||
+            "User"
+        );
+
+        setText(
+            "user-email",
+            user.email || ""
+        );
+
+        const avatar =
+            getElement("user-avatar");
+
+        if (!avatar) {
+            return;
+        }
+
+        const name =
+            user.username ||
+            user.name ||
+            user.email ||
+            "U";
+
+        avatar.textContent =
+            String(name)
+                .charAt(0)
+                .toUpperCase();
+
+        if (user.avatar_url) {
+            avatar.style.backgroundImage =
+                `url("${String(user.avatar_url)
+                    .replace(/"/g, '\\"')}")`;
+
+            avatar.style.backgroundSize =
+                "cover";
+
+            avatar.style.backgroundPosition =
+                "center";
+
+            avatar.textContent = "";
+        } else {
+            avatar.style.backgroundImage = "";
+        }
+    }
+
+    async function loadUser() {
+        const payload =
+            await apiRequest("/api/auth/me");
+
+        if (payload?.user) {
+            renderUser(payload.user);
+        }
+
+        return payload;
+    }
+
+    /* ---------------------------------------------------------
+       PROGRESS OVERLAY
+       --------------------------------------------------------- */
+
+    function ensureProgressOverlay() {
+        if (getElement("analysis-progress")) {
+            return;
+        }
+
+        const overlay =
+            document.createElement("div");
+
+        overlay.id = "analysis-progress";
+        overlay.hidden = true;
+
+        overlay.innerHTML = `
+            <div class="progress-overlay">
+                <div class="progress-card">
+                    <div class="progress-eyebrow">
+                        CRYPTORISK AI
+                    </div>
+
+                    <h3 id="progress-title">
+                        Preparing analysis
+                    </h3>
+
+                    <div class="progress-track">
+                        <div id="progress-fill"></div>
+                    </div>
+
+                    <div class="progress-meta">
+                        <span id="progress-percent">
+                            0%
+                        </span>
+
+                        <span>
+                            EVIDENCE ENGINE
+                        </span>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+    }
+
+    function updateProgress(title, percent) {
+        ensureProgressOverlay();
+
+        setText(
+            "progress-title",
+            title
+        );
+
+        setText(
+            "progress-percent",
+            `${percent}%`
+        );
+
+        const fill =
+            getElement("progress-fill");
+
+        if (fill) {
+            const bounded =
+                Math.max(
+                    0,
+                    Math.min(100, Number(percent) || 0)
+                );
+
+            fill.style.width =
+                `${bounded}%`;
+        }
+    }
+
+    function showProgress() {
+        ensureProgressOverlay();
+
+        setHidden(
+            "analysis-progress",
+            false
+        );
+    }
+
+    function hideProgress() {
+        setHidden(
+            "analysis-progress",
+            true
+        );
+    }
+
+    /* ---------------------------------------------------------
+       FORMATTERS
+       --------------------------------------------------------- */
+
+    function numeric(value) {
+        const number = Number(value);
+
+        return Number.isFinite(number)
+            ? number
+            : null;
+    }
+
+    function formatPrice(value) {
+        const number = numeric(value);
+
+        if (number === null) {
+            return "—";
+        }
+
+        if (number >= 1) {
+            return `$${number.toLocaleString(
+                "en-US",
+                {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }
+            )}`;
+        }
+
+        if (number >= 0.01) {
+            return `$${number.toLocaleString(
+                "en-US",
+                {
+                    minimumFractionDigits: 4,
+                    maximumFractionDigits: 4
+                }
+            )}`;
+        }
+
+        if (number > 0) {
+            return `$${number.toPrecision(6)}`;
+        }
+
+        return "$0.00";
+    }
+
+    function formatCompact(value) {
+        const number = numeric(value);
+
+        if (number === null) {
+            return "—";
+        }
+
+        const absolute =
+            Math.abs(number);
+
+        if (absolute >= 1e12) {
+            return `$${(
+                number / 1e12
+            ).toFixed(2)}T`;
+        }
+
+        if (absolute >= 1e9) {
+            return `$${(
+                number / 1e9
+            ).toFixed(2)}B`;
+        }
+
+        if (absolute >= 1e6) {
+            return `$${(
+                number / 1e6
+            ).toFixed(2)}M`;
+        }
+
+        if (absolute >= 1e3) {
+            return `$${(
+                number / 1e3
+            ).toFixed(2)}K`;
+        }
+
+        return `$${number.toFixed(2)}`;
+    }
+
+    function formatPercent(value) {
+        const number = numeric(value);
+
+        if (number === null) {
+            return "—";
+        }
+
+        const sign =
+            number > 0
+                ? "+"
+                : "";
+
+        return `${sign}${number.toFixed(2)}%`;
+    }
+
+    function formatDate(value) {
+        if (!value) {
+            return "—";
+        }
+
+        const date =
+            new Date(value);
+
+        if (
+            Number.isNaN(
+                date.getTime()
+            )
+        ) {
+            return "—";
+        }
+
+        return date.toLocaleString(
+            "en-IN",
+            {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+            }
+        );
+    }
+
+    /* ---------------------------------------------------------
+       RISK HELPERS
+       --------------------------------------------------------- */
+
+    function normalizeSeverity(value) {
+        return String(
+            value || ""
+        )
+            .trim()
+            .toLowerCase();
+    }
+
+    function riskClass(severity) {
+        const value =
+            normalizeSeverity(severity);
+
+        if (value.includes("critical")) {
+            return "risk-critical";
+        }
+
+        if (value.includes("high")) {
+            return "risk-high";
+        }
+
+        if (value.includes("moderate")) {
+            return "risk-moderate";
+        }
+
+        if (value.includes("low")) {
+            return "risk-low";
+        }
+
+        return "";
+    }
+
+    function applyRiskClass(element, severity) {
+        if (!element) {
+            return;
+        }
+
+        removeClasses(
+            element.id,
+            [
+                "risk-low",
+                "risk-moderate",
+                "risk-high",
+                "risk-critical"
+            ]
+        );
+
+        const className =
+            riskClass(severity);
+
+        if (className) {
+            element.classList.add(
+                className
+            );
+        }
+    }
+
+    function setChangeClass(id, value) {
+        const element =
+            getElement(id);
+
+        if (!element) {
+            return;
+        }
+
+        element.classList.remove(
+            "positive",
+            "negative",
+            "neutral"
+        );
+
+        const number =
+            numeric(value);
+
+        if (number === null) {
+            element.classList.add(
+                "neutral"
+            );
+        } else if (number > 0) {
+            element.classList.add(
+                "positive"
+            );
+        } else if (number < 0) {
+            element.classList.add(
+                "negative"
+            );
+        } else {
+            element.classList.add(
+                "neutral"
+            );
+        }
+    }
+
+    function setRiskBar(id, value) {
+        const element =
+            getElement(id);
+
+        if (!element) {
+            return;
+        }
+
+        const number =
+            numeric(value);
+
+        if (number === null) {
+            element.style.width =
+                "0%";
+
+            return;
+        }
+
+        const bounded =
+            Math.max(
+                0,
+                Math.min(100, number)
+            );
+
+        element.style.width =
+            `${bounded}%`;
+    }
+
+    /* ---------------------------------------------------------
+       REPORT VISIBILITY
+       --------------------------------------------------------- */
+
+    function setReportVisible(visible) {
+        const report =
+            getElement(
+                "intelligence-report"
+            );
+
+        if (!report) {
+            return;
+        }
+
+        report.hidden = !visible;
+
+        report.classList.toggle(
+            "report-visible",
+            Boolean(visible)
+        );
+    }
+
+    /* ---------------------------------------------------------
+       REPORT EXTRACTION
+       --------------------------------------------------------- */
+
+    function extractReport(payload) {
+        if (!payload) {
+            return null;
+        }
+
+        return (
+            payload.latest ||
+            payload.analysis ||
+            payload.report ||
+            null
+        );
+    }
+
+    /* ---------------------------------------------------------
+       RENDER REPORT
+       --------------------------------------------------------- */
+
+    function renderReport(report) {
+        if (!report) {
+            setReportVisible(false);
+            return;
+        }
+
+        state.report = report;
+
+        setReportVisible(true);
+
+        renderIdentity(report);
+        renderMarket(report);
+        renderRisk(report);
+        renderStress(report);
+        renderAutopsy(report);
+
+        /* IMPORTANT:
+           Data quality is rendered here so every
+           report path updates it automatically. */
+        renderDataQuality(report);
+    }
+
+    /* ---------------------------------------------------------
+       IDENTITY
+       --------------------------------------------------------- */
+
+    function renderIdentity(report) {
+        const asset =
+            report.asset || {};
+
+        const profile =
+            report.risk_profile || {};
+
+        const ai =
+            report.ai || {};
+
+        const symbol =
+            asset.symbol || "—";
+
+        setText(
+            "report-token",
+            symbol
+        );
+
+        setText(
+            "report-outlook",
+            ai.risk_regime ||
+            profile.severity ||
+            "UNAVAILABLE"
+        );
+
+        setText(
+            "autopsy-token",
+            `${symbol} / LIVE EVIDENCE`
+        );
+
+        setText(
+            "autopsy-summary",
+            ai.executive_summary ||
+            "No executive summary is available."
+        );
+
+        document.title =
+            `${symbol} Risk Intelligence | CryptoRisk AI`;
+    }
+
+    /* ---------------------------------------------------------
+       MARKET
+       --------------------------------------------------------- */
+
+    function renderMarket(report) {
+        const market =
+            report.market || {};
+
+        const change =
+            numeric(
+                market.price_change_24h_pct
+            );
+
+        setText(
+            "report-price",
+            formatPrice(
+                market.current_price_usd
+            )
+        );
+
+        setText(
+            "report-change",
+            change === null
+                ? "—"
+                : formatPercent(change)
+        );
+
+        setChangeClass(
+            "report-change",
+            change
+        );
+
+        setText(
+            "report-volume",
+            formatCompact(
+                market.total_volume_usd
+            )
+        );
+
+        setText(
+            "report-market-cap",
+            formatCompact(
+                market.market_cap_usd
+            )
+        );
+
+        setText(
+            "report-change-7d",
+            formatPercent(
+                market.price_change_7d_pct
+            )
+        );
+
+        setText(
+            "report-high",
+            formatPrice(
+                market.high_24h_usd
+            )
+        );
+
+        setText(
+            "report-low",
+            formatPrice(
+                market.low_24h_usd
+            )
+        );
+
+        const status =
+            getElement("market-status");
+
+        if (status) {
+            status.textContent =
+                market.source
+                    ? `LIVE · ${market.source}`
+                    : "LIVE MARKET DATA";
+        }
+
+        setText(
+            "market-live-status",
+            market.source
+                ? `LIVE · ${market.source}`
+                : "LIVE"
+        );
+
+        setText(
+            "market-updated",
+            market.timestamp
+                ? `Updated ${formatDate(
+                    market.timestamp
+                )}`
+                : "Live market data"
+        );
+
+        setText(
+            "data-source",
+            market.source ||
+            "Unavailable"
+        );
+    }
+
+    /* ---------------------------------------------------------
+       RISK
+       --------------------------------------------------------- */
+
+    function renderRisk(report) {
+        const profile =
+            report.risk_profile || {};
+
+        const pillars =
+            profile.pillars || {};
+
+        const score =
+            numeric(
+                profile.overall_score
+            );
+
+        setText(
+            "report-risk-score",
+            score === null
+                ? "—"
+                : Math.round(score)
+        );
+
+        setText(
+            "report-risk-label",
+            profile.severity ||
+            "UNAVAILABLE"
+        );
+
+        const scoreElement =
+            getElement(
+                "report-risk-score"
+            );
+
+        const labelElement =
+            getElement(
+                "report-risk-label"
+            );
+
+        applyRiskClass(
+            scoreElement,
+            profile.severity
+        );
+
+        applyRiskClass(
+            labelElement,
+            profile.severity
+        );
+
+        const volatility =
+            pillars.volatility?.score;
+
+        const liquidity =
+            pillars.liquidity?.score;
+
+        const structural =
+            pillars.structural?.score;
+
+        const sensitivity =
+            pillars.market_sensitivity?.score;
+
+        setText(
+            "pillar-volatility-value",
+            numeric(volatility) === null
+                ? "N/A"
+                : Math.round(
+                    Number(volatility)
+                )
+        );
+
+        setText(
+            "pillar-liquidity-value",
+            numeric(liquidity) === null
+                ? "N/A"
+                : Math.round(
+                    Number(liquidity)
+                )
+        );
+
+        setText(
+            "pillar-contract-value",
+            numeric(structural) === null
+                ? "N/A"
+                : Math.round(
+                    Number(structural)
+                )
+        );
+
+        setText(
+            "pillar-composite-value",
+            numeric(sensitivity) === null
+                ? "N/A"
+                : Math.round(
+                    Number(sensitivity)
+                )
+        );
+
+        setRiskBar(
+            "pillar-volatility-bar",
+            volatility
+        );
+
+        setRiskBar(
+            "pillar-liquidity-bar",
+            liquidity
+        );
+
+        setRiskBar(
+            "pillar-contract-bar",
+            structural
+        );
+
+        setRiskBar(
+            "pillar-composite-bar",
+            sensitivity
+        );
+
+        renderRiskDrivers(report);
+    }
+
+    /* ---------------------------------------------------------
+       RISK DRIVERS
+       --------------------------------------------------------- */
+
+    function renderRiskDrivers(report) {
+        const container =
+            getElement("risk-drivers");
+
+        if (!container) {
+            return;
+        }
+
+        container.replaceChildren();
+
+        const drivers =
+            Array.isArray(
+                report.risk_drivers
+            )
+                ? report.risk_drivers
+                : [];
+
+        if (!drivers.length) {
+            const empty =
+                document.createElement("div");
+
+            empty.className =
+                "risk-driver empty";
+
+            empty.textContent =
+                "No additional quantified risk drivers available.";
+
+            container.appendChild(empty);
+
+            return;
+        }
+
+        drivers
+            .slice(0, 6)
+            .forEach((driver) => {
+                const card =
+                    document.createElement("div");
+
+                card.className =
+                    "risk-driver";
+
+                const title =
+                    document.createElement("strong");
+
+                const detail =
+                    document.createElement("span");
+
                 if (
-                    !rect.width ||
-                    !rect.height
+                    typeof driver ===
+                    "string"
                 ) {
+                    title.textContent =
+                        driver;
+
+                    detail.textContent =
+                        "Evidence signal";
+                } else {
+                    title.textContent =
+                        driver.name ||
+                        driver.title ||
+                        driver.factor ||
+                        "Risk driver";
+
+                    detail.textContent =
+                        driver.detail ||
+                        driver.description ||
+                        driver.reason ||
+                        "Quantitative risk signal";
+                }
+
+                card.appendChild(title);
+                card.appendChild(detail);
+
+                container.appendChild(card);
+            });
+        }
+
+        /* ============================================================
+   CRYPTORISK AI
+   FRONTEND INTELLIGENCE TERMINAL
+   PART 2 / 2
+   ============================================================ */
+
+    /* ---------------------------------------------------------
+       STRESS TEST
+       --------------------------------------------------------- */
+
+    function renderStress(report) {
+        const stress =
+            report.stress_test || {};
+
+        const beta =
+            numeric(stress.beta);
+
+        const drawdown =
+            numeric(
+                stress.expected_drawdown_pct
+            );
+
+        setText(
+            "stress-beta",
+            beta === null
+                ? "—"
+                : `${beta.toFixed(2)}x`
+        );
+
+        setText(
+            "stress-drawdown",
+            drawdown === null
+                ? "—"
+                : formatPercent(drawdown)
+        );
+
+        setText(
+            "stress-resilience",
+            stress.resilience_label ||
+            "UNAVAILABLE"
+        );
+
+        setText(
+            "stress-confidence",
+            stress.confidence ||
+            "—"
+        );
+
+        const ai =
+            report.ai || {};
+
+        setText(
+            "stress-verdict",
+            ai.stress_interpretation ||
+            stress.verdict ||
+            buildStressVerdict(stress)
+        );
+    }
+
+    function buildStressVerdict(stress) {
+        const scenarios =
+            Array.isArray(stress.scenarios)
+                ? stress.scenarios
+                : [];
+
+        if (!scenarios.length) {
+            return "Stress-test interpretation is unavailable.";
+        }
+
+        const scenario =
+            scenarios[0] || {};
+
+        const scenarioDrawdown =
+            numeric(
+                scenario.expected_drawdown_pct
+            );
+
+        if (scenarioDrawdown !== null) {
+            return (
+                `The selected stress scenario estimates ` +
+                `an expected drawdown of ` +
+                `${formatPercent(scenarioDrawdown)}.`
+            );
+        }
+
+        return (
+            "Stress scenario data is available for review."
+        );
+    }
+
+    /* ---------------------------------------------------------
+       AUTOPSY / FORENSIC VIEW
+       --------------------------------------------------------- */
+
+    function renderAutopsy(report) {
+        const ai =
+            report.ai || {};
+
+        const security =
+            report.security || {};
+
+        setText(
+            "autopsy-summary",
+            ai.executive_summary ||
+            "No executive summary is available."
+        );
+
+        const container =
+            getElement("forensic-cards");
+
+        if (!container) {
+            return;
+        }
+
+        container.replaceChildren();
+
+        const secondary =
+            Array.isArray(
+                ai.secondary_risk_drivers
+            )
+                ? ai.secondary_risk_drivers
+                : [];
+
+        const securityFlags =
+            Array.isArray(
+                security.red_flags
+            )
+                ? security.red_flags
+                : [];
+
+        const liquidityDetail =
+            report
+                .risk_profile
+                ?.pillars
+                ?.liquidity
+                ?.detail;
+
+        const cards = [
+            {
+                title: "MARKET STRUCTURE",
+                text:
+                    ai.what_matters_now ||
+                    ai.primary_risk_driver ||
+                    "No market-structure interpretation available."
+            },
+            {
+                title: "RISK SIGNALS",
+                text:
+                    secondary[0] ||
+                    securityFlags[0] ||
+                    ai.primary_risk_driver ||
+                    "No additional risk signal available."
+            },
+            {
+                title: "LIQUIDITY PROFILE",
+                text:
+                    liquidityDetail ||
+                    ai.watch_next ||
+                    "Liquidity evidence should be monitored continuously."
+            }
+        ];
+
+        cards.forEach((item) => {
+            const card =
+                document.createElement("article");
+
+            card.className =
+                "forensic-card";
+
+            const heading =
+                document.createElement("span");
+
+            heading.className =
+                "forensic-label";
+
+            heading.textContent =
+                item.title;
+
+            const body =
+                document.createElement("p");
+
+            body.textContent =
+                String(item.text);
+
+            card.appendChild(heading);
+            card.appendChild(body);
+
+            container.appendChild(card);
+        });
+    }
+
+    /* ---------------------------------------------------------
+       DATA QUALITY
+       --------------------------------------------------------- */
+
+    function renderDataQuality(report) {
+        const quality =
+            report.data_quality || {};
+
+        const evidence =
+            report.evidence || {};
+
+        const confidence =
+            quality.confidence ||
+            report.risk_profile?.confidence ||
+            "—";
+
+        const source =
+            quality.source ||
+            report.market?.source ||
+            evidence.market_source ||
+            "—";
+
+        setText(
+            "data-confidence",
+            confidence
+        );
+
+        setText(
+            "market-source",
+            source
+        );
+
+        const freshness =
+            numeric(
+                quality.freshness_seconds
+            );
+
+        setText(
+            "data-freshness",
+            freshness === null
+                ? "—"
+                : `${Math.round(
+                    freshness
+                )}s`
+        );
+
+        const missing =
+            Array.isArray(
+                quality.missing_signals
+            )
+                ? quality.missing_signals
+                : [];
+
+        const container =
+            getElement("missing-signals");
+
+        if (!container) {
+            return;
+        }
+
+        container.replaceChildren();
+
+        if (!missing.length) {
+            const item =
+                document.createElement("span");
+
+            item.textContent =
+                "No major missing signals reported.";
+
+            container.appendChild(item);
+
+            return;
+        }
+
+        missing
+            .slice(0, 8)
+            .forEach((signal) => {
+                const item =
+                    document.createElement("span");
+
+                item.textContent =
+                    String(signal);
+
+                container.appendChild(item);
+            });
+    }
+
+    /* ---------------------------------------------------------
+       HISTORY
+       --------------------------------------------------------- */
+
+    function renderHistory(history) {
+        const tbody =
+            getElement("history-tbody");
+
+        if (!tbody) {
+            return;
+        }
+
+        const rows =
+            Array.isArray(history)
+                ? history
+                : [];
+
+        setText(
+            "history-count",
+            rows.length
+        );
+
+        tbody.replaceChildren();
+
+        if (!rows.length) {
+            const row =
+                document.createElement("tr");
+
+            const cell =
+                document.createElement("td");
+
+            cell.colSpan = 5;
+            cell.className =
+                "history-empty";
+
+            cell.textContent =
+                "No analyses yet.";
+
+            row.appendChild(cell);
+            tbody.appendChild(row);
+
+            return;
+        }
+
+        rows.forEach((item) => {
+            const row =
+                document.createElement("tr");
+
+            const asset =
+                document.createElement("td");
+
+            const risk =
+                document.createElement("td");
+
+            const outlook =
+                document.createElement("td");
+
+            const date =
+                document.createElement("td");
+
+            const action =
+                document.createElement("td");
+
+            const symbol =
+                item.token_symbol ||
+                item.asset?.symbol ||
+                "—";
+
+            const severity =
+                item.risk_severity ||
+                item.severity ||
+                "—";
+
+            const score =
+                numeric(item.risk_score);
+
+            const trend =
+                item.trend ||
+                item.risk_regime ||
+                "—";
+
+            asset.textContent =
+                String(symbol);
+
+            risk.textContent =
+                score === null
+                    ? String(
+                        severity
+                    ).toUpperCase()
+                    : `${String(
+                        severity
+                    ).toUpperCase()} · ${Math.round(
+                        score
+                    )}`;
+
+            outlook.textContent =
+                String(trend);
+
+            date.textContent =
+                formatDate(
+                    item.created_at
+                );
+
+            const openButton =
+                document.createElement("button");
+
+            openButton.type = "button";
+            openButton.className =
+                "history-action";
+
+            openButton.textContent =
+                "OPEN";
+
+            openButton.addEventListener(
+                "click",
+                () => {
+                    openHistoryReport(
+                        item.id
+                    );
+                }
+            );
+
+            action.appendChild(
+                openButton
+            );
+
+            row.appendChild(asset);
+            row.appendChild(risk);
+            row.appendChild(outlook);
+            row.appendChild(date);
+            row.appendChild(action);
+
+            tbody.appendChild(row);
+        });
+    }
+
+    /* ---------------------------------------------------------
+       OPEN HISTORY REPORT
+       --------------------------------------------------------- */
+
+    async function openHistoryReport(id) {
+        if (!id) {
+            return;
+        }
+
+        try {
+            showError("");
+
+            const payload =
+                await apiRequest(
+                    `/api/history/${encodeURIComponent(
+                        id
+                    )}`
+                );
+
+            const report =
+                extractReport(payload);
+
+            if (!report) {
+                throw new Error(
+                    "This report could not be loaded."
+                );
+            }
+
+            renderReport(report);
+            startLivePolling();
+
+            window.scrollTo({
+                top: 0,
+                behavior: "smooth"
+            });
+
+        } catch (error) {
+            console.error(
+                "History error:",
+                error
+            );
+
+            showError(
+                error.message ||
+                "Unable to load this report."
+            );
+        }
+    }
+
+    /* ---------------------------------------------------------
+       LOAD DASHBOARD
+       --------------------------------------------------------- */
+
+    async function loadDashboard() {
+        try {
+            const payload =
+                await apiRequest(
+                    "/api/dashboard"
+                );
+
+            if (payload?.user) {
+                renderUser(
+                    payload.user
+                );
+            }
+
+            state.history =
+                Array.isArray(
+                    payload?.history
+                )
+                    ? payload.history
+                    : [];
+
+            renderHistory(
+                state.history
+            );
+
+            const report =
+                extractReport(payload);
+
+            if (report) {
+                renderReport(report);
+                startLivePolling();
+            } else {
+                setReportVisible(false);
+            }
+
+        } catch (error) {
+            console.error(
+                "Dashboard loading error:",
+                error
+            );
+
+            showError(
+                error.message ||
+                "Unable to load the dashboard."
+            );
+        }
+    }
+
+    /* ---------------------------------------------------------
+       ANALYSIS
+       --------------------------------------------------------- */
+
+    async function runAnalysis(symbol) {
+        if (
+            state.analysisRunning
+        ) {
+            return;
+        }
+
+        state.analysisRunning = true;
+
+        showError("");
+        setAnalyzeLoading(true);
+        showProgress();
+
+        try {
+            updateProgress(
+                "Fetching live market data",
+                15
+            );
+
+            await delay(250);
+
+            updateProgress(
+                "Computing quantitative signals",
+                35
+            );
+
+            const payload =
+                await apiRequest(
+                    "/api/analyze",
+                    {
+                        method: "POST",
+                        body: JSON.stringify({
+                            token_symbol: symbol
+                        })
+                    }
+                );
+
+            updateProgress(
+                "Running stress model",
+                65
+            );
+
+            await delay(250);
+
+            updateProgress(
+                "Synthesizing evidence",
+                82
+            );
+
+            await delay(250);
+
+            const report =
+                extractReport(payload);
+
+            if (!report) {
+                throw new Error(
+                    "The analysis engine returned no report."
+                );
+            }
+
+            renderReport(report);
+
+            if (
+                Array.isArray(
+                    payload?.history
+                )
+            ) {
+                state.history =
+                    payload.history;
+
+                renderHistory(
+                    state.history
+                );
+            }
+
+            updateProgress(
+                "Saving report",
+                100
+            );
+
+            await delay(400);
+
+            startLivePolling();
+
+        } catch (error) {
+            console.error(
+                "Analysis error:",
+                error
+            );
+
+            showError(
+                error.message ||
+                "Analysis failed. Please try again."
+            );
+
+        } finally {
+            hideProgress();
+            setAnalyzeLoading(false);
+            state.analysisRunning = false;
+        }
+    }
+
+    function delay(milliseconds) {
+        return new Promise(
+            (resolve) => {
+                window.setTimeout(
+                    resolve,
+                    milliseconds
+                );
+            }
+        );
+    }
+
+    /* ---------------------------------------------------------
+       ANALYSIS FORM
+       --------------------------------------------------------- */
+
+    function setupAnalysisForm() {
+        const form =
+            getElement(
+                "analysis-form"
+            );
+
+        if (!form) {
+            return;
+        }
+
+        form.addEventListener(
+            "submit",
+            async (event) => {
+                event.preventDefault();
+
+                const input =
+                    getElement(
+                        "token-symbol"
+                    );
+
+                if (!input) {
                     return;
                 }
-                const x =
-                    event.clientX -
-                    rect.left;
-                const y =
-                    event.clientY -
-                    rect.top;
-                const rotateX =
-                    (
-                        y /
-                            rect.height -
-                        0.5
-                    ) * -2;
-                const rotateY =
-                    (
-                        x /
-                            rect.width -
-                        0.5
-                    ) * 2;
-                card.style.setProperty(
-                    "--mouse-x",
-                    `${x}px`
+
+                const symbol =
+                    String(
+                        input.value || ""
+                    )
+                        .trim()
+                        .toUpperCase();
+
+                input.value =
+                    symbol;
+
+                if (
+                    !/^[A-Z0-9]{2,15}$/.test(
+                        symbol
+                    )
+                ) {
+                    showError(
+                        "Enter a valid token symbol using 2–15 letters or numbers."
+                    );
+
+                    input.focus();
+
+                    return;
+                }
+
+                await runAnalysis(
+                    symbol
                 );
-                card.style.setProperty(
-                    "--mouse-y",
-                    `${y}px`
-                );
-                card.style.transform =
-                    `perspective(1000px)
-                     rotateX(${rotateX}deg)
-                     rotateY(${rotateY}deg)
-                     translateZ(0)`;
             }
         );
-        card.addEventListener(
-            "pointerleave",
-            () => {
-                card.style.transform =
-                    "";
+
+        const input =
+            getElement(
+                "token-symbol"
+            );
+
+        if (input) {
+            input.addEventListener(
+                "input",
+                () => {
+                    input.value =
+                        input.value
+                            .toUpperCase()
+                            .replace(
+                                /[^A-Z0-9]/g,
+                                ""
+                            )
+                            .slice(0, 15);
+
+                    if (
+                        input.value.length >= 2
+                    ) {
+                        showError("");
+                    }
+                }
+            );
+        }
+    }
+
+    /* ---------------------------------------------------------
+       LIVE MARKET REFRESH
+       --------------------------------------------------------- */
+
+    async function refreshLiveMarket() {
+        if (
+            state.liveRefreshing ||
+            !state.report?.asset?.symbol
+        ) {
+            return;
+        }
+
+        state.liveRefreshing = true;
+
+        const symbol =
+            String(
+                state.report.asset.symbol
+            ).toUpperCase();
+
+        try {
+            const payload =
+                await apiRequest(
+                    `/api/market/${encodeURIComponent(
+                        symbol
+                    )}`
+                );
+
+            const market =
+                payload?.market ||
+                payload?.data ||
+                payload;
+
+            if (market) {
+                updateLiveMarket(
+                    market
+                );
+            }
+
+        } catch (error) {
+            console.warn(
+                "Live market refresh failed:",
+                error.message
+            );
+
+        } finally {
+            state.liveRefreshing =
+                false;
+        }
+    }
+
+    function updateLiveMarket(market) {
+        const price =
+            market.current_price_usd ??
+            market.current_price ??
+            market.price;
+
+        const change =
+            market.price_change_24h_pct ??
+            market.price_change_percentage_24h ??
+            market.change_24h;
+
+        const volume =
+            market.total_volume_usd ??
+            market.total_volume ??
+            market.volume;
+
+        setText(
+            "report-price",
+            formatPrice(price)
+        );
+
+        const changeNumber =
+            numeric(change);
+
+        setText(
+            "report-change",
+            changeNumber === null
+                ? "—"
+                : formatPercent(
+                    changeNumber
+                )
+        );
+
+        setChangeClass(
+            "report-change",
+            changeNumber
+        );
+
+        setText(
+            "report-volume",
+            formatCompact(volume)
+        );
+
+        const status =
+            getElement(
+                "market-status"
+            );
+
+        if (status) {
+            status.textContent =
+                market.source
+                    ? `LIVE · ${market.source}`
+                    : "LIVE MARKET DATA";
+        }
+
+        setText(
+            "market-live-status",
+            market.source
+                ? `LIVE · ${market.source}`
+                : "LIVE"
+        );
+
+        setText(
+            "market-updated",
+            market.timestamp
+                ? `Updated ${formatDate(
+                    market.timestamp
+                )}`
+                : "Just refreshed"
+        );
+    }
+
+    function startLivePolling() {
+        stopLivePolling();
+
+        if (
+            !state.report?.asset?.symbol
+        ) {
+            return;
+        }
+
+        refreshLiveMarket();
+
+        state.liveTimer =
+            window.setInterval(
+                refreshLiveMarket,
+                LIVE_REFRESH_INTERVAL
+            );
+    }
+
+    function stopLivePolling() {
+        if (state.liveTimer) {
+            window.clearInterval(
+                state.liveTimer
+            );
+
+            state.liveTimer = null;
+        }
+    }
+
+    /* ---------------------------------------------------------
+       DELETE CURRENT REPORT
+       --------------------------------------------------------- */
+
+    async function deleteCurrentReport() {
+        const button =
+            getElement(
+                "delete-current-report"
+            );
+
+        if (!button) {
+            return;
+        }
+
+        const reportId =
+            state.report?.id ||
+            state.report?.analysis_id ||
+            state.report?.report_id;
+
+        if (!reportId) {
+            showError(
+                "No saved report is selected."
+            );
+
+            return;
+        }
+
+        const confirmed =
+            window.confirm(
+                "Delete this analysis from your history?"
+            );
+
+        if (!confirmed) {
+            return;
+        }
+
+        button.disabled = true;
+
+        try {
+            await apiRequest(
+                `/api/history/${encodeURIComponent(
+                    reportId
+                )}`,
+                {
+                    method: "DELETE"
+                }
+            );
+
+            state.history =
+                state.history.filter(
+                    (item) =>
+                        String(item.id) !==
+                        String(reportId)
+                );
+
+            state.report = null;
+
+            stopLivePolling();
+
+            renderHistory(
+                state.history
+            );
+
+            setReportVisible(
+                false
+            );
+
+            showError("");
+
+        } catch (error) {
+            console.error(
+                "Delete error:",
+                error
+            );
+
+            showError(
+                error.message ||
+                "Unable to delete the report."
+            );
+
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    function setupDelete() {
+        const button =
+            getElement(
+                "delete-current-report"
+            );
+
+        if (!button) {
+            return;
+        }
+
+        button.addEventListener(
+            "click",
+            deleteCurrentReport
+        );
+    }
+
+    /* ---------------------------------------------------------
+       LANDING PAGE
+       --------------------------------------------------------- */
+
+    function setupLandingPage() {
+        queryAll(
+            'a[href^="#"]'
+        ).forEach((link) => {
+            link.addEventListener(
+                "click",
+                (event) => {
+                    const targetID =
+                        link.getAttribute(
+                            "href"
+                        );
+
+                    if (
+                        !targetID ||
+                        targetID === "#"
+                    ) {
+                        return;
+                    }
+
+                    const target =
+                        document.querySelector(
+                            targetID
+                        );
+
+                    if (!target) {
+                        return;
+                    }
+
+                    event.preventDefault();
+
+                    target.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start"
+                    });
+                }
+            );
+        });
+    }
+
+    /* ---------------------------------------------------------
+       REVEAL EFFECTS
+       --------------------------------------------------------- */
+
+    function setupRevealEffects() {
+        const elements =
+            queryAll(
+                ".feature-card, " +
+                ".process-card, " +
+                ".search-card, " +
+                ".intelligence-report, " +
+                ".forensic-card"
+            );
+
+        if (!elements.length) {
+            return;
+        }
+
+        if (
+            !("IntersectionObserver" in window)
+        ) {
+            elements.forEach(
+                (element) => {
+                    element.classList.add(
+                        "is-visible"
+                    );
+                }
+            );
+
+            return;
+        }
+
+        const observer =
+            new IntersectionObserver(
+                (entries) => {
+                    entries.forEach(
+                        (entry) => {
+                            if (
+                                !entry.isIntersecting
+                            ) {
+                                return;
+                            }
+
+                            entry.target.classList.add(
+                                "is-visible"
+                            );
+
+                            observer.unobserve(
+                                entry.target
+                            );
+                        }
+                    );
+                },
+                {
+                    threshold: 0.08
+                }
+            );
+
+        elements.forEach(
+            (element) => {
+                observer.observe(
+                    element
+                );
             }
         );
     }
-);
-/*
-==========================================================
-FLASH MESSAGES
-==========================================================
-*/
-document
-    .querySelectorAll(".flash")
-    .forEach(
-        (flash) => {
-            setTimeout(
-                () => {
-                    flash.style.opacity =
-                        "0";
-                    flash.style.transform =
-                        "translateY(-8px)";
-                    setTimeout(
-                        () =>
-                            flash.remove(),
-                        400
-                    );
-                },
-                7000
+
+    /* ---------------------------------------------------------
+       POINTER / 3D EFFECT
+       --------------------------------------------------------- */
+
+    function setupPointerEffects() {
+        if (
+            window.matchMedia &&
+            window.matchMedia(
+                "(prefers-reduced-motion: reduce)"
+            ).matches
+        ) {
+            return;
+        }
+
+        const cards =
+            queryAll(
+                ".feature-card, " +
+                ".process-card, " +
+                ".search-card, " +
+                ".risk-pillar, " +
+                ".stress-card, " +
+                ".forensic-card"
             );
+
+        cards.forEach((card) => {
+            card.addEventListener(
+                "pointermove",
+                (event) => {
+                    const rect =
+                        card.getBoundingClientRect();
+
+                    if (
+                        !rect.width ||
+                        !rect.height
+                    ) {
+                        return;
+                    }
+
+                    const x =
+                        (
+                            (event.clientX -
+                                rect.left) /
+                                rect.width -
+                            0.5
+                        ) * 2;
+
+                    const y =
+                        (
+                            (event.clientY -
+                                rect.top) /
+                                rect.height -
+                            0.5
+                        ) * 2;
+
+                    card.style.setProperty(
+                        "--pointer-x",
+                        x.toFixed(3)
+                    );
+
+                    card.style.setProperty(
+                        "--pointer-y",
+                        y.toFixed(3)
+                    );
+                }
+            );
+
+            card.addEventListener(
+                "pointerleave",
+                () => {
+                    card.style.removeProperty(
+                        "--pointer-x"
+                    );
+
+                    card.style.removeProperty(
+                        "--pointer-y"
+                    );
+                }
+            );
+        });
+    }
+
+    /* ---------------------------------------------------------
+       DASHBOARD INITIALIZATION
+       --------------------------------------------------------- */
+
+    async function initializeDashboard() {
+        processOAuthToken();
+
+        state.token =
+            getToken();
+
+        if (!state.token) {
+            window.location.replace(
+                "index.html"
+            );
+
+            return;
+        }
+
+        setupGoogleLogin();
+        setupLogout();
+        setupAnalysisForm();
+        setupDelete();
+
+        ensureProgressOverlay();
+
+        try {
+            await loadUser();
+        } catch (error) {
+            console.warn(
+                "Unable to load user:",
+                error.message
+            );
+        }
+
+        await loadDashboard();
+    }
+
+    /* ---------------------------------------------------------
+       LANDING INITIALIZATION
+       --------------------------------------------------------- */
+
+    function initializeLanding() {
+        setupGoogleLogin();
+        setupLandingPage();
+        setupRevealEffects();
+        setupPointerEffects();
+    }
+
+    /* ---------------------------------------------------------
+       APPLICATION INITIALIZATION
+       --------------------------------------------------------- */
+
+    function initialize() {
+        if (isDashboardPage()) {
+            initializeDashboard();
+        } else {
+            initializeLanding();
+        }
+    }
+
+    /* ---------------------------------------------------------
+       CLEANUP
+       --------------------------------------------------------- */
+
+    window.addEventListener(
+        "beforeunload",
+        () => {
+            stopLivePolling();
         }
     );
 
-});
+    /* ---------------------------------------------------------
+       START
+       --------------------------------------------------------- */
+
+    if (
+        document.readyState ===
+        "loading"
+    ) {
+        document.addEventListener(
+            "DOMContentLoaded",
+            initialize,
+            {
+                once: true
+            }
+        );
+    } else {
+        initialize();
+    }
+
+})();

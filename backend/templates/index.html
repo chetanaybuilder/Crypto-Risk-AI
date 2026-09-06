@@ -2,18 +2,51 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="CryptoRisk AI — Premium cryptocurrency risk intelligence powered by AI.">
-    <title>CryptoRisk AI — Intelligence Before The Noise</title>
-    
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <meta
+        name="description"
+        content="CryptoRisk AI — Evidence-driven cryptocurrency risk intelligence."
+    >
+
+    <title>CryptoRisk AI — Risk Intelligence Terminal</title>
+
+    <link
+        rel="preconnect"
+        href="https://fonts.googleapis.com"
+    >
+
+    <link
+        rel="preconnect"
+        href="https://fonts.gstatic.com"
+        crossorigin
+    >
+
+    <link
+        href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
+        rel="stylesheet"
+    >
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
 </head>
+
 <body class="landing-page">
 
     <div class="ambient-canvas" aria-hidden="true"></div>
+    <div class="landing-noise" aria-hidden="true"></div>
+    <div class="grid-background" aria-hidden="true"></div>
+
+    <div class="bg-orb bg-orb-purple" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-cyan" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-blue" aria-hidden="true"></div>
+
     <div class="physics-tokens" aria-hidden="true">
         <span class="physics-token token-btc">₿</span>
         <span class="physics-token token-eth">◆</span>
@@ -21,271 +54,713 @@
         <span class="physics-token token-node">+</span>
     </div>
 
-    <!-- AMBIENT 3D ENVIRONMENT -->
-    <div class="landing-noise"></div>
-    <div class="bg-orb bg-orb-purple"></div>
-    <div class="bg-orb bg-orb-cyan"></div>
-    <div class="bg-orb bg-orb-blue"></div>
-    <div class="grid-background"></div>
+    <div class="floating-object floating-cube" aria-hidden="true"></div>
+    <div class="floating-object floating-ring" aria-hidden="true"></div>
+    <div class="floating-object floating-sphere" aria-hidden="true"></div>
 
-    <!-- Floating 3D objects -->
-    <div class="floating-object floating-cube"></div>
-    <div class="floating-object floating-ring"></div>
-    <div class="floating-object floating-sphere"></div>
 
-    <!-- NAVBAR -->
+    <!-- =========================================================
+         NAVIGATION
+    ========================================================== -->
+
     <header class="landing-navbar">
-        <a href="{{ url_for('home') }}" class="brand">
-            <div class="brand-mark">CR</div>
-            <div class="brand-name">CryptoRisk<span> AI</span></div>
+
+        <a
+            href="{{ url_for('home') }}"
+            class="brand"
+            aria-label="CryptoRisk AI home"
+        >
+
+            <div class="brand-mark">
+                CR
+            </div>
+
+            <div class="brand-name">
+                CryptoRisk<span> AI</span>
+            </div>
+
         </a>
+
+
         <div class="landing-nav-status">
+
             <span class="status-dot"></span>
-            <span>AI RISK INTELLIGENCE</span>
+
+            <span>
+                LIVE RISK INTELLIGENCE
+            </span>
+
         </div>
-        <a href="{{ url_for('google_login') }}" class="nav-login-button">
+
+
+        <a
+            href="{{ url_for('google_login') }}"
+            class="nav-login-button"
+        >
             Sign in
             <span>→</span>
         </a>
+
     </header>
 
-    <!-- HERO -->
+
+    <!-- =========================================================
+         HERO
+    ========================================================== -->
+
     <main>
+
         <section class="hero-section">
+
             <div class="hero-content">
+
                 <div class="hero-eyebrow">
+
                     <span class="hero-eyebrow-dot"></span>
+
                     CRYPTORISK AI / INTELLIGENCE TERMINAL
+
                 </div>
+
+
                 <h1 class="hero-title">
-                    Understand the risk
-                    <span>before the noise.</span>
+
+                    Know the risk
+                    <span>before you act.</span>
+
                 </h1>
+
+
                 <p class="hero-description">
-                    Turn a cryptocurrency symbol into a structured,
-                    AI-powered risk intelligence report designed to
-                    cut through market noise and surface what matters.
+
+                    CryptoRisk AI combines live market data,
+                    quantitative risk models, liquidity signals,
+                    stress testing and AI synthesis into one
+                    evidence-driven cryptocurrency intelligence terminal.
+
                 </p>
+
+
                 <div class="hero-actions">
-                    <a href="{{ url_for('google_login') }}" class="hero-primary-button">
+
+                    <a
+                        href="{{ url_for('google_login') }}"
+                        class="hero-primary-button"
+                    >
+
                         <span class="button-glow"></span>
+
                         <span class="button-content">
-                            <span class="button-icon">◈</span>
+
+                            <span class="button-icon">
+                                ◈
+                            </span>
+
                             Start analyzing
-                            <span class="button-arrow">→</span>
+
+                            <span class="button-arrow">
+                                →
+                            </span>
+
                         </span>
+
                     </a>
-                    <a href="#intelligence" class="hero-secondary-button">
+
+
+                    <a
+                        href="#intelligence"
+                        class="hero-secondary-button"
+                    >
                         Explore intelligence
                         <span>↓</span>
                     </a>
+
                 </div>
+
+
                 <div class="hero-trust-row">
-                    <div class="trust-item">
-                        <span class="trust-icon">✦</span>
-                        <span>Structured AI analysis</span>
-                    </div>
-                    <div class="trust-divider"></div>
+
                     <div class="trust-item">
                         <span class="trust-icon">◉</span>
-                        <span>Personal analysis history</span>
+                        <span>Live market intelligence</span>
                     </div>
+
                     <div class="trust-divider"></div>
+
+                    <div class="trust-item">
+                        <span class="trust-icon">✦</span>
+                        <span>Quantitative risk engine</span>
+                    </div>
+
+                    <div class="trust-divider"></div>
+
                     <div class="trust-item">
                         <span class="trust-icon">◇</span>
-                        <span>Risk-first intelligence</span>
+                        <span>Evidence-backed AI</span>
                     </div>
+
                 </div>
+
             </div>
 
-            <!-- 3D TERMINAL VISUAL -->
+
+            <!-- =================================================
+                 TERMINAL PREVIEW
+            ================================================== -->
+
             <div class="hero-visual">
+
                 <div class="terminal-glow"></div>
+
                 <div class="hero-terminal">
+
                     <div class="terminal-topbar">
+
                         <div class="terminal-dots">
                             <span></span>
                             <span></span>
                             <span></span>
                         </div>
-                        <span>CRYPTORISK / TERMINAL</span>
-                        <span class="terminal-lock">◈</span>
+
+                        <span>
+                            CRYPTORISK / LIVE TERMINAL
+                        </span>
+
+                        <span class="terminal-lock">
+                            ◈
+                        </span>
+
                     </div>
+
+
                     <div class="terminal-body">
+
                         <div class="terminal-command">
-                            <span class="terminal-dollar">$</span>
+
+                            <span class="terminal-dollar">
+                                $
+                            </span>
+
                             analyze BTC
+
                             <span class="terminal-cursor"></span>
+
                         </div>
+
+
                         <div class="terminal-line"></div>
+
+
+                        <div class="terminal-live-row">
+
+                            <span class="status-dot"></span>
+
+                            LIVE MARKET DATA
+
+                            <span>
+                                ●
+                            </span>
+
+                        </div>
+
+
                         <div class="terminal-metrics">
+
                             <div class="terminal-metric">
-                                <span>ASSET</span>
-                                <strong>BTC</strong>
+
+                                <span>
+                                    ASSET
+                                </span>
+
+                                <strong>
+                                    BTC
+                                </strong>
+
                             </div>
+
+
                             <div class="terminal-metric">
-                                <span>RISK</span>
-                                <strong class="metric-high">HIGH</strong>
+
+                                <span>
+                                    PRICE
+                                </span>
+
+                                <strong>
+                                    LIVE
+                                </strong>
+
                             </div>
+
+
                             <div class="terminal-metric">
-                                <span>OUTLOOK</span>
-                                <strong>NEUTRAL</strong>
+
+                                <span>
+                                    RISK
+                                </span>
+
+                                <strong class="metric-high">
+                                    MODEL
+                                </strong>
+
                             </div>
+
                         </div>
+
+
                         <div class="terminal-analysis">
+
                             <div class="analysis-heading">
-                                <span class="analysis-symbol">✦</span>
-                                <span>EXECUTIVE INTELLIGENCE</span>
+
+                                <span class="analysis-symbol">
+                                    ✦
+                                </span>
+
+                                <span>
+                                    EVIDENCE SYNTHESIS
+                                </span>
+
                             </div>
+
                             <p>
-                                CryptoRisk AI organizes complex
-                                cryptocurrency uncertainty into
-                                decision-relevant intelligence.
+                                Market structure, volatility,
+                                liquidity and downside exposure
+                                are evaluated before AI synthesis.
                             </p>
+
                         </div>
+
+
                         <div class="terminal-bars">
+
                             <div class="terminal-bar-row">
-                                <span>Market volatility</span>
+
+                                <span>
+                                    Volatility
+                                </span>
+
                                 <div class="terminal-bar">
-                                    <span style="width: 82%"></span>
+                                    <span style="width:72%"></span>
                                 </div>
-                                <b>82</b>
+
+                                <b>
+                                    —
+                                </b>
+
                             </div>
+
+
                             <div class="terminal-bar-row">
-                                <span>Information risk</span>
+
+                                <span>
+                                    Liquidity
+                                </span>
+
                                 <div class="terminal-bar">
-                                    <span style="width: 64%"></span>
+                                    <span style="width:46%"></span>
                                 </div>
-                                <b>64</b>
+
+                                <b>
+                                    —
+                                </b>
+
                             </div>
+
+
                             <div class="terminal-bar-row">
-                                <span>External exposure</span>
+
+                                <span>
+                                    Stress exposure
+                                </span>
+
                                 <div class="terminal-bar">
-                                    <span style="width: 71%"></span>
+                                    <span style="width:61%"></span>
                                 </div>
-                                <b>71</b>
+
+                                <b>
+                                    —
+                                </b>
+
                             </div>
+
                         </div>
+
                     </div>
+
+
                     <div class="terminal-floating-label">
+
                         <span class="status-dot"></span>
-                        AI ENGINE READY
+
+                        ENGINE READY
+
                     </div>
+
                 </div>
+
             </div>
+
         </section>
 
-        <!-- INTELLIGENCE INTRO -->
-        <section id="intelligence" class="landing-section intelligence-section">
+
+        <!-- =====================================================
+             INTELLIGENCE LAYER
+        ====================================================== -->
+
+        <section
+            id="intelligence"
+            class="landing-section intelligence-section"
+        >
+
             <div class="section-heading-centered">
-                <span class="section-kicker">THE INTELLIGENCE LAYER</span>
-                <h2>Less noise. <span>More signal.</span></h2>
+
+                <span class="section-kicker">
+                    THE INTELLIGENCE LAYER
+                </span>
+
+                <h2>
+                    Not another AI wrapper.
+                    <span>Evidence first.</span>
+                </h2>
+
                 <p>
-                    CryptoRisk AI transforms a simple ticker into a
-                    structured view of the uncertainty surrounding
-                    the asset.
+                    CryptoRisk AI calculates the underlying signals
+                    first, then uses AI to explain those signals.
                 </p>
+
             </div>
+
+
             <div class="feature-grid">
-                <article class="feature-card">
-                    <div class="feature-number">01</div>
-                    <div class="feature-icon">◈</div>
-                    <span class="feature-kicker">RISK ENGINE</span>
-                    <h3>See the downside clearly.</h3>
-                    <p>Identify major risk factors and understand where uncertainty may be concentrated.</p>
-                    <div class="feature-line"></div>
-                </article>
-                <article class="feature-card feature-card-highlight">
-                    <div class="feature-number">02</div>
-                    <div class="feature-icon">✦</div>
-                    <span class="feature-kicker">AI SYNTHESIS</span>
-                    <h3>Turn complexity into intelligence.</h3>
-                    <p>Get an organized executive summary instead of digging through fragmented information.</p>
-                    <div class="feature-line"></div>
-                </article>
-                <article class="feature-card">
-                    <div class="feature-number">03</div>
-                    <div class="feature-icon">◌</div>
-                    <span class="feature-kicker">MONITORING</span>
-                    <h3>Know what deserves attention.</h3>
-                    <p>Surface developments and signals worth monitoring as your understanding evolves.</p>
-                    <div class="feature-line"></div>
-                </article>
-            </div>
-        </section>
 
-        <!-- HOW IT WORKS -->
-        <section class="process-section">
-            <div class="process-header">
-                <div>
-                    <span class="section-kicker">SIMPLE INPUT</span>
-                    <h2>One symbol. <span>Deep intelligence.</span></h2>
-                </div>
-                <div class="process-badge">
-                    <span class="status-dot"></span>
-                    3 STEP PIPELINE
-                </div>
-            </div>
-            <div class="process-grid">
-                <div class="process-step">
-                    <div class="process-step-number">01</div>
-                    <div class="process-step-content">
-                        <span>INPUT</span>
-                        <h3>Enter a cryptocurrency</h3>
-                        <p>Enter a ticker such as BTC, ETH or another cryptocurrency symbol.</p>
-                    </div>
-                </div>
-                <div class="process-connector"></div>
-                <div class="process-step">
-                    <div class="process-step-number">02</div>
-                    <div class="process-step-content">
-                        <span>ANALYZE</span>
-                        <h3>AI processes the context</h3>
-                        <p>The intelligence engine structures the analysis around risk, signals and uncertainty.</p>
-                    </div>
-                </div>
-                <div class="process-connector"></div>
-                <div class="process-step">
-                    <div class="process-step-number">03</div>
-                    <div class="process-step-content">
-                        <span>REPORT</span>
-                        <h3>Receive your intelligence</h3>
-                        <p>Get a clean report containing the major risks, signals and areas to watch.</p>
-                    </div>
-                </div>
-            </div>
-        </section>
+                <article class="feature-card">
 
-        <!-- FINAL CTA -->
-        <section class="final-cta">
-            <div class="final-cta-glow"></div>
-            <div class="final-cta-content">
-                <span class="section-kicker">TERMINAL READY</span>
-                <h2>Stop chasing the noise. <span>Understand the risk.</span></h2>
-                <p>Enter the intelligence terminal and generate your first cryptocurrency risk report.</p>
-                <a href="/auth/google" class="hero-primary-button final-button">
-                    <span class="button-glow"></span>
-                    <span class="button-content">
-                        <span class="button-icon">◈</span>
-                        Enter CryptoRisk AI
-                        <span class="button-arrow">→</span>
+                    <div class="feature-number">
+                        01
+                    </div>
+
+                    <div class="feature-icon">
+                        ◈
+                    </div>
+
+                    <span class="feature-kicker">
+                        LIVE MARKET
                     </span>
-                </a>
+
+                    <h3>
+                        See what is happening now.
+                    </h3>
+
+                    <p>
+                        Monitor price, volume, market activity,
+                        changes and data freshness from live sources.
+                    </p>
+
+                    <div class="feature-line"></div>
+
+                </article>
+
+
+                <article class="feature-card feature-card-highlight">
+
+                    <div class="feature-number">
+                        02
+                    </div>
+
+                    <div class="feature-icon">
+                        ✦
+                    </div>
+
+                    <span class="feature-kicker">
+                        QUANTITATIVE ENGINE
+                    </span>
+
+                    <h3>
+                        Measure risk instead of guessing it.
+                    </h3>
+
+                    <p>
+                        Realized volatility, liquidity conditions,
+                        market sensitivity and stress exposure are
+                        calculated independently of the AI.
+                    </p>
+
+                    <div class="feature-line"></div>
+
+                </article>
+
+
+                <article class="feature-card">
+
+                    <div class="feature-number">
+                        03
+                    </div>
+
+                    <div class="feature-icon">
+                        ◌
+                    </div>
+
+                    <span class="feature-kicker">
+                        AI SYNTHESIS
+                    </span>
+
+                    <h3>
+                        Understand the evidence.
+                    </h3>
+
+                    <p>
+                        Gemini interprets the calculated evidence
+                        instead of inventing prices, scores or facts.
+                    </p>
+
+                    <div class="feature-line"></div>
+
+                </article>
+
             </div>
+
         </section>
+
+
+        <!-- =====================================================
+             PIPELINE
+        ====================================================== -->
+
+        <section class="process-section">
+
+            <div class="process-header">
+
+                <div>
+
+                    <span class="section-kicker">
+                        INTELLIGENCE PIPELINE
+                    </span>
+
+                    <h2>
+                        One symbol.
+                        <span>Multiple layers of evidence.</span>
+                    </h2>
+
+                </div>
+
+
+                <div class="process-badge">
+
+                    <span class="status-dot"></span>
+
+                    EVIDENCE FIRST
+
+                </div>
+
+            </div>
+
+
+            <div class="process-grid">
+
+                <div class="process-step">
+
+                    <div class="process-step-number">
+                        01
+                    </div>
+
+                    <div class="process-step-content">
+
+                        <span>
+                            MARKET
+                        </span>
+
+                        <h3>
+                            Collect live data
+                        </h3>
+
+                        <p>
+                            Price, volume, market capitalization,
+                            historical movement and market signals.
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <div class="process-connector"></div>
+
+
+                <div class="process-step">
+
+                    <div class="process-step-number">
+                        02
+                    </div>
+
+                    <div class="process-step-content">
+
+                        <span>
+                            MODEL
+                        </span>
+
+                        <h3>
+                            Calculate exposure
+                        </h3>
+
+                        <p>
+                            Quantitative engines calculate volatility,
+                            liquidity, beta and downside scenarios.
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <div class="process-connector"></div>
+
+
+                <div class="process-step">
+
+                    <div class="process-step-number">
+                        03
+                    </div>
+
+                    <div class="process-step-content">
+
+                        <span>
+                            SYNTHESIS
+                        </span>
+
+                        <h3>
+                            Explain the evidence
+                        </h3>
+
+                        <p>
+                            AI converts the measured evidence into
+                            structured, decision-relevant intelligence.
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =====================================================
+             DIFFERENTIATOR
+        ====================================================== -->
+
+        <section class="final-cta">
+
+            <div class="final-cta-glow"></div>
+
+            <div class="final-cta-content">
+
+                <span class="section-kicker">
+                    TERMINAL READY
+                </span>
+
+                <h2>
+                    Don't ask AI
+                    <span>what it thinks.</span>
+                </h2>
+
+                <p>
+                    Give AI the evidence and let it explain
+                    what the numbers actually mean.
+                </p>
+
+
+                <a
+                    href="{{ url_for('google_login') }}"
+                    class="hero-primary-button final-button"
+                >
+
+                    <span class="button-glow"></span>
+
+                    <span class="button-content">
+
+                        <span class="button-icon">
+                            ◈
+                        </span>
+
+                        Enter CryptoRisk AI
+
+                        <span class="button-arrow">
+                            →
+                        </span>
+
+                    </span>
+
+                </a>
+
+            </div>
+
+        </section>
+
     </main>
 
-    <!-- FOOTER -->
+
+    <!-- =========================================================
+         FOOTER
+    ========================================================== -->
+
     <footer class="landing-footer">
+
         <div class="footer-brand">
-            <div class="brand-mark">CR</div>
-            <span>CryptoRisk AI</span>
+
+            <div class="brand-mark">
+                CR
+            </div>
+
+            <span>
+                CryptoRisk AI
+            </span>
+
         </div>
-        <span>AI-powered cryptocurrency risk intelligence.</span>
-        <span>Educational use only.</span>
+
+        <span>
+            Evidence-driven cryptocurrency risk intelligence.
+        </span>
+
+        <span>
+            Educational use only.
+        </span>
+
     </footer>
 
-    <script src="{{ url_for('static', filename='config.js') }}"></script>
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+
+    <!-- =========================================================
+         FLASH MESSAGES
+    ========================================================== -->
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+
+        {% if messages %}
+
+            <div
+                class="flash-container"
+                id="flash-container"
+            >
+
+                {% for category, message in messages %}
+
+                    <div
+                        class="flash-message flash-{{ category }}"
+                    >
+                        {{ message }}
+                    </div>
+
+                {% endfor %}
+
+            </div>
+
+        {% endif %}
+
+    {% endwith %}
+
+
+    <script
+        src="{{ url_for('static', filename='script.js') }}"
+    ></script>
+
 </body>
 </html>
