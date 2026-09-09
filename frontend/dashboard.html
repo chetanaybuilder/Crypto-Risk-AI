@@ -1,145 +1,84 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <!-- ============================================================
-         CryptoRisk AI — Intelligence Terminal (Dashboard)
-         ============================================================
-         Main dashboard page for authenticated users.
-         Displays risk analysis reports, market data, and AI insights.
-
-         Sections:
-           - Navigation bar (brand, user menu, logout)
-           - Analysis input (token symbol entry)
-           - Progress indicator (analysis pipeline stages)
-           - Market data cards (price, volume, market cap)
-           - Risk profile (composite score, pillars)
-           - Stress test scenarios (beta, drawdown)
-           - AI interpretation (Gemini-generated insights)
-           - Data quality (confidence, missing signals)
-           - History (previous reports)
-
-         External Dependencies:
-           - Google Fonts (Inter, Space Grotesk, JetBrains Mono, Fira Code)
-           - config.js (API configuration)
-           - script.js (dashboard controller)
-           - style.css (main stylesheet)
-         ============================================================ -->
-
     <meta charset="UTF-8">
 
-    <!-- Viewport for responsive design -->
     <meta
         name="viewport"
         content="width=device-width, initial-scale=1.0"
     >
 
-    <!-- SEO meta tags -->
-    <meta
-        name="description"
-        content="CryptoRisk AI — Evidence-first cryptocurrency risk intelligence terminal."
-    >
     <meta
         name="theme-color"
         content="#070a10"
     >
 
-    <title>CryptoRisk AI — Intelligence Terminal</title>
-
-    <!-- Preconnect to Google Fonts for performance -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-
-    <!-- Google Fonts: Inter, Space Grotesk, JetBrains Mono, Fira Code -->
-    <link
-        href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
-        rel="stylesheet"
+    <meta
+        name="description"
+        content="CryptoRisk AI — Evidence-driven cryptocurrency risk intelligence."
     >
 
-    <!-- Main stylesheet -->
-    <link rel="stylesheet" href="style.css">
+    <title>CryptoRisk AI — Risk Intelligence Terminal</title>
 
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
 </head>
 
-
 <body class="dashboard-page">
-
-
-    <!-- =====================================================
-         NAVIGATION
-    ====================================================== -->
 
     <nav class="top-nav">
 
         <a
             href="./index.html"
             class="brand"
-            aria-label="CryptoRisk AI home"
         >
-
             <div class="brand-mark">
                 CR
             </div>
 
             <div class="brand-copy">
+                <div class="brand-name">
+                    CryptoRisk <span>AI</span>
+                </div>
 
-                <span class="brand-name">
-                    CryptoRisk
-                </span>
-
-                <span class="brand-ai">
-                    AI
-                </span>
-
+                <div class="brand-ai">
+                    RISK INTELLIGENCE
+                </div>
             </div>
-
         </a>
 
-
         <div class="nav-center">
-
-            <span class="terminal-status">
-
+            <div class="terminal-status">
                 <span class="status-dot"></span>
-
-                INTELLIGENCE TERMINAL
-
-            </span>
-
+                LIVE INTELLIGENCE TERMINAL
+            </div>
         </div>
-
 
         <div class="nav-user">
 
             <div class="user-info">
-
-                <span
-                    id="user-name"
-                    class="user-name"
-                >
+                <div class="user-name">
                     Analyst
+                </div>
+
+                <div class="user-email">
+                    —
+                </div>
+            </div>
+
+            <div class="user-avatar">
+                <span id="user-avatar-initial">
+                    A
                 </span>
-
-                <span
-                    id="user-email"
-                    class="user-email"
-                ></span>
-
             </div>
-
-
-            <div
-                class="user-avatar"
-                id="user-avatar"
-                aria-label="User avatar"
-            >
-                A
-            </div>
-
 
             <button
                 type="button"
-                id="logout-button"
                 class="logout-button"
+                id="logout-button"
+                data-action="logout"
             >
                 Logout
             </button>
@@ -149,65 +88,38 @@
     </nav>
 
 
-    <!-- =====================================================
-         MAIN
-    ====================================================== -->
-
     <main class="dashboard-container">
-
-
-        <!-- =================================================
-             TERMINAL HEADER
-        ================================================== -->
 
         <header class="terminal-header">
 
-            <div>
-
-                <span class="eyebrow">
-                    CRYPTORISK AI / TERMINAL
-                </span>
-
-
-                <h1>
-                    Crypto Risk
-                    <span>Intelligence</span>
-                </h1>
-
-
-                <p>
-                    Quantitative risk analysis, market structure,
-                    liquidity intelligence and downside simulation.
-                </p>
-
+            <div class="eyebrow">
+                CRYPTORISK AI / TERMINAL
             </div>
 
+            <h1>
+                Risk <span>Intelligence</span>
+            </h1>
+
+            <p>
+                Live market intelligence, quantitative risk
+                modeling and evidence-backed AI synthesis.
+            </p>
 
             <div class="terminal-meta">
 
                 <div class="meta-item">
-
-                    <span>
-                        ENGINE
-                    </span>
-
-                    <strong>
-                        CR-AI v2.0
-                    </strong>
-
+                    <span>ENGINE</span>
+                    <strong>CR-AI v2.0</strong>
                 </div>
 
+                <div class="meta-item">
+                    <span>MODE</span>
+                    <strong>LIVE</strong>
+                </div>
 
                 <div class="meta-item">
-
-                    <span>
-                        MODE
-                    </span>
-
-                    <strong>
-                        LIVE ANALYSIS
-                    </strong>
-
+                    <span>DATA</span>
+                    <strong id="data-source">—</strong>
                 </div>
 
             </div>
@@ -215,57 +127,40 @@
         </header>
 
 
-        <!-- =================================================
-             ANALYSIS INPUT
-        ================================================== -->
-
         <section class="search-card">
 
             <div class="search-heading">
 
                 <div>
-
-                    <span class="section-label">
-                        ASSET ANALYSIS
-                    </span>
-
+                    <div class="section-label">
+                        ASSET INTELLIGENCE
+                    </div>
 
                     <h2>
-                        Run Intelligence Scan
+                        Run Risk Scan
                     </h2>
-
 
                     <p>
                         Enter a cryptocurrency symbol to generate
-                        a quantitative, stress-tested and
-                        evidence-backed risk intelligence report.
+                        a structured risk intelligence report.
                     </p>
-
                 </div>
 
-
                 <div class="scan-indicator">
-
                     <span class="status-dot"></span>
-
-                    SYSTEM READY
-
+                    READY
                 </div>
 
             </div>
 
 
-            <form
-                id="analysis-form"
-                autocomplete="off"
-            >
+            <form id="analysis-form">
 
                 <div class="token-input-wrapper">
 
                     <span class="token-prefix">
                         $
                     </span>
-
 
                     <input
                         type="text"
@@ -274,9 +169,7 @@
                         placeholder="BTC"
                         maxlength="15"
                         autocomplete="off"
-                        autocapitalize="characters"
                         spellcheck="false"
-                        required
                         aria-label="Cryptocurrency symbol"
                     >
 
@@ -285,19 +178,17 @@
 
                 <button
                     type="submit"
-                    class="analyze-button"
                     id="analyze-button"
+                    class="analyze-button"
                 >
 
-                    <span class="button-text">
-                        Analyze Asset
+                    <span class="button-content">
+                        Analyze
                     </span>
 
-
                     <span
-                        class="button-loader"
                         id="button-loader"
-                        aria-hidden="true"
+                        class="button-loader"
                     ></span>
 
                 </button>
@@ -308,194 +199,165 @@
             <div
                 id="analysis-error"
                 class="analysis-error"
-                role="alert"
                 hidden
             ></div>
 
         </section>
 
 
-        <!-- =================================================
-             ANALYSIS PROGRESS
-        ================================================== -->
-
         <section
             id="analysis-progress"
             class="analysis-progress"
-            hidden
-            aria-live="polite"
-            aria-busy="false"
+            aria-hidden="true"
         >
 
-            <div class="analysis-progress-card">
+            <div class="progress-header">
 
-                <div class="analysis-progress-header">
+                <h3 id="progress-title">
+                    Fetching live market data
+                </h3>
 
-                    <span class="analysis-progress-kicker">
-                        CRYPTORISK AI
-                    </span>
+                <span id="progress-percent">
+                    0%
+                </span>
 
-                    <span
-                        id="progress-percent"
-                        class="analysis-progress-percent"
-                    >
-                        0%
-                    </span>
+            </div>
 
-                </div>
-
-
+            <div class="progress-bar">
                 <div
-                    id="progress-title"
-                    class="analysis-progress-title"
+                    id="progress-fill"
+                    style="width: 0%"
+                ></div>
+            </div>
+
+            <div class="progress-stages">
+
+                <span
+                    class="progress-status"
+                    data-stage="market"
                 >
-                    INITIALIZING
-                </div>
+                    MARKET
+                </span>
 
+                <span
+                    class="progress-status"
+                    data-stage="model"
+                >
+                    MODEL
+                </span>
 
-                <p id="progress-message">
-                    Preparing intelligence request...
-                </p>
+                <span
+                    class="progress-status"
+                    data-stage="stress"
+                >
+                    STRESS
+                </span>
 
+                <span
+                    class="progress-status"
+                    data-stage="ai"
+                >
+                    AI
+                </span>
 
-                <div class="analysis-progress-track">
-
-                    <div
-                        id="progress-fill"
-                        class="analysis-progress-fill"
-                    ></div>
-
-                </div>
-
-
-                <div class="analysis-progress-statuses">
-
-                    <span class="progress-status active">
-                        MARKET
-                    </span>
-
-                    <span class="progress-status">
-                        MODEL
-                    </span>
-
-                    <span class="progress-status">
-                        STRESS
-                    </span>
-
-                    <span class="progress-status">
-                        AI
-                    </span>
-
-                    <span class="progress-status">
-                        SAVE
-                    </span>
-
-                </div>
+                <span
+                    class="progress-status"
+                    data-stage="save"
+                >
+                    SAVE
+                </span>
 
             </div>
 
         </section>
 
 
-        <!-- =================================================
-             INTELLIGENCE REPORT
-        ================================================== -->
-
         <section
             id="intelligence-report"
             class="intelligence-report"
         >
 
-
-            <!-- REPORT HEADER -->
-
-            <div class="report-header">
+            <header class="report-header">
 
                 <div class="report-identity">
 
-                    <span class="section-label">
+                    <div class="section-label">
                         INTELLIGENCE REPORT
-                    </span>
-
+                    </div>
 
                     <h2 id="report-token">
-                        —
+                        No analysis yet
                     </h2>
 
-
-                    <span
+                    <div
                         id="report-outlook"
                         class="report-outlook"
                     >
-                        Awaiting analysis
-                    </span>
+                        —
+                    </div>
 
                 </div>
 
 
                 <div class="risk-score-card">
 
-                    <span>
-                        COMPOSITE RISK
-                    </span>
+                    <span>RISK SCORE</span>
 
+                    <div class="risk-score-value">
+                        <strong id="report-risk-score">
+                            —
+                        </strong>
 
-                    <strong id="report-risk-score">
+                        <small>
+                            / 100
+                        </small>
+                    </div>
+
+                    <div id="report-risk-label">
                         —
-                    </strong>
+                    </div>
 
-
-                    <small>
-                        / 100
+                    <small id="report-risk-confidence">
+                        —
                     </small>
-
-                    <span
-                        id="report-risk-label"
-                        class="risk-label"
-                    >
-                        —
-                    </span>
 
                 </div>
 
-            </div>
+            </header>
 
 
             <!-- =================================================
-                 MARKET SNAPSHOT
-            ================================================== -->
+                 MARKET DATA
+                 ================================================= -->
 
             <section class="report-section">
 
                 <div class="section-heading">
 
                     <div>
-
-                        <span class="section-label">
+                        <div class="section-label">
                             LIVE MARKET
-                        </span>
+                        </div>
 
                         <h3>
-                            Market Snapshot
+                            Market Intelligence
                         </h3>
 
+                        <div class="section-caption">
+                            Current market conditions powering
+                            the risk engine.
+                        </div>
                     </div>
 
-
-                    <div
-                        id="market-live-status"
-                        class="market-live-status"
-                    >
-
+                    <div class="live-data-status">
                         <span
                             id="market-live-dot"
                             class="status-dot"
                         ></span>
 
-                        <span>
-                            LIVE
+                        <span id="market-live-status">
+                            —
                         </span>
-
                     </div>
 
                 </div>
@@ -503,18 +365,14 @@
 
                 <div class="market-grid">
 
-
-                    <article class="market-card">
-
+                    <div class="market-card">
                         <span class="card-label">
                             PRICE
                         </span>
 
-
                         <strong id="report-price">
                             —
                         </strong>
-
 
                         <span
                             id="report-change"
@@ -522,84 +380,81 @@
                         >
                             —
                         </span>
+                    </div>
 
-                    </article>
 
-
-                    <article class="market-card">
-
+                    <div class="market-card">
                         <span class="card-label">
                             24H VOLUME
                         </span>
 
-
                         <strong id="report-volume">
                             —
                         </strong>
+                    </div>
 
 
-                        <span class="card-muted">
-                            Market activity indicator
-                        </span>
-
-                    </article>
-
-
-                    <article class="market-card">
-
+                    <div class="market-card">
                         <span class="card-label">
                             MARKET CAP
                         </span>
 
-
                         <strong id="report-market-cap">
                             —
                         </strong>
+                    </div>
 
 
-                        <span class="card-muted">
-                            Current reported valuation
-                        </span>
-
-                    </article>
-
-
-                    <article class="market-card">
-
+                    <div class="market-card">
                         <span class="card-label">
                             7D CHANGE
                         </span>
 
-
                         <strong id="report-change-7d">
                             —
                         </strong>
+                    </div>
 
 
-                        <span class="card-muted">
-                            Seven-day market movement
+                    <div class="market-card">
+                        <span class="card-label">
+                            24H HIGH
                         </span>
 
-                    </article>
+                        <strong id="report-high">
+                            —
+                        </strong>
+                    </div>
+
+
+                    <div class="market-card">
+                        <span class="card-label">
+                            24H LOW
+                        </span>
+
+                        <strong id="report-low">
+                            —
+                        </strong>
+                    </div>
 
                 </div>
 
 
-                <div class="market-meta-row">
+                <div class="terminal-meta">
 
-                    <span>
-                        SOURCE:
-                        <strong id="data-source">
+                    <div class="meta-item">
+                        <span>SOURCE</span>
+                        <strong id="market-source">
                             —
                         </strong>
-                    </span>
+                    </div>
 
-                    <span>
-                        UPDATED:
+                    <div class="meta-item">
+                        <span>UPDATED</span>
                         <strong id="market-updated">
                             —
                         </strong>
-                    </span>
+                    </div>
 
                 </div>
 
@@ -608,76 +463,54 @@
 
             <!-- =================================================
                  RISK PILLARS
-            ================================================== -->
+                 ================================================= -->
 
             <section class="report-section">
 
                 <div class="section-heading">
 
                     <div>
-
-                        <span class="section-label">
+                        <div class="section-label">
                             RISK ENGINE
-                        </span>
-
+                        </div>
 
                         <h3>
                             Risk Pillars
                         </h3>
 
+                        <div class="section-caption">
+                            Individual evidence-based
+                            contributors to the composite score.
+                        </div>
                     </div>
-
-
-                    <span class="section-caption">
-                        0 = LOW RISK · 100 = HIGH RISK
-                    </span>
 
                 </div>
 
 
                 <div class="risk-pillars">
 
-
                     <article class="risk-pillar">
 
                         <div class="pillar-top">
-
-                            <div>
-
-                                <span class="pillar-number">
-                                    01
-                                </span>
-
-
-                                <h4>
-                                    Volatility
-                                </h4>
-
+                            <div class="pillar-number">
+                                01
                             </div>
 
+                            <h4>
+                                Volatility
+                            </h4>
 
-                            <strong
-                                id="pillar-volatility-value"
-                            >
+                            <strong id="pillar-volatility-value">
                                 —
                             </strong>
-
                         </div>
-
 
                         <div class="pillar-bar">
-
-                            <span
-                                id="pillar-volatility-bar"
-                            ></span>
-
+                            <span id="pillar-volatility-bar"></span>
                         </div>
 
-
-                        <p
-                            id="pillar-volatility-detail"
-                        >
-                            Awaiting quantitative signal.
+                        <p id="pillar-volatility-detail">
+                            —
                         </p>
 
                     </article>
@@ -686,43 +519,25 @@
                     <article class="risk-pillar">
 
                         <div class="pillar-top">
-
-                            <div>
-
-                                <span class="pillar-number">
-                                    02
-                                </span>
-
-
-                                <h4>
-                                    Liquidity
-                                </h4>
-
+                            <div class="pillar-number">
+                                02
                             </div>
 
+                            <h4>
+                                Liquidity
+                            </h4>
 
-                            <strong
-                                id="pillar-liquidity-value"
-                            >
+                            <strong id="pillar-liquidity-value">
                                 —
                             </strong>
-
                         </div>
-
 
                         <div class="pillar-bar">
-
-                            <span
-                                id="pillar-liquidity-bar"
-                            ></span>
-
+                            <span id="pillar-liquidity-bar"></span>
                         </div>
 
-
-                        <p
-                            id="pillar-liquidity-detail"
-                        >
-                            Awaiting liquidity signal.
+                        <p id="pillar-liquidity-detail">
+                            —
                         </p>
 
                     </article>
@@ -731,43 +546,52 @@
                     <article class="risk-pillar">
 
                         <div class="pillar-top">
-
-                            <div>
-
-                                <span class="pillar-number">
-                                    03
-                                </span>
-
-
-                                <h4>
-                                    Contract
-                                </h4>
-
+                            <div class="pillar-number">
+                                03
                             </div>
 
+                            <h4>
+                                Market Sensitivity
+                            </h4>
 
-                            <strong
-                                id="pillar-contract-value"
-                            >
+                            <strong id="pillar-market-sensitivity-value">
                                 —
                             </strong>
-
                         </div>
-
 
                         <div class="pillar-bar">
-
-                            <span
-                                id="pillar-contract-bar"
-                            ></span>
-
+                            <span id="pillar-market-sensitivity-bar"></span>
                         </div>
 
+                        <p id="pillar-market-sensitivity-detail">
+                            —
+                        </p>
 
-                        <p
-                            id="pillar-contract-detail"
-                        >
-                            Structural and security signals.
+                    </article>
+
+
+                    <article class="risk-pillar">
+
+                        <div class="pillar-top">
+                            <div class="pillar-number">
+                                04
+                            </div>
+
+                            <h4>
+                                Structural
+                            </h4>
+
+                            <strong id="pillar-structural-value">
+                                —
+                            </strong>
+                        </div>
+
+                        <div class="pillar-bar">
+                            <span id="pillar-structural-bar"></span>
+                        </div>
+
+                        <p id="pillar-structural-detail">
+                            —
                         </p>
 
                     </article>
@@ -776,43 +600,25 @@
                     <article class="risk-pillar composite-pillar">
 
                         <div class="pillar-top">
-
-                            <div>
-
-                                <span class="pillar-number">
-                                    04
-                                </span>
-
-
-                                <h4>
-                                    Composite
-                                </h4>
-
+                            <div class="pillar-number">
+                                05
                             </div>
 
+                            <h4>
+                                Composite
+                            </h4>
 
-                            <strong
-                                id="pillar-composite-value"
-                            >
+                            <strong id="pillar-composite-value">
                                 —
                             </strong>
-
                         </div>
-
 
                         <div class="pillar-bar">
-
-                            <span
-                                id="pillar-composite-bar"
-                            ></span>
-
+                            <span id="pillar-composite-bar"></span>
                         </div>
 
-
-                        <p
-                            id="pillar-composite-detail"
-                        >
-                            Overall backend risk-engine score.
+                        <p id="pillar-composite-detail">
+                            —
                         </p>
 
                     </article>
@@ -823,158 +629,128 @@
 
 
             <!-- =================================================
-                 KEY RISK DRIVERS
-            ================================================== -->
+                 RISK DRIVERS
+                 ================================================= -->
 
             <section class="report-section">
 
                 <div class="section-heading">
 
                     <div>
-
-                        <span class="section-label">
-                            SIGNAL DECOMPOSITION
-                        </span>
-
+                        <div class="section-label">
+                            FORENSIC ANALYSIS
+                        </div>
 
                         <h3>
-                            Key Risk Drivers
+                            Risk Drivers
                         </h3>
 
+                        <div class="section-caption">
+                            Material factors influencing the
+                            current risk assessment.
+                        </div>
                     </div>
-
                 </div>
 
 
                 <div
                     id="risk-drivers"
-                    class="risk-drivers"
-                >
-
-                    <article class="risk-driver-card">
-
-                        <span class="driver-index">
-                            01
-                        </span>
-
-                        <h4>
-                            Awaiting analysis
-                        </h4>
-
-                        <p>
-                            Run an intelligence scan to
-                            identify the dominant risk drivers.
-                        </p>
-
-                    </article>
-
-                </div>
+                    class="forensic-grid"
+                ></div>
 
             </section>
 
 
             <!-- =================================================
-                 DOWNSIDE SIMULATOR
-            ================================================== -->
+                 STRESS TEST
+                 ================================================= -->
 
-            <section class="report-section stress-section">
+            <section class="report-section">
 
                 <div class="section-heading">
 
                     <div>
-
-                        <span class="section-label">
-                            SCENARIO ENGINE
-                        </span>
-
+                        <div class="section-label">
+                            DOWNSIDE SIMULATION
+                        </div>
 
                         <h3>
-                            Downside Simulator
+                            Stress Test
                         </h3>
 
+                        <div class="section-caption">
+                            Scenario-based downside and resilience
+                            analysis.
+                        </div>
                     </div>
-
-
-                    <span class="scenario-badge">
-                        BTC -10% SHOCK
-                    </span>
-
                 </div>
 
 
                 <div class="stress-grid">
 
-
-                    <article class="stress-card">
-
-                        <span class="card-label">
-                            RESILIENCE
-                        </span>
-
-
-                        <strong id="stress-resilience">
-                            —
-                        </strong>
-
-
-                        <p>
-                            Estimated response to the selected
-                            market shock.
-                        </p>
-
-                    </article>
-
-
-                    <article class="stress-card">
+                    <div class="stress-card">
 
                         <span class="card-label">
-                            BETA
+                            BTC BETA
                         </span>
-
 
                         <strong id="stress-beta">
                             —
                         </strong>
 
-
-                        <p>
-                            Estimated sensitivity to BTC market
-                            movements.
-                        </p>
-
-                    </article>
+                    </div>
 
 
-                    <article class="stress-card">
+                    <div class="stress-card">
 
                         <span class="card-label">
-                            PROJECTED DRAWDOWN
+                            EXPECTED DRAWDOWN
                         </span>
-
 
                         <strong id="stress-drawdown">
                             —
                         </strong>
 
+                    </div>
 
-                        <p>
-                            Modeled asset response under the
-                            selected scenario.
-                        </p>
 
-                    </article>
+                    <div class="stress-card">
+
+                        <span class="card-label">
+                            RESILIENCE
+                        </span>
+
+                        <strong id="stress-resilience">
+                            —
+                        </strong>
+
+                    </div>
+
+
+                    <div class="stress-card">
+
+                        <span class="card-label">
+                            CONFIDENCE
+                        </span>
+
+                        <strong id="stress-confidence">
+                            —
+                        </strong>
+
+                    </div>
 
                 </div>
 
 
-                <div class="stress-meta">
+                <div class="stress-verdict-card">
 
-                    <span>
-                        CONFIDENCE:
-                        <strong id="stress-confidence">
-                            —
-                        </strong>
+                    <span class="scenario-badge">
+                        SCENARIO VERDICT
                     </span>
+
+                    <p id="stress-verdict">
+                        —
+                    </p>
 
                 </div>
 
@@ -982,29 +758,30 @@
 
 
             <!-- =================================================
-                 FORENSIC / AI INTELLIGENCE
-            ================================================== -->
+                 AI SYNTHESIS
+                 ================================================= -->
 
-            <section class="report-section autopsy-section">
+            <section class="report-section">
 
                 <div class="section-heading">
 
                     <div>
-
-                        <span class="section-label">
+                        <div class="section-label">
                             EVIDENCE + AI
-                        </span>
-
+                        </div>
 
                         <h3>
                             Asset Intelligence
                         </h3>
 
+                        <div class="section-caption">
+                            Evidence-backed synthesis generated
+                            from the complete risk report.
+                        </div>
                     </div>
 
-
                     <span
-                        id="autopsy-token"
+                        id="ai-evidence-status"
                         class="autopsy-token"
                     >
                         —
@@ -1015,14 +792,8 @@
 
                 <div class="autopsy-summary">
 
-                    <span class="card-label">
-                        EXECUTIVE ASSESSMENT
-                    </span>
-
-
-                    <p id="autopsy-summary">
-                        Run an analysis to generate the
-                        evidence-backed executive assessment.
+                    <p id="executive-summary">
+                        —
                     </p>
 
                 </div>
@@ -1031,120 +802,40 @@
                 <div
                     id="forensic-cards"
                     class="forensic-grid"
-                >
-
-                    <article class="forensic-card">
-
-                        <span class="forensic-index">
-                            01
-                        </span>
-
-
-                        <h4>
-                            Market Structure
-                        </h4>
-
-
-                        <p>
-                            Awaiting intelligence data.
-                        </p>
-
-                    </article>
-
-
-                    <article class="forensic-card">
-
-                        <span class="forensic-index">
-                            02
-                        </span>
-
-
-                        <h4>
-                            Liquidity Profile
-                        </h4>
-
-
-                        <p>
-                            Awaiting intelligence data.
-                        </p>
-
-                    </article>
-
-
-                    <article class="forensic-card">
-
-                        <span class="forensic-index">
-                            03
-                        </span>
-
-
-                        <h4>
-                            Structural Risk
-                        </h4>
-
-
-                        <p>
-                            Awaiting intelligence data.
-                        </p>
-
-                    </article>
-
-                </div>
+                ></div>
 
 
                 <div class="ai-intelligence-grid">
 
                     <article class="ai-intelligence-card">
-
-                        <span class="card-label">
-                            MARKET STRUCTURE
-                        </span>
-
-                        <p id="ai-market-structure">
-                            Awaiting AI interpretation.
-                        </p>
-
+                        <span>RISK REGIME</span>
+                        <p id="ai-risk-regime">—</p>
                     </article>
-
 
                     <article class="ai-intelligence-card">
-
-                        <span class="card-label">
-                            LIQUIDITY
-                        </span>
-
-                        <p id="ai-liquidity">
-                            Awaiting AI interpretation.
-                        </p>
-
+                        <span>PRIMARY RISK DRIVER</span>
+                        <p id="ai-primary-risk-driver">—</p>
                     </article>
-
 
                     <article class="ai-intelligence-card">
-
-                        <span class="card-label">
-                            CONTRACT / SECURITY
-                        </span>
-
-                        <p id="ai-contract-risk">
-                            Awaiting security interpretation.
-                        </p>
-
+                        <span>WHAT CHANGED</span>
+                        <p id="ai-what-changed">—</p>
                     </article>
 
-                </div>
+                    <article class="ai-intelligence-card">
+                        <span>WHAT MATTERS NOW</span>
+                        <p id="ai-what-matters-now">—</p>
+                    </article>
 
+                    <article class="ai-intelligence-card">
+                        <span>WATCH NEXT</span>
+                        <p id="ai-watch-next">—</p>
+                    </article>
 
-                <div class="stress-verdict-card">
-
-                    <span class="card-label">
-                        STRESS VERDICT
-                    </span>
-
-
-                    <p id="stress-verdict">
-                        No scenario has been executed yet.
-                    </p>
+                    <article class="ai-intelligence-card">
+                        <span>STRESS INTERPRETATION</span>
+                        <p id="ai-stress-interpretation">—</p>
+                    </article>
 
                 </div>
 
@@ -1153,40 +844,28 @@
 
             <!-- =================================================
                  DATA QUALITY
-            ================================================== -->
+                 ================================================= -->
 
-            <section class="report-section data-quality-section">
+            <section class="report-section">
 
                 <div class="section-heading">
 
                     <div>
-
-                        <span class="section-label">
-                            EVIDENCE INTEGRITY
-                        </span>
-
+                        <div class="section-label">
+                            DATA QUALITY
+                        </div>
 
                         <h3>
-                            Data Quality
+                            Evidence Status
                         </h3>
-
                     </div>
-
-
-                    <span
-                        id="ai-evidence-status"
-                        class="evidence-status"
-                    >
-                        Awaiting evidence
-                    </span>
 
                 </div>
 
 
-                <div class="data-quality-grid">
+                <div class="market-grid">
 
-
-                    <article class="data-quality-card">
+                    <div class="market-card">
 
                         <span class="card-label">
                             CONFIDENCE
@@ -1196,23 +875,10 @@
                             —
                         </strong>
 
-                    </article>
+                    </div>
 
 
-                    <article class="data-quality-card">
-
-                        <span class="card-label">
-                            MARKET SOURCE
-                        </span>
-
-                        <strong id="market-source">
-                            —
-                        </strong>
-
-                    </article>
-
-
-                    <article class="data-quality-card">
+                    <div class="market-card">
 
                         <span class="card-label">
                             FRESHNESS
@@ -1222,32 +888,22 @@
                             —
                         </strong>
 
-                    </article>
-
-                </div>
-
-
-                <div class="missing-signals-card">
-
-                    <span class="card-label">
-                        MISSING / LIMITED SIGNALS
-                    </span>
-
-                    <div
-                        id="missing-signals"
-                        class="missing-signals"
-                    >
-                        None reported.
                     </div>
 
                 </div>
+
+
+                <div
+                    id="missing-signals"
+                    class="data-quality-grid"
+                ></div>
 
             </section>
 
 
             <!-- =================================================
-                 REPORT ACTION
-            ================================================== -->
+                 REPORT ACTIONS
+                 ================================================= -->
 
             <div class="report-actions">
 
@@ -1255,8 +911,9 @@
                     type="button"
                     id="delete-current-report"
                     class="danger-button"
+                    disabled
                 >
-                    Delete Current Report
+                    Delete Report
                 </button>
 
             </div>
@@ -1264,38 +921,32 @@
         </section>
 
 
-        <!-- =================================================
+        <!-- =====================================================
              HISTORY
-        ================================================== -->
+             ===================================================== -->
 
         <section class="history-section">
 
             <div class="section-heading">
 
                 <div>
-
-                    <span class="section-label">
+                    <div class="section-label">
                         PERSISTENT INTELLIGENCE
-                    </span>
-
+                    </div>
 
                     <h3>
                         Analysis History
                     </h3>
-
                 </div>
 
-
                 <div class="history-counter">
-
                     <span id="history-count">
                         0
                     </span>
 
                     <small>
-                        REPORTS
+                        reports
                     </small>
-
                 </div>
 
             </div>
@@ -1306,44 +957,17 @@
                 <table class="history-table">
 
                     <thead>
-
                         <tr>
-
-                            <th>
-                                ASSET
-                            </th>
-
-                            <th>
-                                RISK
-                            </th>
-
-                            <th>
-                                OUTLOOK
-                            </th>
-
-                            <th>
-                                DATE
-                            </th>
-
-                            <th>
-                                ACTION
-                            </th>
-
+                            <th>ASSET</th>
+                            <th>RISK</th>
+                            <th>OUTLOOK</th>
+                            <th>SCORE</th>
+                            <th>DATE</th>
+                            <th>ACTION</th>
                         </tr>
-
                     </thead>
 
-
                     <tbody id="history-tbody">
-
-                        <tr class="empty-history">
-
-                            <td colspan="5">
-                                No analysis history available.
-                            </td>
-
-                        </tr>
-
                     </tbody>
 
                 </table>
@@ -1355,27 +979,18 @@
     </main>
 
 
-    <!-- =====================================================
-         FOOTER
-    ====================================================== -->
-
     <footer class="dashboard-footer">
 
-        <div>
+        <div class="footer-brand">
             CryptoRisk AI
         </div>
 
-
         <div>
-            Risk intelligence terminal · v2.0
+            Evidence-driven cryptocurrency risk intelligence.
         </div>
 
     </footer>
 
-
-    <!-- =====================================================
-         FRONTEND ASSETS
-    ====================================================== -->
 
     <script src="config.js"></script>
     <script src="script.js"></script>
