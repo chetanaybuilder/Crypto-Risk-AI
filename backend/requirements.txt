@@ -14,7 +14,7 @@ psycopg2-binary==2.9.10  # PostgreSQL database adapter for Python
 # ============================================================
 Authlib==1.4.1           # Robust OAuth 2.0 and OpenID Connect client integration
 Flask-Bcrypt==1.0.1      # Secure password hashing and verification extension
-Flask-JWT-Extended==4.7.1# Advanced JSON Web Token management for session protection
+Flask-JWT-Extended==4.7.1 # Advanced JSON Web Token management for session protection
 PyJWT==2.10.1            # Low-level JSON Web Token encoding, decoding, and validation
 
 # ============================================================
