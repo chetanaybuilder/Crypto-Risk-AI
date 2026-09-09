@@ -549,6 +549,41 @@ TOKEN_MAP = {
     "SHIB": "shiba-inu",
 }
 
+# CoinPaprika coin IDs (verified against /v1/tickers/{id}).
+# Used by the market-data fallback. Only symbols present here are
+# eligible for the CoinPaprika fallback; unknowns fall through.
+COINPAPRIKA_IDS = {
+
+    "SHIB": "shiba-inu",}
+
+# CoinPaprika coin IDs (verified against /v1/tickers/{id}).
+# Used by the market-data fallback. Only symbols present here are
+# eligible for the CoinPaprika fallback; unknowns fall through.
+COINPAPRIKA_IDS = {
+    "BTC": "btc-bitcoin",
+    "ETH": "eth-ethereum",
+    "SOL": "sol-solana",
+    "BNB": "bnb-bnb",
+    "XRP": "xrp-xrp",
+    "ADA": "ada-cardano",
+    "DOGE": "doge-dogecoin",
+    "AVAX": "avax-avalanche",
+    "DOT": "dot-polkadot",
+    "MATIC": "matic-polygon",
+    "POL": "pol-polygon",
+    "LINK": "link-chainlink",
+    "LTC": "ltc-litecoin",
+    "BCH": "bch-bitcoin-cash",
+    "ATOM": "atom-cosmos",
+    "UNI": "uni-uniswap",
+    "XLM": "xlm-stellar",
+    "TRX": "trx-tron",
+    "SHIB": "shib-shiba-inu",
+}
+
+
+
+
 # Native blockchain assets (not ERC-20 tokens)
 NATIVE_ASSETS = {
     "BTC",
@@ -1997,6 +2032,123 @@ def fetch_binance_market(
 
 
 # ============================================================
+# MARKET DATA — COINPAPRIKA FALLBACK
+# ============================================================
+# Free, keyless REST API. Supplies price, 24h change, 7d change,
+# 24h volume and market cap for the coins in COINPAPRIKA_IDS.
+# Does NOT provide 24h high/low, so those stay None.
+# ============================================================
+
+def fetch_coinpaprika_market(
+    symbol: str,
+) -> dict:
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return empty_market_data(symbol)
+
+    coin_id = COINPAPRIKA_IDS.get(symbol)
+
+    if not coin_id:
+        logger.info(
+            "CoinPaprika fallback unavailable for %s: no coin id",
+            symbol,
+        )
+        return empty_market_data(symbol)
+
+    response = http_get(
+        f"https://api.coinpaprika.com/v1/tickers/{quote(coin_id, safe='')}",
+        timeout=MARKET_TIMEOUT,
+    )
+
+    if response is None:
+        logger.info(
+            "CoinPaprika unavailable for %s",
+            symbol,
+        )
+        return empty_market_data(symbol)
+
+    try:
+
+        payload = response.json()
+
+        if not isinstance(payload, dict):
+            return empty_market_data(symbol)
+
+        quotes = payload.get("quotes", {})
+
+        if not isinstance(quotes, dict):
+            return empty_market_data(symbol)
+
+        usd = quotes.get("USD", {})
+
+        if not isinstance(usd, dict):
+            return empty_market_data(symbol)
+
+        price = optional_numeric(
+            usd.get("price")
+        )
+
+        change_24h = optional_numeric(
+            usd.get("percent_change_24h")
+        )
+
+        change_7d = optional_numeric(
+            usd.get("percent_change_7d")
+        )
+
+        volume = optional_numeric(
+            usd.get("volume_24h")
+        )
+
+        market_cap = optional_numeric(
+            usd.get("market_cap")
+        )
+
+        return json_safe({
+            "symbol": symbol,
+            "price": price,
+            "price_change_24h_pct": change_24h,
+            "price_change_7d_pct": change_7d,
+            "volume_24h": volume,
+            "market_cap": market_cap,
+            "high_24h": None,
+            "low_24h": None,
+            "source": "CoinPaprika",
+            "timestamp": utc_now_iso(),
+            "available": price is not None,
+        })
+
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+    ) as exc:
+
+        logger.warning(
+            "CoinPaprika market parsing failed for %s: %s",
+            symbol,
+            exc,
+        )
+
+        return empty_market_data(symbol)
+
+    except Exception as exc:
+
+        logger.warning(
+            "CoinPaprika market failed unexpectedly for %s: %s",
+            symbol,
+            exc,
+        )
+
+        return empty_market_data(symbol)
+
+
+
+
+# ============================================================
 # UNIFIED MARKET FETCH
 # ============================================================
 # MARKET DATA ORCHESTRATOR — Multi-Provider with Cache
@@ -2105,25 +2257,22 @@ def fetch_market_data(
         if not market.get(
             "available"
         ):
-            logger.info("Using CoinCap cloud-friendly fallback for %s", symbol)
-            try:
-                map_url = f"https://api.coincap.io/v2/assets?search={symbol.lower()}"
-                res = requests.get(map_url, timeout=5)
-                if res.status_code == 200:
-                    assets = res.json().get("data", [])
-                    if assets:
-                        asset = assets[0]
-                        market = {
-                            "available": True,
-                            "price": float(asset.get("priceUsd", 0)),
-                            "market_cap": float(asset.get("marketCapUsd", 0)),
-                            "volume_24h": float(asset.get("volumeUsd24Hr", 0)),
-                            "price_change_24h_pct": float(asset.get("changePercent24Hr", 0)),
-                            "source": "CoinCap API",
-                            "timestamp": datetime.now(timezone.utc).isoformat()
-                        }
-            except Exception as exc:
-                logger.debug("CoinCap fallback failed: %s", exc)
+            logger.info(
+                "Using CoinPaprika fallback for %s",
+                symbol,
+            )
+
+            paprika = fetch_coinpaprika_market(
+                symbol
+            )
+
+            if isinstance(
+                paprika,
+                dict
+            ) and paprika.get(
+                "available"
+            ):
+                market = paprika
 
         if not market.get(
             "available"
@@ -2573,18 +2722,22 @@ def fetch_binance_history(
 
 
 # ============================================================
-# PRICE HISTORY — COINCAP FALLBACK
+# PRICE HISTORY — YAHOO FINANCE FALLBACK
+# ============================================================
+# Free, keyless REST chart API. Returns daily OHLCV series for
+# symbols quoted as {SYMBOL}-USD (e.g. BTC-USD, ETH-USD, SOL-USD).
+# Supplies the closing-price series for the quantitative engine.
 # ============================================================
 
-def fetch_coincap_history(
+def fetch_yahoo_history(
     symbol: str,
     days: int = SUPPORTED_HISTORY_DAYS,
 ) -> list:
     """
-    Fetch historical daily prices from the CoinCap v2 API.
+    Fetch historical daily closing prices from Yahoo Finance.
 
-    Cloud-friendly fallback for when CoinGecko and Binance history
-    endpoints are unavailable (e.g. rate-limited on Render).
+    Fallback for when CoinGecko and Binance history endpoints are
+    unavailable (e.g. rate-limited or blocked on Render).
 
     Returns a chronologically ordered list of positive daily closing
     prices, or [] on any failure.
@@ -2595,95 +2748,26 @@ def fetch_coincap_history(
     if not symbol:
         return []
 
-    resolution = http_get(
-        "https://api.coincap.io/v2/assets",
-        params={
-            "search": symbol.lower()
-        },
-        timeout=MARKET_TIMEOUT,
-    )
-
-    if resolution is None:
-        return []
-
-    try:
-
-        payload = resolution.json()
-
-        if not isinstance(
-            payload,
-            dict,
-        ):
-            return []
-
-        assets = payload.get(
-            "data",
-            [],
-        )
-
-        if (
-            not isinstance(
-                assets,
-                list,
-            )
-            or not assets
-        ):
-            return []
-
-        asset_id = assets[0].get(
-            "id"
-        )
-
-        if not asset_id:
-            return []
-
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-    ) as exc:
-
-        logger.warning(
-            "CoinCap asset resolution failed: %s",
-            exc,
-        )
-
-        return []
-
-    except Exception as exc:
-
-        logger.warning(
-            "CoinCap asset resolution failed unexpectedly: %s",
-            exc,
-        )
-
-        return []
-
     lookback = _safe_lookback(
         days,
         default=SUPPORTED_HISTORY_DAYS,
     )
 
-    end_ms = int(
-        time.time() * 1000
-    )
-    start_ms = end_ms - (
-        lookback * 24 * 60 * 60 * 1000
-    )
-
     response = http_get(
-        "https://api.coincap.io/v2/assets/"
-        f"{quote(str(asset_id), safe='')}/history",
+        "https://query1.finance.yahoo.com/v8/finance/chart/"
+        f"{quote(f'{symbol}-USD', safe='')}",
         params={
-            "interval": "d1",
-            "start": start_ms,
-            "end": end_ms,
+            "range": f"{lookback}d",
+            "interval": "1d",
         },
         timeout=MARKET_TIMEOUT,
     )
 
     if response is None:
+        logger.info(
+            "Yahoo Finance history unavailable for %s",
+            symbol,
+        )
         return []
 
     try:
@@ -2696,31 +2780,81 @@ def fetch_coincap_history(
         ):
             return []
 
-        history = payload.get(
-            "data",
+        chart = payload.get(
+            "chart",
+            {},
+        )
+
+        if not isinstance(
+            chart,
+            dict,
+        ):
+            return []
+
+        results = chart.get(
+            "result",
+            [],
+        )
+
+        if (
+            not isinstance(
+                results,
+                list,
+            )
+            or not results
+        ):
+            return []
+
+        result = results[0]
+
+        if not isinstance(
+            result,
+            dict,
+        ):
+            return []
+
+        indicators = result.get(
+            "indicators",
+            {},
+        )
+
+        if not isinstance(
+            indicators,
+            dict,
+        ):
+            return []
+
+        quotes = indicators.get(
+            "quote",
+            [],
+        )
+
+        if (
+            not isinstance(
+                quotes,
+                list,
+            )
+            or not quotes
+        ):
+            return []
+
+        closes = quotes[0].get(
+            "close",
             [],
         )
 
         if not isinstance(
-            history,
+            closes,
             list,
         ):
             return []
 
-        result = []
+        prices = []
 
-        for item in history:
-
-            if not isinstance(
-                item,
-                dict,
-            ):
-                continue
+        for value in closes:
 
             price = optional_numeric(
-                item.get(
-                    "priceUsd"
-                )
+                value
             )
 
             if (
@@ -2729,9 +2863,9 @@ def fetch_coincap_history(
             ):
                 continue
 
-            result.append(price)
+            prices.append(price)
 
-        return result
+        return prices
 
     except (
         ValueError,
@@ -2741,7 +2875,8 @@ def fetch_coincap_history(
     ) as exc:
 
         logger.warning(
-            "CoinCap history parsing failed: %s",
+            "Yahoo Finance history parsing failed for %s: %s",
+            symbol,
             exc,
         )
 
@@ -2750,7 +2885,8 @@ def fetch_coincap_history(
     except Exception as exc:
 
         logger.warning(
-            "CoinCap history failed unexpectedly: %s",
+            "Yahoo Finance history failed unexpectedly for %s: %s",
+            symbol,
             exc,
         )
 
@@ -2875,20 +3011,20 @@ def fetch_price_history(
         if len(prices) < 2:
 
             logger.info(
-                "Using CoinCap history fallback for %s",
+                "Using Yahoo Finance history fallback for %s",
                 symbol,
             )
 
-            coincap_prices = fetch_coincap_history(
+            yahoo_prices = fetch_yahoo_history(
                 symbol,
                 days,
             )
 
             if isinstance(
-                coincap_prices,
+                yahoo_prices,
                 list,
             ):
-                prices = coincap_prices
+                prices = yahoo_prices
             else:
                 prices = []
 
