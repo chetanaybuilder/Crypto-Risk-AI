@@ -226,16 +226,20 @@ function redirectToHome() {
     window.location.href = "/";
 }
 
-
 /* ============================================================
    API REQUEST LAYER
    ============================================================ */
 
 function resolveApiUrl(url) {
+    // Dynamically fallback to Render backend if running in production on Vercel
+    const defaultBase = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost'
+        ? 'http://127.0.0.1:5000'
+        : 'https://crypto-risk-ai-j1ag.onrender.com';
+
     const configured =
-        typeof window !== "undefined" &&
+        (typeof window !== "undefined" &&
         window.CONFIG &&
-        window.CONFIG.API_BASE_URL;
+        window.CONFIG.API_BASE_URL) || defaultBase;
 
     const base =
         typeof configured === "string"

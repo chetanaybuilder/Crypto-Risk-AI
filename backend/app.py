@@ -45,6 +45,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 from dotenv import load_dotenv
+from flask_cors import CORS
 
 import psycopg2
 import requests
@@ -287,6 +288,7 @@ app = Flask(
     static_folder="static",
     template_folder="templates",
 )
+CORS(app, resources={r"/api/": {"origins": ""}})
 
 app.config["SECRET_KEY"] = SECRET_KEY
 
