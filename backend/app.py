@@ -2571,6 +2571,193 @@ def fetch_binance_history(
 
         return []
 
+
+# ============================================================
+# PRICE HISTORY — COINCAP FALLBACK
+# ============================================================
+
+def fetch_coincap_history(
+    symbol: str,
+    days: int = SUPPORTED_HISTORY_DAYS,
+) -> list:
+    """
+    Fetch historical daily prices from the CoinCap v2 API.
+
+    Cloud-friendly fallback for when CoinGecko and Binance history
+    endpoints are unavailable (e.g. rate-limited on Render).
+
+    Returns a chronologically ordered list of positive daily closing
+    prices, or [] on any failure.
+    """
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return []
+
+    resolution = http_get(
+        "https://api.coincap.io/v2/assets",
+        params={
+            "search": symbol.lower()
+        },
+        timeout=MARKET_TIMEOUT,
+    )
+
+    if resolution is None:
+        return []
+
+    try:
+
+        payload = resolution.json()
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+            return []
+
+        assets = payload.get(
+            "data",
+            [],
+        )
+
+        if (
+            not isinstance(
+                assets,
+                list,
+            )
+            or not assets
+        ):
+            return []
+
+        asset_id = assets[0].get(
+            "id"
+        )
+
+        if not asset_id:
+            return []
+
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+    ) as exc:
+
+        logger.warning(
+            "CoinCap asset resolution failed: %s",
+            exc,
+        )
+
+        return []
+
+    except Exception as exc:
+
+        logger.warning(
+            "CoinCap asset resolution failed unexpectedly: %s",
+            exc,
+        )
+
+        return []
+
+    lookback = _safe_lookback(
+        days,
+        default=SUPPORTED_HISTORY_DAYS,
+    )
+
+    end_ms = int(
+        time.time() * 1000
+    )
+    start_ms = end_ms - (
+        lookback * 24 * 60 * 60 * 1000
+    )
+
+    response = http_get(
+        "https://api.coincap.io/v2/assets/"
+        f"{quote(str(asset_id), safe='')}/history",
+        params={
+            "interval": "d1",
+            "start": start_ms,
+            "end": end_ms,
+        },
+        timeout=MARKET_TIMEOUT,
+    )
+
+    if response is None:
+        return []
+
+    try:
+
+        payload = response.json()
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+            return []
+
+        history = payload.get(
+            "data",
+            [],
+        )
+
+        if not isinstance(
+            history,
+            list,
+        ):
+            return []
+
+        result = []
+
+        for item in history:
+
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            price = optional_numeric(
+                item.get(
+                    "priceUsd"
+                )
+            )
+
+            if (
+                price is None
+                or price <= 0
+            ):
+                continue
+
+            result.append(price)
+
+        return result
+
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+    ) as exc:
+
+        logger.warning(
+            "CoinCap history parsing failed: %s",
+            exc,
+        )
+
+        return []
+
+    except Exception as exc:
+
+        logger.warning(
+            "CoinCap history failed unexpectedly: %s",
+            exc,
+        )
+
+        return []
+
+
+
             
 
 
@@ -2684,6 +2871,27 @@ def fetch_price_history(
             list,
         ):
             prices = []
+
+        if len(prices) < 2:
+
+            logger.info(
+                "Using CoinCap history fallback for %s",
+                symbol,
+            )
+
+            coincap_prices = fetch_coincap_history(
+                symbol,
+                days,
+            )
+
+            if isinstance(
+                coincap_prices,
+                list,
+            ):
+                prices = coincap_prices
+            else:
+                prices = []
+
 
         try:
 
