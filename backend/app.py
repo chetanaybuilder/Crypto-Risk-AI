@@ -2105,6 +2105,29 @@ def fetch_market_data(
         if not market.get(
             "available"
         ):
+            logger.info("Using CoinCap cloud-friendly fallback for %s", symbol)
+            try:
+                map_url = f"https://api.coincap.io/v2/assets?search={symbol.lower()}"
+                res = requests.get(map_url, timeout=5)
+                if res.status_code == 200:
+                    assets = res.json().get("data", [])
+                    if assets:
+                        asset = assets[0]
+                        market = {
+                            "available": True,
+                            "price": float(asset.get("priceUsd", 0)),
+                            "market_cap": float(asset.get("marketCapUsd", 0)),
+                            "volume_24h": float(asset.get("volumeUsd24Hr", 0)),
+                            "price_change_24h_pct": float(asset.get("changePercent24Hr", 0)),
+                            "source": "CoinCap API",
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
+            except Exception as exc:
+                logger.debug("CoinCap fallback failed: %s", exc)
+
+        if not market.get(
+            "available"
+        ):
 
             market = empty_market_data(
                 symbol
@@ -2177,37 +2200,6 @@ def fetch_market_data(
             return empty_market_data(
                 ""
             )
-
-
-# ============================================================
-# MARKET — 7D CHANGE ENRICHMENT
-# ============================================================
-
-def _safe_lookback(
-    value,
-    default: int = 7,
-) -> int:
-    """Coerce a lookback window to a positive int without raising."""
-
-    try:
-
-        number = int(value)
-
-        if number <= 0:
-            return int(default)
-
-        return number
-
-    except (
-        TypeError,
-        ValueError,
-        OverflowError,
-    ):
-        try:
-            return int(default)
-        except Exception:
-            return 7
-
 
 def _price_series_change(
     prices: list,
@@ -2461,6 +2453,27 @@ def fetch_coingecko_history(
 # PRICE HISTORY — BINANCE
 # ============================================================
 
+def _safe_lookback(
+    value,
+    default: int = 7,
+) -> int:
+    """Coerce a lookback window to a positive int without raising."""
+    try:
+        number = int(value)
+        if number <= 0:
+            return int(default)
+        return number
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        try:
+            return int(default)
+        except Exception:
+            return 7
+
+
 def fetch_binance_history(
     symbol: str,
     days: int = SUPPORTED_HISTORY_DAYS,
@@ -2557,6 +2570,8 @@ def fetch_binance_history(
         )
 
         return []
+
+            
 
 
 # ============================================================
