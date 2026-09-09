@@ -1,32 +1,43 @@
-/* =========================================================
+/* ============================================================
    CryptoRisk AI — Frontend Configuration
-   ========================================================= */
+   ============================================================
+   Central configuration module for the standalone frontend.
+   All settings are exposed via window.CONFIG (frozen).
+
+   Usage:
+     const apiUrl = window.CONFIG.API_BASE_URL;
+     const timeout = window.CONFIG.API_TIMEOUT;
+
+   Note: This file uses an IIFE to avoid polluting global scope.
+   ============================================================ */
 
 (() => {
     "use strict";
 
     const CONFIG = {
-        // Backend
+        // Backend API base URL (Render deployment)
         API_BASE_URL: "https://crypto-risk-ai-j1ag.onrender.com",
 
-        // API behavior
+        // API request timeout in milliseconds
         API_TIMEOUT: 30000,
 
-        // Live market refresh
+        // Live market data refresh interval (15 seconds)
         LIVE_REFRESH_INTERVAL: 15000,
 
-        // Authentication
+        // LocalStorage key for JWT auth token
         AUTH_TOKEN_KEY: "cryptorisk_auth_token",
 
-        // App metadata
+        // Application metadata
         APP_NAME: "CryptoRisk AI",
         APP_VERSION: "1.0.0",
 
-        // Frontend behavior
+        // Maximum history items to display
         MAX_HISTORY_ITEMS: 50,
+
+        // Default currency for price display
         DEFAULT_CURRENCY: "USD",
 
-        // Analysis
+        // Analysis request timeout (60 seconds)
         ANALYSIS_TIMEOUT: 60000
     };
 
@@ -35,4 +46,4 @@
 
     // Freeze configuration so other scripts cannot accidentally modify it
     window.CONFIG = Object.freeze(CONFIG);
-})();s
+})();

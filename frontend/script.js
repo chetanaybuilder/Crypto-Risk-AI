@@ -1,2428 +1,4931 @@
+"use strict";
+
+/*
+ * ============================================================
+ * CryptoRisk AI — Dashboard Controller
+ * Backend Report Schema: 3.0
+ *
+ * Backend is the single source of truth.
+ * ============================================================
+ */
+
+
 /* ============================================================
-   CRYPTORISK AI
-   FRONTEND INTELLIGENCE TERMINAL
-   PART 1 / 2
+   API
    ============================================================ */
 
-(() => {
-    "use strict";
+const API = {
+    dashboard: "/api/dashboard",
+    analyze: "/api/analyze",
+    logout: "/api/auth/logout",
+    me: "/api/auth/me",
 
-    /* ---------------------------------------------------------
-       CONFIG
-       --------------------------------------------------------- */
+    market: (symbol) =>
+        `/api/market/${encodeURIComponent(symbol)}`,
 
-    const CONFIG = window.CONFIG || {};
+    history: (id) =>
+        `/api/history/${encodeURIComponent(id)}`,
 
-    const API_BASE_URL = String(
-        CONFIG.API_BASE_URL ||
-        "https://crypto-risk-ai-j1ag.onrender.com"
-    ).replace(/\/+$/, "");
+    deleteHistory: (id) =>
+        `/api/history/${encodeURIComponent(id)}`
+};
 
-    const API_TIMEOUT =
-        Number(CONFIG.API_TIMEOUT) > 0
-            ? Number(CONFIG.API_TIMEOUT)
-            : 30000;
 
-    const LIVE_REFRESH_INTERVAL =
-        Number(CONFIG.LIVE_REFRESH_INTERVAL) > 0
-            ? Number(CONFIG.LIVE_REFRESH_INTERVAL)
-            : 15000;
+/* ============================================================
+   STORAGE
+   ============================================================ */
 
-    const TOKEN_KEYS = ["token", "auth_token"];
+const STORAGE_KEYS = {
+    token: "token"
+};
 
-    /* ---------------------------------------------------------
-       APPLICATION STATE
-       --------------------------------------------------------- */
 
-    const state = {
-        token: null,
-        user: null,
-        report: null,
-        history: [],
-        analysisRunning: false,
-        liveTimer: null,
-        liveRefreshing: false
-    };
+/* ============================================================
+   APPLICATION STATE
+   ============================================================ */
 
-    /* ---------------------------------------------------------
-       DOM HELPERS
-       --------------------------------------------------------- */
+const state = {
+    token: null,
+    user: null,
 
-    function getElement(id) {
-        return document.getElementById(id);
+    latestReport: null,
+
+    currentReportId: null,
+    currentSymbol: null,
+
+    livePollTimer: null,
+
+    isAnalyzing: false
+};
+
+
+/* ============================================================
+   DOM HELPERS
+   ============================================================ */
+
+function $(selector) {
+    return document.querySelector(selector);
+}
+
+
+function $all(selector) {
+    return Array.from(
+        document.querySelectorAll(selector)
+    );
+}
+
+
+function setText(
+    selector,
+    value,
+    fallback = "—"
+) {
+    const element = $(selector);
+
+    if (!element) {
+        return;
     }
 
-    function query(selector) {
-        return document.querySelector(selector);
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        element.textContent = fallback;
+        return;
     }
 
-    function queryAll(selector) {
-        return Array.from(document.querySelectorAll(selector));
+    element.textContent = String(value);
+}
+
+
+function setHTML(
+    selector,
+    html
+) {
+    const element = $(selector);
+
+    if (element) {
+        element.innerHTML = html;
+    }
+}
+
+
+function show(element) {
+    if (!element) {
+        return;
     }
 
-    function isDashboardPage() {
-        return document.body.classList.contains("dashboard-page");
+    element.hidden = false;
+    element.style.display = "";
+}
+
+
+function hide(element) {
+    if (!element) {
+        return;
     }
 
-    function setText(id, value) {
-        const element = getElement(id);
+    element.hidden = true;
+    element.style.display = "none";
+}
 
-        if (!element) {
-            return;
-        }
 
-        if (value === undefined || value === null || value === "") {
-            element.textContent = "—";
-        } else {
-            element.textContent = String(value);
-        }
+function toggle(
+    element,
+    visible
+) {
+    if (visible) {
+        show(element);
+    } else {
+        hide(element);
+    }
+}
+
+
+/* ============================================================
+   AUTH
+   ============================================================ */
+
+function getTokenFromStorage() {
+    return localStorage.getItem(
+        STORAGE_KEYS.token
+    );
+}
+
+
+function saveToken(token) {
+    if (!token) {
+        return;
     }
 
-    function setHidden(id, hidden) {
-        const element = getElement(id);
+    state.token = token;
 
-        if (!element) {
-            return;
-        }
+    localStorage.setItem(
+        STORAGE_KEYS.token,
+        token
+    );
+}
 
-        element.hidden = Boolean(hidden);
-    }
 
-    function addClass(id, className) {
-        const element = getElement(id);
+function clearToken() {
+    state.token = null;
 
-        if (element && className) {
-            element.classList.add(className);
-        }
-    }
+    localStorage.removeItem(
+        STORAGE_KEYS.token
+    );
+}
 
-    function removeClasses(id, classes) {
-        const element = getElement(id);
 
-        if (!element) {
-            return;
-        }
+function consumeQueryToken() {
+    const params =
+        new URLSearchParams(
+            window.location.search
+        );
 
-        classes.forEach((className) => {
-            element.classList.remove(className);
-        });
-    }
+    const token =
+        params.get("token");
 
-    /* ---------------------------------------------------------
-       AUTHENTICATION
-       --------------------------------------------------------- */
-
-    function getToken() {
-        for (const key of TOKEN_KEYS) {
-            const token = localStorage.getItem(key);
-
-            if (token) {
-                return token;
-            }
-        }
-
+    if (!token) {
         return null;
     }
 
-    function saveToken(token) {
-        if (!token) {
-            return;
-        }
+    saveToken(token);
 
-        localStorage.setItem("token", token);
-        localStorage.setItem("auth_token", token);
+    const cleanUrl =
+        window.location.pathname +
+        window.location.hash;
 
-        state.token = token;
+    window.history.replaceState(
+        {},
+        document.title,
+        cleanUrl
+    );
+
+    return token;
+}
+
+
+function getAuthHeaders() {
+    const token =
+        state.token ||
+        getTokenFromStorage();
+
+    if (!token) {
+        return {};
     }
 
-    function clearToken() {
-        TOKEN_KEYS.forEach((key) => {
-            localStorage.removeItem(key);
-        });
+    return {
+        Authorization:
+            `Bearer ${token}`
+    };
+}
 
-        state.token = null;
+
+function redirectToHome() {
+    clearToken();
+
+    stopLivePolling();
+
+    window.location.href = "/";
+}
+
+
+/* ============================================================
+   API REQUEST LAYER
+   ============================================================ */
+
+/*
+ * Resolve an API path against the configured backend base URL.
+ *
+ * The static frontend (served from its own origin) loads
+ * frontend/config.js, which sets window.CONFIG.API_BASE_URL to
+ * the Flask backend. The backend-served dashboard does not load
+ * config.js, so CONFIG is undefined and same-origin relative
+ * URLs are used unchanged.
+ */
+function resolveApiUrl(url) {
+    const configured =
+        typeof window !== "undefined" &&
+        window.CONFIG &&
+        window.CONFIG.API_BASE_URL;
+
+    const base =
+        typeof configured === "string"
+            ? configured.trim().replace(/\/+$/, "")
+            : "";
+
+    if (
+        !base ||
+        typeof url !== "string" ||
+        url.startsWith("http://") ||
+        url.startsWith("https://") ||
+        url.startsWith("//")
+    ) {
+        return url;
     }
 
-    function processOAuthToken() {
-        const params = new URLSearchParams(window.location.search);
-        const token = params.get("token");
-
-        if (!token) {
-            return;
-        }
-
-        saveToken(token);
-
-        params.delete("token");
-
-        const query = params.toString();
-
-        const cleanURL =
-            window.location.pathname +
-            (query ? `?${query}` : "");
-
-        window.history.replaceState(
-            {},
-            document.title,
-            cleanURL
-        );
+    if (url.startsWith("/")) {
+        return `${base}${url}`;
     }
 
-    /* ---------------------------------------------------------
-       API
-       --------------------------------------------------------- */
+    return `${base}/${url}`;
+}
 
-    function buildAPIURL(path) {
-        const normalized =
-            String(path || "").startsWith("/")
-                ? path
-                : `/${path}`;
 
-        return `${API_BASE_URL}${normalized}`;
+async function apiRequest(
+    url,
+    options = {}
+) {
+    const resolvedUrl =
+        resolveApiUrl(url);
+
+    const headers = {
+        Accept: "application/json",
+
+        ...(options.headers || {}),
+
+        ...getAuthHeaders()
+    };
+
+    if (
+        options.body &&
+        typeof options.body !== "string"
+    ) {
+        headers["Content-Type"] =
+            "application/json";
+
+        options = {
+            ...options,
+
+            body: JSON.stringify(
+                options.body
+            )
+        };
     }
 
-    async function apiRequest(path, options = {}) {
-        const controller = new AbortController();
+    let response;
 
-        const timeoutId = window.setTimeout(() => {
-            controller.abort();
-        }, API_TIMEOUT);
-
-        const headers = new Headers(
-            options.headers || {}
-        );
-
-        if (options.body && !headers.has("Content-Type")) {
-            headers.set(
-                "Content-Type",
-                "application/json"
-            );
-        }
-
-        const token = state.token || getToken();
-
-        if (token) {
-            headers.set(
-                "Authorization",
-                `Bearer ${token}`
-            );
-        }
-
-        try {
-            const response = await fetch(
-                buildAPIURL(path),
+    try {
+        response =
+            await fetch(
+                resolvedUrl,
                 {
                     ...options,
-                    headers,
-                    credentials: "include",
-                    signal: controller.signal
+                    headers
                 }
             );
+    } catch (error) {
+        console.error(
+            "Network error:",
+            error
+        );
 
-            let payload = null;
+        throw new Error(
+            "Unable to connect to the CryptoRisk backend."
+        );
+    }
 
-            const contentType =
-                response.headers.get("content-type") || "";
+    let payload = null;
 
-            if (contentType.includes("application/json")) {
-                try {
-                    payload = await response.json();
-                } catch {
-                    payload = null;
-                }
-            }
+    const contentType =
+        response.headers.get(
+            "content-type"
+        ) || "";
 
-            if (response.status === 401) {
-                clearToken();
-
-                if (isDashboardPage()) {
-                    window.location.replace("index.html");
-                }
-
-                throw new Error(
-                    "Your session has expired. Please sign in again."
-                );
-            }
-
-            if (!response.ok) {
-                const message =
-                    payload?.error ||
-                    payload?.message ||
-                    `Request failed (${response.status}).`;
-
-                throw new Error(message);
-            }
-
-            return payload;
+    if (
+        contentType.includes(
+            "application/json"
+        )
+    ) {
+        try {
+            payload =
+                await response.json();
         } catch (error) {
-            if (error.name === "AbortError") {
-                throw new Error(
-                    "The request timed out. Please try again."
-                );
-            }
-
-            throw error;
-        } finally {
-            window.clearTimeout(timeoutId);
-        }
-    }
-
-    /* ---------------------------------------------------------
-       FORM / ERROR UI
-       --------------------------------------------------------- */
-
-    function showError(message) {
-        const element = getElement("analysis-error");
-
-        if (!element) {
-            return;
-        }
-
-        element.textContent = message || "";
-        element.hidden = !message;
-    }
-
-    function setAnalyzeLoading(loading) {
-        const button =
-            getElement("analyze-button");
-
-        const loader =
-            getElement("button-loader");
-
-        if (button) {
-            button.disabled = loading;
-            button.classList.toggle(
-                "is-loading",
-                loading
+            console.warn(
+                "Could not parse JSON response.",
+                error
             );
-        }
 
-        if (loader) {
-            loader.hidden = !loading;
+            payload = null;
+        }
+    } else {
+        try {
+            const text =
+                await response.text();
+
+            if (text) {
+                payload = {
+                    message: text
+                };
+            }
+        } catch {
+            payload = null;
         }
     }
 
-    /* ---------------------------------------------------------
-       GOOGLE LOGIN
-       --------------------------------------------------------- */
+    /*
+     * Session expired.
+     */
+    if (response.status === 401) {
+        clearToken();
 
-    function setupGoogleLogin() {
-        queryAll("[data-google-login]").forEach(
-            (link) => {
-                link.setAttribute(
-                    "href",
-                    buildAPIURL("/api/auth/google")
-                );
-            }
+        stopLivePolling();
+
+        if (
+            window.location.pathname !== "/" &&
+            window.location.pathname !== ""
+        ) {
+            window.location.href = "/";
+        }
+
+        throw new Error(
+            payload?.message ||
+            payload?.error ||
+            "Your session has expired."
         );
     }
 
-    /* ---------------------------------------------------------
-       LOGOUT
-       --------------------------------------------------------- */
+    /*
+     * Other HTTP errors.
+     */
+    if (!response.ok) {
+        const message =
+            payload?.message ||
+            payload?.error ||
+            payload?.detail ||
+            `Request failed (${response.status}).`;
 
-    function setupLogout() {
-        const button =
-            getElement("logout-button");
-
-        if (!button) {
-            return;
-        }
-
-        button.addEventListener(
-            "click",
-            async () => {
-                button.disabled = true;
-
-                try {
-                    await apiRequest(
-                        "/api/auth/logout",
-                        {
-                            method: "POST"
-                        }
-                    );
-                } catch (error) {
-                    console.warn(
-                        "Logout request failed:",
-                        error
-                    );
-                } finally {
-                    clearToken();
-
-                    window.location.replace(
-                        "index.html"
-                    );
-                }
-            }
-        );
+        throw new Error(message);
     }
 
-    /* ---------------------------------------------------------
-       USER
-       --------------------------------------------------------- */
+    return payload || {};
+}
 
-    function renderUser(user) {
-        if (!user) {
-            return;
-        }
 
-        state.user = user;
+/* ============================================================
+   ERROR UI
+   ============================================================ */
 
-        setText(
-            "user-name",
-            user.username ||
-            user.name ||
+function showAnalysisError(
+    message
+) {
+    const element =
+        $("#analysis-error");
+
+    if (!element) {
+        console.error(
+            message
+        );
+
+        return;
+    }
+
+    element.textContent =
+        message ||
+        "Something went wrong.";
+
+    show(element);
+}
+
+
+function clearAnalysisError() {
+    const element =
+        $("#analysis-error");
+
+    if (!element) {
+        return;
+    }
+
+    element.textContent = "";
+
+    hide(element);
+}
+
+
+/* ============================================================
+   USER UI
+   ============================================================ */
+
+function renderUser(user) {
+    if (
+        !user ||
+        typeof user !== "object"
+    ) {
+        return;
+    }
+
+    state.user = user;
+
+    const displayName =
+        firstDefined(
+            user.username,
+            user.name,
+            user.email,
             "User"
         );
 
-        setText(
-            "user-email",
-            user.email || ""
+    setText(
+        ".user-name",
+        displayName
+    );
+
+    setText(
+        ".user-email",
+        user.email || ""
+    );
+
+    const avatars =
+        $all(".user-avatar");
+
+    avatars.forEach(
+        (avatar) => {
+            if (user.avatar_url) {
+                avatar.src =
+                    user.avatar_url;
+
+                avatar.alt =
+                    displayName;
+            } else {
+                avatar.removeAttribute(
+                    "src"
+                );
+
+                avatar.alt =
+                    displayName;
+            }
+        }
+    );
+}
+
+
+/* ============================================================
+   PROGRESS SYSTEM
+   ============================================================ */
+
+const PROGRESS_STAGES = {
+    market: {
+        percent: 20,
+        title:
+            "Fetching live market data"
+    },
+
+    model: {
+        percent: 45,
+        title:
+            "Running quantitative risk engine"
+    },
+
+    stress: {
+        percent: 65,
+        title:
+            "Running stress scenarios"
+    },
+
+    ai: {
+        percent: 82,
+        title:
+            "Synthesizing evidence"
+    },
+
+    save: {
+        percent: 96,
+        title:
+            "Saving intelligence report"
+    },
+
+    complete: {
+        percent: 100,
+        title:
+            "Analysis complete"
+    }
+};
+
+/*
+ * Active animation handle so we can cancel a previous
+ * run if startProgress is invoked again before the
+ * prior animation finishes.
+ */
+let _progressAnim = null;
+
+
+/*
+ * Map a 0–100 progress value to the matching pipeline
+ * stage so the status pills light up continuously as
+ * the beam advances instead of jumping discretely.
+ */
+function _stageForPercent(
+    percent
+) {
+    if (percent >= 96) {
+        return "save";
+    }
+    if (percent >= 82) {
+        return "ai";
+    }
+    if (percent >= 65) {
+        return "stress";
+    }
+    if (percent >= 45) {
+        return "model";
+    }
+    return "market";
+}
+
+
+/*
+ * Smooth, continuous progress from 1% to target using
+ * requestAnimationFrame. The beam eases naturally and
+ * never gets stuck — it always advances toward the
+ * target and snaps to 100% once the API responds.
+ */
+function animateProgress(
+    targetPercent = 100
+) {
+    const fill =
+        $("#progress-fill");
+
+    const percentEl =
+        $("#progress-percent");
+
+    const startPercent = 1;
+    const startTime = performance.now();
+
+    /*
+     * Cap the visible run to ~4.5s so the bar never
+     * crawls — the API response snaps it to 100%.
+     */
+    const durationMs = 4500;
+
+    if (_progressAnim) {
+        cancelAnimationFrame(
+            _progressAnim
+        );
+        _progressAnim = null;
+    }
+
+    function frame(
+        now
+    ) {
+        const elapsed = now - startTime;
+
+        /*
+         * Ease-out cubic: fast start, gentle approach
+         * to the target so the beam feels alive.
+         */
+        const t = Math.min(
+            elapsed / durationMs,
+            1
         );
 
-        const avatar =
-            getElement("user-avatar");
+        const eased = 1 - Math.pow(
+            1 - t,
+            3
+        );
 
-        if (!avatar) {
+        const current = startPercent + (
+            targetPercent - startPercent
+        ) * eased;
+
+        const stageName = _stageForPercent(
+            current
+        );
+
+        const config =
+            PROGRESS_STAGES[stageName] ||
+            PROGRESS_STAGES.market;
+
+        if (fill) {
+            fill.style.width =
+                `${current}%`;
+        }
+
+        if (percentEl) {
+            percentEl.textContent =
+                `${Math.round(current)}%`;
+        }
+
+        setText(
+            "#progress-title",
+            config.title
+        );
+
+        /*
+         * Light up status pills to match the beam.
+         */
+        const stageOrder = [
+            "market",
+            "model",
+            "stress",
+            "ai",
+            "save"
+        ];
+
+        const currentIndex =
+            stageOrder.indexOf(
+                stageName
+            );
+
+        $all(
+            ".progress-status"
+        ).forEach(
+            (element) => {
+                element.classList.remove(
+                    "active",
+                    "complete"
+                );
+
+                const index =
+                    stageOrder.indexOf(
+                        element.dataset.stage
+                    );
+
+                if (
+                    index < 0
+                ) {
+                    return;
+                }
+
+                if (
+                    index < currentIndex
+                ) {
+                    element.classList.add(
+                        "complete"
+                    );
+                } else if (
+                    index === currentIndex
+                ) {
+                    element.classList.add(
+                        "active"
+                    );
+                }
+            }
+        );
+
+        if (
+            t < 1 &&
+            current < targetPercent
+        ) {
+            _progressAnim =
+                requestAnimationFrame(
+                    frame
+                );
             return;
         }
 
-        const name =
-            user.username ||
-            user.name ||
-            user.email ||
-            "U";
+        /*
+         * Reached the target — ensure the final
+         * stage is fully lit.
+         */
+        setProgressStage(
+            _stageForPercent(
+                targetPercent
+            )
+        );
+    }
 
-        avatar.textContent =
-            String(name)
-                .charAt(0)
-                .toUpperCase();
+    _progressAnim = requestAnimationFrame(
+        frame
+    );
+}
 
-        if (user.avatar_url) {
-            avatar.style.backgroundImage =
-                `url("${String(user.avatar_url)
-                    .replace(/"/g, '\\"')}")`;
 
-            avatar.style.backgroundSize =
-                "cover";
+function setProgressStage(
+    stage
+) {
+    const config =
+        PROGRESS_STAGES[stage] ||
+        PROGRESS_STAGES.market;
 
-            avatar.style.backgroundPosition =
-                "center";
+    setText(
+        "#progress-title",
+        config.title
+    );
 
-            avatar.textContent = "";
-        } else {
-            avatar.style.backgroundImage = "";
+    setText(
+        "#progress-percent",
+        `${config.percent}%`
+    );
+
+    const fill =
+        $("#progress-fill");
+
+    if (fill) {
+        fill.style.width =
+            `${config.percent}%`;
+    }
+
+    $all(
+        ".progress-status"
+    ).forEach(
+        (element) => {
+            element.classList.remove(
+                "active",
+                "complete"
+            );
+
+            const stageName =
+                element.dataset.stage;
+
+            if (
+                stageName === stage
+            ) {
+                element.classList.add(
+                    "active"
+                );
+            }
+        }
+    );
+
+    const stageOrder = [
+        "market",
+        "model",
+        "stress",
+        "ai",
+        "save"
+    ];
+
+    const currentIndex =
+        stageOrder.indexOf(stage);
+
+    if (currentIndex < 0) {
+        return;
+    }
+
+    $all(
+        ".progress-status"
+    ).forEach(
+        (element) => {
+            const index =
+                stageOrder.indexOf(
+                    element.dataset.stage
+                );
+
+            if (
+                index >= 0 &&
+                index < currentIndex
+            ) {
+                element.classList.add(
+                    "complete"
+                );
+            }
+        }
+    );
+}
+
+
+function startProgress() {
+    const overlay =
+        $("#analysis-progress");
+
+    if (!overlay) {
+        return;
+    }
+
+    show(overlay);
+
+    /*
+     * Kick off the smooth beam animation from 1%.
+     * It runs concurrently with the API request and
+     * snaps to 100% when finishProgress is called.
+     */
+    animateProgress(95);
+}
+
+
+function finishProgress() {
+    const overlay =
+        $("#analysis-progress");
+
+    if (!overlay) {
+        return;
+    }
+
+    /*
+     * Snap the beam to 100% and light up every
+     * stage pill so the user sees a clean finish.
+     */
+    animateProgress(100);
+
+    setProgressStage(
+        "complete"
+    );
+
+    setTimeout(
+        () => {
+            hide(overlay);
+        },
+        450
+    );
+}
+
+
+/* ============================================================
+   FORMATTERS
+   ============================================================ */
+
+function formatNumber(
+    value,
+    decimals = 2
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isFinite(number)
+    ) {
+        return "—";
+    }
+
+    return number.toLocaleString(
+        undefined,
+        {
+            maximumFractionDigits:
+                decimals
+        }
+    );
+}
+
+
+function formatUsd(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isFinite(number)
+    ) {
+        return "—";
+    }
+
+    if (
+        Math.abs(number) >=
+        1_000_000_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000_000_000,
+            2
+        )}B`;
+    }
+
+    if (
+        Math.abs(number) >=
+        1_000_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000_000,
+            2
+        )}M`;
+    }
+
+    if (
+        Math.abs(number) >=
+        1_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000,
+            2
+        )}K`;
+    }
+
+    if (
+        Math.abs(number) >= 1
+    ) {
+        return `$${formatNumber(
+            number,
+            2
+        )}`;
+    }
+
+    return `$${number.toFixed(6)}`;
+}
+
+
+function formatPercent(
+    value
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isFinite(number)
+    ) {
+        return "—";
+    }
+
+    const sign =
+        number > 0
+            ? "+"
+            : "";
+
+    return `${sign}${number.toFixed(2)}%`;
+}
+
+
+function formatScore(
+    value
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isFinite(number)
+    ) {
+        return "—";
+    }
+
+    return Math.round(number);
+}
+
+
+function formatConfidence(
+    value
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isFinite(number)
+    ) {
+        return "—";
+    }
+
+    return `${number.toFixed(1)}%`;
+}
+
+
+function formatDate(value) {
+    if (!value) {
+        return "—";
+    }
+
+    const date =
+        new Date(value);
+
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return String(value);
+    }
+
+    return date.toLocaleString(
+        undefined,
+        {
+            dateStyle: "medium",
+            timeStyle: "short"
+        }
+    );
+}
+
+
+function formatRelativeTime(
+    value
+) {
+    if (!value) {
+        return "—";
+    }
+
+    const date =
+        new Date(value);
+
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return formatDate(value);
+    }
+
+    const seconds =
+        Math.floor(
+            (
+                Date.now() -
+                date.getTime()
+            ) / 1000
+        );
+
+    if (seconds < 10) {
+        return "just now";
+    }
+
+    if (seconds < 60) {
+        return `${seconds}s ago`;
+    }
+
+    const minutes =
+        Math.floor(
+            seconds / 60
+        );
+
+    if (minutes < 60) {
+        return `${minutes}m ago`;
+    }
+
+    const hours =
+        Math.floor(
+            minutes / 60
+        );
+
+    if (hours < 24) {
+        return `${hours}h ago`;
+    }
+
+    return `${Math.floor(
+        hours / 24
+    )}d ago`;
+}
+
+
+function clampScore(value) {
+    /*
+     * IMPORTANT:
+     * Missing score = null.
+     * NEVER convert missing score to 0.
+     */
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return null;
+    }
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isFinite(number)
+    ) {
+        return null;
+    }
+
+    return Math.max(
+        0,
+        Math.min(
+            100,
+            number
+        )
+    );
+}
+
+
+/* ============================================================
+   SAFE DATA HELPERS
+   ============================================================ */
+
+function firstDefined(
+    ...values
+) {
+    for (
+        const value of values
+    ) {
+        if (
+            value !== undefined &&
+            value !== null &&
+            value !== ""
+        ) {
+            return value;
         }
     }
 
-    async function loadUser() {
-        const payload =
-            await apiRequest("/api/auth/me");
+    return null;
+}
 
-        if (payload?.user) {
-            renderUser(payload.user);
-        }
 
+function isRiskReport(
+    value
+) {
+    if (
+        !value ||
+        typeof value !== "object"
+    ) {
+        return false;
+    }
+
+    /*
+     * Strong indicators of schema 3.0.
+     */
+    if (
+        value.schema_version ||
+        value.risk_profile ||
+        value.risk_drivers ||
+        value.stress_test ||
+        value.data_quality
+    ) {
+        return true;
+    }
+
+    /*
+     * Also support a direct report
+     * without schema_version.
+     */
+    return Boolean(
+        value.risk_score !== undefined &&
+        (
+            value.asset ||
+            value.token_symbol
+        )
+    );
+}
+
+
+function getReportFromPayload(
+    payload
+) {
+    if (!payload) {
+        return null;
+    }
+
+    /*
+     * Case 1:
+     *
+     * Backend returns the report itself.
+     */
+    if (
+        isRiskReport(payload)
+    ) {
         return payload;
     }
 
-    /* ---------------------------------------------------------
-       PROGRESS OVERLAY
-       --------------------------------------------------------- */
+    /*
+     * Case 2:
+     *
+     * Backend wraps report in analysis.
+     */
+    const candidates = [
+        payload.analysis,
 
-    function ensureProgressOverlay() {
-        if (getElement("analysis-progress")) {
-            return;
+        /*
+         * Case 3:
+         * { report: {...} }
+         */
+        payload.report,
+
+        /*
+         * Case 4:
+         * { latest: { report: {...} } }
+         */
+        payload.latest?.report,
+
+        /*
+         * Case 5:
+         * { latest: {...report...} }
+         */
+        payload.latest,
+
+        /*
+         * Case 6:
+         * { data: {...report...} }
+         */
+        payload.data
+    ];
+
+    for (
+        const candidate of candidates
+    ) {
+        if (
+            isRiskReport(candidate)
+        ) {
+            return candidate;
         }
-
-        const overlay =
-            document.createElement("div");
-
-        overlay.id = "analysis-progress";
-        overlay.hidden = true;
-
-        overlay.innerHTML = `
-            <div class="progress-overlay">
-                <div class="progress-card">
-                    <div class="progress-eyebrow">
-                        CRYPTORISK AI
-                    </div>
-
-                    <h3 id="progress-title">
-                        Preparing analysis
-                    </h3>
-
-                    <div class="progress-track">
-                        <div id="progress-fill"></div>
-                    </div>
-
-                    <div class="progress-meta">
-                        <span id="progress-percent">
-                            0%
-                        </span>
-
-                        <span>
-                            EVIDENCE ENGINE
-                        </span>
-                    </div>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(overlay);
     }
 
-    function updateProgress(title, percent) {
-        ensureProgressOverlay();
+    return null;
+}
 
-        setText(
-            "progress-title",
-            title
+
+/* ============================================================
+   REPORT ACCESSORS
+   ============================================================ */
+
+function getRiskProfile(
+    report
+) {
+    return (
+        report?.risk_profile || {}
+    );
+}
+
+
+function getPillars(
+    report
+) {
+    return (
+        report
+            ?.risk_profile
+            ?.pillars || {}
+    );
+}
+
+
+function getPillar(
+    report,
+    name
+) {
+    return (
+        report
+            ?.risk_profile
+            ?.pillars
+            ?.[name] || {}
+    );
+}
+
+
+function getAI(
+    report
+) {
+    return (
+        report?.ai || {}
+    );
+}
+
+
+function getMarket(
+    report
+) {
+    return (
+        report?.market || {}
+    );
+}
+
+
+function getSecurity(
+    report
+) {
+    return (
+        report?.security || {}
+    );
+}
+
+
+function getStress(
+    report
+) {
+    /*
+     * Backend Schema 3.0 exposes the scenario model under
+     * BOTH ``stress_test`` (canonical) and ``stress``
+     * (legacy alias). Normalize here so every render site
+     * reads the same object.
+     */
+    const stress =
+        report?.stress_test ||
+        report?.stress ||
+        {};
+
+    return stress;
+}
+
+
+function getDataQuality(
+    report
+) {
+    return (
+        report?.data_quality || {}
+    );
+}
+
+
+/* ============================================================
+   DASHBOARD LOAD
+   ============================================================ */
+
+async function loadDashboard() {
+    if (!state.token) {
+        redirectToHome();
+
+        return;
+    }
+
+    try {
+        const payload =
+            await apiRequest(
+                API.dashboard
+            );
+
+        console.log(
+            "CryptoRisk dashboard payload:",
+            payload
         );
 
-        setText(
-            "progress-percent",
-            `${percent}%`
-        );
+        /*
+         * User
+         */
+        if (payload.user) {
+            renderUser(
+                payload.user
+            );
+        }
 
-        const fill =
-            getElement("progress-fill");
+        /*
+         * Latest report.
+         *
+         * IMPORTANT:
+         * Do not assume latest itself is always
+         * the report.
+         */
+        const latest =
+            payload.latest;
 
-        if (fill) {
-            const bounded =
-                Math.max(
-                    0,
-                    Math.min(100, Number(percent) || 0)
+        if (latest) {
+            const report =
+                getReportFromPayload(
+                    latest
                 );
 
-            fill.style.width =
-                `${bounded}%`;
+            if (report) {
+                state.latestReport =
+                    report;
+
+                state.currentReportId =
+                    latest.id ||
+                    latest.analysis_id ||
+                    report.id ||
+                    null;
+
+                state.currentSymbol =
+                    firstDefined(
+                        report?.asset?.symbol,
+                        report?.token_symbol
+                    );
+
+                renderReport(
+                    report
+                );
+
+                if (
+                    state.currentSymbol
+                ) {
+                    startLivePolling(
+                        state.currentSymbol
+                    );
+                }
+
+            } else {
+                console.warn(
+                    "Latest dashboard item did not contain a valid report.",
+                    latest
+                );
+
+                clearReportView();
+            }
+
+        } else {
+            clearReportView();
         }
-    }
 
-    function showProgress() {
-        ensureProgressOverlay();
+        /*
+         * History
+         */
+        renderHistory(
+            Array.isArray(
+                payload.history
+            )
+                ? payload.history
+                : []
+        );
 
-        setHidden(
-            "analysis-progress",
-            false
+    } catch (error) {
+        console.error(
+            "Dashboard load failed:",
+            error
+        );
+
+        showAnalysisError(
+            error.message ||
+            "Unable to load dashboard."
         );
     }
+}
 
-    function hideProgress() {
-        setHidden(
-            "analysis-progress",
-            true
+
+/* ============================================================
+   ANALYSIS
+   ============================================================ */
+
+async function runAnalysis(
+    symbol
+) {
+    if (state.isAnalyzing) {
+        return;
+    }
+
+    state.isAnalyzing = true;
+
+    clearAnalysisError();
+
+    startProgress();
+
+    stopLivePolling();
+
+    const normalizedSymbol =
+        String(symbol || "")
+            .trim()
+            .toUpperCase();
+
+    if (!normalizedSymbol) {
+        state.isAnalyzing = false;
+
+        hide(
+            $("#analysis-progress")
         );
+
+        showAnalysisError(
+            "Enter a token symbol."
+        );
+
+        return;
     }
 
-    /* ---------------------------------------------------------
-       FORMATTERS
-       --------------------------------------------------------- */
-
-    function numeric(value) {
-        const number = Number(value);
-
-        return Number.isFinite(number)
-            ? number
-            : null;
-    }
-
-    function formatPrice(value) {
-        const number = numeric(value);
-
-        if (number === null) {
-            return "—";
-        }
-
-        if (number >= 1) {
-            return `$${number.toLocaleString(
-                "en-US",
+    try {
+        /*
+         * Fire the analysis request. The beam animation
+         * (started in startProgress) runs concurrently
+         * and advances smoothly while we await the API.
+         */
+        const payload =
+            await apiRequest(
+                API.analyze,
                 {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
+                    method: "POST",
+
+                    body: {
+                        token_symbol:
+                            normalizedSymbol
+                    }
                 }
-            )}`;
+            );
+
+        console.log(
+            "CryptoRisk analyze payload:",
+            payload
+        );
+
+        /*
+         * Extract actual report.
+         */
+        const report =
+            getReportFromPayload(
+                payload
+            );
+
+        if (!report) {
+            console.error(
+                "Analyze response did not contain a recognizable report:",
+                payload
+            );
+
+            throw new Error(
+                "The backend returned data, but no valid risk report was found."
+            );
         }
 
-        if (number >= 0.01) {
-            return `$${number.toLocaleString(
-                "en-US",
-                {
-                    minimumFractionDigits: 4,
-                    maximumFractionDigits: 4
-                }
-            )}`;
+        /*
+         * Store report.
+         */
+        state.latestReport =
+            report;
+
+        state.currentReportId =
+            firstDefined(
+                payload.analysis_id,
+                payload.id,
+                payload.analysis?.id,
+                payload.report?.id,
+                payload.latest?.id,
+                report.id
+            );
+
+        state.currentSymbol =
+            firstDefined(
+                report?.asset?.symbol,
+                report?.token_symbol,
+                normalizedSymbol
+            );
+
+        /*
+         * User.
+         */
+        if (payload.user) {
+            renderUser(
+                payload.user
+            );
         }
 
-        if (number > 0) {
-            return `$${number.toPrecision(6)}`;
-        }
+        /*
+         * Render.
+         */
+        renderReport(
+            report
+        );
 
-        return "$0.00";
-    }
-
-    function formatCompact(value) {
-        const number = numeric(value);
-
-        if (number === null) {
-            return "—";
-        }
-
-        const absolute =
-            Math.abs(number);
-
-        if (absolute >= 1e12) {
-            return `$${(
-                number / 1e12
-            ).toFixed(2)}T`;
-        }
-
-        if (absolute >= 1e9) {
-            return `$${(
-                number / 1e9
-            ).toFixed(2)}B`;
-        }
-
-        if (absolute >= 1e6) {
-            return `$${(
-                number / 1e6
-            ).toFixed(2)}M`;
-        }
-
-        if (absolute >= 1e3) {
-            return `$${(
-                number / 1e3
-            ).toFixed(2)}K`;
-        }
-
-        return `$${number.toFixed(2)}`;
-    }
-
-    function formatPercent(value) {
-        const number = numeric(value);
-
-        if (number === null) {
-            return "—";
-        }
-
-        const sign =
-            number > 0
-                ? "+"
-                : "";
-
-        return `${sign}${number.toFixed(2)}%`;
-    }
-
-    function formatDate(value) {
-        if (!value) {
-            return "—";
-        }
-
-        const date =
-            new Date(value);
-
+        /*
+         * History.
+         */
         if (
-            Number.isNaN(
-                date.getTime()
+            Array.isArray(
+                payload.history
             )
         ) {
-            return "—";
-        }
-
-        return date.toLocaleString(
-            "en-IN",
-            {
-                day: "2-digit",
-                month: "short",
-                year: "numeric",
-                hour: "2-digit",
-                minute: "2-digit"
-            }
-        );
-    }
-
-    /* ---------------------------------------------------------
-       RISK HELPERS
-       --------------------------------------------------------- */
-
-    function normalizeSeverity(value) {
-        return String(
-            value || ""
-        )
-            .trim()
-            .toLowerCase();
-    }
-
-    function riskClass(severity) {
-        const value =
-            normalizeSeverity(severity);
-
-        if (value.includes("critical")) {
-            return "risk-critical";
-        }
-
-        if (value.includes("high")) {
-            return "risk-high";
-        }
-
-        if (value.includes("moderate")) {
-            return "risk-moderate";
-        }
-
-        if (value.includes("low")) {
-            return "risk-low";
-        }
-
-        return "";
-    }
-
-    function applyRiskClass(element, severity) {
-        if (!element) {
-            return;
-        }
-
-        removeClasses(
-            element.id,
-            [
-                "risk-low",
-                "risk-moderate",
-                "risk-high",
-                "risk-critical"
-            ]
-        );
-
-        const className =
-            riskClass(severity);
-
-        if (className) {
-            element.classList.add(
-                className
-            );
-        }
-    }
-
-    function setChangeClass(id, value) {
-        const element =
-            getElement(id);
-
-        if (!element) {
-            return;
-        }
-
-        element.classList.remove(
-            "positive",
-            "negative",
-            "neutral"
-        );
-
-        const number =
-            numeric(value);
-
-        if (number === null) {
-            element.classList.add(
-                "neutral"
-            );
-        } else if (number > 0) {
-            element.classList.add(
-                "positive"
-            );
-        } else if (number < 0) {
-            element.classList.add(
-                "negative"
+            renderHistory(
+                payload.history
             );
         } else {
-            element.classList.add(
-                "neutral"
+            await refreshHistory();
+        }
+
+        finishProgress();
+
+        /*
+         * Live market only updates market
+         * fields. It never changes risk score.
+         */
+        startLivePolling(
+            state.currentSymbol
+        );
+
+    } catch (error) {
+        console.error(
+            "Analysis failed:",
+            error
+        );
+
+        showAnalysisError(
+            error.message ||
+            "Analysis failed."
+        );
+
+        hide(
+            $("#analysis-progress")
+        );
+
+    } finally {
+        state.isAnalyzing = false;
+    }
+}
+
+
+/* ============================================================
+   HISTORY FETCH
+   ============================================================ */
+
+async function refreshHistory() {
+    try {
+        const payload =
+            await apiRequest(
+                API.dashboard
+            );
+
+        if (payload.user) {
+            renderUser(
+                payload.user
             );
         }
+
+        renderHistory(
+            Array.isArray(
+                payload.history
+            )
+                ? payload.history
+                : []
+        );
+
+    } catch (error) {
+        console.error(
+            "History refresh failed:",
+            error
+        );
+    }
+}
+
+
+/* ============================================================
+   SINGLE HISTORY REPORT
+   ============================================================ */
+
+async function loadHistoryReport(
+    id
+) {
+    if (!id) {
+        return;
     }
 
-    function setRiskBar(id, value) {
-        const element =
-            getElement(id);
+    clearAnalysisError();
 
-        if (!element) {
-            return;
-        }
-
-        const number =
-            numeric(value);
-
-        if (number === null) {
-            element.style.width =
-                "0%";
-
-            return;
-        }
-
-        const bounded =
-            Math.max(
-                0,
-                Math.min(100, number)
+    try {
+        const payload =
+            await apiRequest(
+                API.history(id)
             );
 
-        element.style.width =
-            `${bounded}%`;
-    }
+        console.log(
+            "History report payload:",
+            payload
+        );
 
-    /* ---------------------------------------------------------
-       REPORT VISIBILITY
-       --------------------------------------------------------- */
-
-    function setReportVisible(visible) {
         const report =
-            getElement(
-                "intelligence-report"
+            getReportFromPayload(
+                payload
             );
 
         if (!report) {
-            return;
+            throw new Error(
+                "This report could not be loaded."
+            );
         }
 
-        report.hidden = !visible;
+        state.latestReport =
+            report;
 
-        report.classList.toggle(
-            "report-visible",
-            Boolean(visible)
+        state.currentReportId =
+            id;
+
+        state.currentSymbol =
+            firstDefined(
+                report?.asset?.symbol,
+                report?.token_symbol
+            );
+
+        renderReport(
+            report
+        );
+
+        if (
+            state.currentSymbol
+        ) {
+            startLivePolling(
+                state.currentSymbol
+            );
+        }
+
+        window.scrollTo({
+            top: 0,
+            behavior: "smooth"
+        });
+
+    } catch (error) {
+        console.error(
+            "History report load failed:",
+            error
+        );
+
+        showAnalysisError(
+            error.message ||
+            "Unable to load report."
         );
     }
+}
 
-    /* ---------------------------------------------------------
-       REPORT EXTRACTION
-       --------------------------------------------------------- */
 
-    function extractReport(payload) {
-        if (!payload) {
-            return null;
+/* ============================================================
+   DELETE REPORT
+   ============================================================ */
+
+async function deleteReport(
+    id
+) {
+    if (!id) {
+        return;
+    }
+
+    try {
+        await apiRequest(
+            API.deleteHistory(id),
+            {
+                method: "DELETE"
+            }
+        );
+
+        if (
+            String(
+                state.currentReportId
+            ) === String(id)
+        ) {
+            state.currentReportId =
+                null;
+
+            state.latestReport =
+                null;
+
+            clearReportView();
+
+            stopLivePolling();
         }
 
-        return (
-            payload.latest ||
-            payload.analysis ||
-            payload.report ||
-            null
+        await refreshHistory();
+
+    } catch (error) {
+        console.error(
+            "Delete report failed:",
+            error
+        );
+
+        showAnalysisError(
+            error.message ||
+            "Unable to delete report."
         );
     }
+}
 
-    /* ---------------------------------------------------------
-       RENDER REPORT
-       --------------------------------------------------------- */
 
-    function renderReport(report) {
-        if (!report) {
-            setReportVisible(false);
-            return;
-        }
-
-        state.report = report;
-
-        setReportVisible(true);
-
-        renderIdentity(report);
-        renderMarket(report);
-        renderRisk(report);
-        renderStress(report);
-        renderAutopsy(report);
-
-        /* IMPORTANT:
-           Data quality is rendered here so every
-           report path updates it automatically. */
-        renderDataQuality(report);
+async function deleteCurrentReport() {
+    if (
+        !state.currentReportId
+    ) {
+        return;
     }
 
-    /* ---------------------------------------------------------
-       IDENTITY
-       --------------------------------------------------------- */
+    await deleteReport(
+        state.currentReportId
+    );
+}
 
-    function renderIdentity(report) {
-        const asset =
-            report.asset || {};
 
-        const profile =
-            report.risk_profile || {};
+/* ============================================================
+   LOGOUT
+   ============================================================ */
 
-        const ai =
-            report.ai || {};
+async function logout() {
+    try {
+        if (state.token) {
+            await apiRequest(
+                API.logout,
+                {
+                    method: "POST"
+                }
+            );
+        }
 
-        const symbol =
-            asset.symbol || "—";
+    } catch (error) {
+        console.warn(
+            "Logout request failed:",
+            error
+        );
+
+    } finally {
+        clearToken();
+
+        stopLivePolling();
+
+        window.location.href = "/";
+    }
+}
+
+
+/* ============================================================
+   LIVE MARKET POLLING
+   ============================================================ */
+
+function stopLivePolling() {
+    if (
+        state.livePollTimer
+    ) {
+        clearInterval(
+            state.livePollTimer
+        );
+
+        state.livePollTimer = null;
+    }
+}
+
+
+function startLivePolling(
+    symbol
+) {
+    stopLivePolling();
+
+    if (!symbol) {
+        return;
+    }
+
+    state.currentSymbol =
+        String(symbol)
+            .trim()
+            .toUpperCase();
+
+    refreshLiveMarket(
+        state.currentSymbol
+    );
+
+    state.livePollTimer =
+        setInterval(
+            () => {
+                refreshLiveMarket(
+                    state.currentSymbol
+                );
+            },
+            15000
+        );
+}
+
+
+async function refreshLiveMarket(
+    symbol
+) {
+    if (!symbol) {
+        return;
+    }
+
+    try {
+        const payload =
+            await apiRequest(
+                API.market(symbol)
+            );
+
+        const market =
+            payload?.market ||
+            payload?.data ||
+            payload;
+
+        updateLiveMarket(
+            market
+        );
+
+    } catch (error) {
+        console.warn(
+            "Live market refresh failed:",
+            error
+        );
 
         setText(
-            "report-token",
+            "#market-live-status",
+            "Live feed unavailable"
+        );
+    }
+}
+
+
+function updateLiveMarket(
+    market
+) {
+    if (
+        !market ||
+        typeof market !== "object"
+    ) {
+        return;
+    }
+
+    /*
+     * Exact v3 market fields first.
+     */
+    const price =
+        firstDefined(
+            market.price,
+            market.current_price_usd,
+            market.price_usd,
+            market.current_price
+        );
+
+    const change24 =
+        firstDefined(
+            market.price_change_24h_pct,
+            market.change_24h_pct,
+            market.price_change_24h,
+            market.change_24h
+        );
+
+    const change7d =
+        firstDefined(
+            market.price_change_7d_pct,
+            market.change_7d_pct,
+            market.price_change_7d,
+            market.change_7d
+        );
+
+    const high24 =
+        firstDefined(
+            market.high_24h,
+            market.high_24h_usd,
+            market.highPrice,
+            market.high
+        );
+
+    const low24 =
+        firstDefined(
+            market.low_24h,
+            market.low_24h_usd,
+            market.lowPrice,
+            market.low
+        );
+
+    const volume =
+        firstDefined(
+            market.volume_24h,
+            market.volume_24h_usd,
+            market.total_volume_usd,
+            market.volume
+        );
+
+    const marketCap =
+        firstDefined(
+            market.market_cap,
+            market.market_cap_usd
+        );
+
+    const source =
+        firstDefined(
+            market.source,
+            "Backend market feed"
+        );
+
+    const timestamp =
+        firstDefined(
+            market.timestamp,
+            market.updated_at
+        );
+
+    setText(
+        "#report-price",
+        formatUsd(price)
+    );
+
+    setText(
+        "#report-change",
+        formatPercent(change24)
+    );
+
+    setText(
+        "#report-volume",
+        formatUsd(volume)
+    );
+
+    /*
+     * If live endpoint provides market cap,
+     * update it too.
+     */
+    if (
+        marketCap !== null
+    ) {
+        setText(
+            "#report-market-cap",
+            formatUsd(marketCap)
+        );
+    }
+
+    /*
+     * Refresh 7d / high / low cards too.
+     */
+    setText(
+        "#report-change-7d",
+        formatPercent(change7d)
+    );
+
+    setText(
+        "#report-high",
+        formatUsd(high24)
+    );
+
+    setText(
+        "#report-low",
+        formatUsd(low24)
+    );
+
+    setText(
+        "#market-live-status",
+        "Live • Backend feed"
+    );
+
+    setText(
+        "#market-updated",
+        timestamp
+            ? formatRelativeTime(
+                  timestamp
+              )
+            : "Updated now"
+    );
+
+    setText(
+        "#data-source",
+        source
+    );
+
+    setText(
+        "#market-source",
+        source
+    );
+
+    /*
+     * Positive / negative styling.
+     */
+    const changeElement =
+        $("#report-change");
+
+    if (changeElement) {
+        changeElement.classList.remove(
+            "positive",
+            "negative"
+        );
+
+        const numericChange =
+            Number(change24);
+
+        if (
+            Number.isFinite(
+                numericChange
+            )
+        ) {
+            changeElement.classList.add(
+                numericChange >= 0
+                    ? "positive"
+                    : "negative"
+            );
+        }
+    }
+
+    const liveDot =
+        $("#market-live-dot");
+
+    if (liveDot) {
+        liveDot.classList.add(
+            "active"
+        );
+    }
+}
+
+
+/* ============================================================
+   EMPTY REPORT STATE
+   ============================================================ */
+
+function clearReportView() {
+    state.latestReport = null;
+
+    setText(
+        "#report-token",
+        "No analysis yet"
+    );
+
+    setText(
+        "#report-outlook",
+        "—"
+    );
+
+    setText(
+        "#report-risk-score",
+        "—"
+    );
+
+    setText(
+        "#report-risk-label",
+        "—"
+    );
+
+    setText(
+        "#report-risk-confidence",
+        "—"
+    );
+
+    setText(
+        "#report-price",
+        "—"
+    );
+
+    setText(
+        "#report-change",
+        "—"
+    );
+
+    setText(
+        "#report-volume",
+        "—"
+    );
+
+    setText(
+        "#report-market-cap",
+        "—"
+    );
+
+    setText(
+        "#report-change-7d",
+        "—"
+    );
+
+    setText(
+        "#report-high",
+        "—"
+    );
+
+    setText(
+        "#report-low",
+        "—"
+    );
+
+    setText(
+        "#market-live-status",
+        "—"
+    );
+
+    setText(
+        "#market-updated",
+        "—"
+    );
+
+    setText(
+        "#data-source",
+        "—"
+    );
+
+    setText(
+        "#market-source",
+        "—"
+    );
+
+    /*
+     * Risk pillars.
+     */
+    const pillarNames = [
+        "volatility",
+        "liquidity",
+        "market-sensitivity",
+        "market_sensitivity",
+        "structural",
+        "contract",
+        "composite"
+    ];
+
+    pillarNames.forEach(
+        (name) => {
+            setText(
+                `#pillar-${name}-value`,
+                "—"
+            );
+
+            setText(
+                `#pillar-${name}-detail`,
+                "—"
+            );
+
+            const bar =
+                $(`#pillar-${name}-bar`);
+
+            if (bar) {
+                bar.style.width =
+                    "0%";
+
+                bar.removeAttribute(
+                    "aria-valuenow"
+                );
+            }
+        }
+    );
+
+    /*
+     * Risk drivers.
+     */
+    const drivers =
+        $("#risk-drivers");
+
+    if (drivers) {
+        drivers.replaceChildren();
+    }
+
+    /*
+     * Stress.
+     */
+    setText(
+        "#stress-beta",
+        "—"
+    );
+
+    setText(
+        "#stress-drawdown",
+        "—"
+    );
+
+    setText(
+        "#stress-resilience",
+        "—"
+    );
+
+    setText(
+        "#stress-confidence",
+        "—"
+    );
+
+    setText(
+        "#stress-verdict",
+        "—"
+    );
+
+    setText(
+        "#ai-stress-interpretation",
+        "—"
+    );
+
+    /*
+     * AI.
+     */
+    setText(
+        "#executive-summary",
+        "—"
+    );
+
+    setText(
+        "#ai-market-structure",
+        "—"
+    );
+
+    setText(
+        "#ai-liquidity",
+        "—"
+    );
+
+    setText(
+        "#ai-contract-risk",
+        "—"
+    );
+
+    setText(
+        "#ai-evidence-status",
+        "—"
+    );
+
+    const forensic =
+        $("#forensic-cards");
+
+    if (forensic) {
+        forensic.replaceChildren();
+    }
+
+    /*
+     * Data quality.
+     */
+    setText(
+        "#data-confidence",
+        "—"
+    );
+
+    setText(
+        "#data-freshness",
+        "—"
+    );
+
+    renderMissingSignals(
+        []
+    );
+
+    updateCurrentReportDeleteButton();
+}
+
+
+/* ============================================================
+   FORM HANDLER
+   ============================================================ */
+
+async function handleAnalysisSubmit(
+    event
+) {
+    event.preventDefault();
+
+    const input =
+        $("#token-symbol");
+
+    if (!input) {
+        return;
+    }
+
+    const symbol =
+        input.value
+            .trim()
+            .toUpperCase();
+
+    if (!symbol) {
+        showAnalysisError(
+            "Enter a token symbol."
+        );
+
+        input.focus();
+
+        return;
+    }
+
+    if (
+        !/^[A-Z0-9]{2,15}$/.test(
+            symbol
+        )
+    ) {
+        showAnalysisError(
+            "Enter a valid token symbol."
+        );
+
+        input.focus();
+
+        return;
+    }
+
+    const button =
+        $("#analyze-button");
+
+    if (button) {
+        button.disabled = true;
+
+        button.dataset.originalText =
+            button.textContent;
+
+        button.textContent =
+            "Analyzing…";
+    }
+
+    try {
+        await runAnalysis(
             symbol
         );
 
-        setText(
-            "report-outlook",
-            ai.risk_regime ||
-            profile.severity ||
-            "UNAVAILABLE"
-        );
+    } finally {
+        if (button) {
+            button.disabled = false;
 
-        setText(
-            "autopsy-token",
-            `${symbol} / LIVE EVIDENCE`
-        );
-
-        setText(
-            "autopsy-summary",
-            ai.executive_summary ||
-            "No executive summary is available."
-        );
-
-        document.title =
-            `${symbol} Risk Intelligence | CryptoRisk AI`;
+            button.textContent =
+                button.dataset.originalText ||
+                "Analyze";
+        }
     }
+}
 
-    /* ---------------------------------------------------------
-       MARKET
-       --------------------------------------------------------- */
 
-    function renderMarket(report) {
-        const market =
-            report.market || {};
-
-        const change =
-            numeric(
-                market.price_change_24h_pct
-            );
-
-        setText(
-            "report-price",
-            formatPrice(
-                market.current_price_usd
-            )
-        );
-
-        setText(
-            "report-change",
-            change === null
-                ? "—"
-                : formatPercent(change)
-        );
-
-        setChangeClass(
-            "report-change",
-            change
-        );
-
-        setText(
-            "report-volume",
-            formatCompact(
-                market.total_volume_usd
-            )
-        );
-
-        setText(
-            "report-market-cap",
-            formatCompact(
-                market.market_cap_usd
-            )
-        );
-
-        setText(
-            "report-change-7d",
-            formatPercent(
-                market.price_change_7d_pct
-            )
-        );
-
-        setText(
-            "report-high",
-            formatPrice(
-                market.high_24h_usd
-            )
-        );
-
-        setText(
-            "report-low",
-            formatPrice(
-                market.low_24h_usd
-            )
-        );
-
-        const status =
-            getElement("market-status");
-
-        if (status) {
-            status.textContent =
-                market.source
-                    ? `LIVE · ${market.source}`
-                    : "LIVE MARKET DATA";
-        }
-
-        setText(
-            "market-live-status",
-            market.source
-                ? `LIVE · ${market.source}`
-                : "LIVE"
-        );
-
-        setText(
-            "market-updated",
-            market.timestamp
-                ? `Updated ${formatDate(
-                    market.timestamp
-                )}`
-                : "Live market data"
-        );
-
-        setText(
-            "data-source",
-            market.source ||
-            "Unavailable"
-        );
-    }
-
-    /* ---------------------------------------------------------
-       RISK
-       --------------------------------------------------------- */
-
-    function renderRisk(report) {
-        const profile =
-            report.risk_profile || {};
-
-        const pillars =
-            profile.pillars || {};
-
-        const score =
-            numeric(
-                profile.overall_score
-            );
-
-        setText(
-            "report-risk-score",
-            score === null
-                ? "—"
-                : Math.round(score)
-        );
-
-        setText(
-            "report-risk-label",
-            profile.severity ||
-            "UNAVAILABLE"
-        );
-
-        const scoreElement =
-            getElement(
-                "report-risk-score"
-            );
-
-        const labelElement =
-            getElement(
-                "report-risk-label"
-            );
-
-        applyRiskClass(
-            scoreElement,
-            profile.severity
-        );
-
-        applyRiskClass(
-            labelElement,
-            profile.severity
-        );
-
-        const volatility =
-            pillars.volatility?.score;
-
-        const liquidity =
-            pillars.liquidity?.score;
-
-        const structural =
-            pillars.structural?.score;
-
-        const sensitivity =
-            pillars.market_sensitivity?.score;
-
-        setText(
-            "pillar-volatility-value",
-            numeric(volatility) === null
-                ? "N/A"
-                : Math.round(
-                    Number(volatility)
-                )
-        );
-
-        setText(
-            "pillar-liquidity-value",
-            numeric(liquidity) === null
-                ? "N/A"
-                : Math.round(
-                    Number(liquidity)
-                )
-        );
-
-        setText(
-            "pillar-contract-value",
-            numeric(structural) === null
-                ? "N/A"
-                : Math.round(
-                    Number(structural)
-                )
-        );
-
-        setText(
-            "pillar-composite-value",
-            numeric(sensitivity) === null
-                ? "N/A"
-                : Math.round(
-                    Number(sensitivity)
-                )
-        );
-
-        setRiskBar(
-            "pillar-volatility-bar",
-            volatility
-        );
-
-        setRiskBar(
-            "pillar-liquidity-bar",
-            liquidity
-        );
-
-        setRiskBar(
-            "pillar-contract-bar",
-            structural
-        );
-
-        setRiskBar(
-            "pillar-composite-bar",
-            sensitivity
-        );
-
-        renderRiskDrivers(report);
-    }
-
-    /* ---------------------------------------------------------
-       RISK DRIVERS
-       --------------------------------------------------------- */
-
-    function renderRiskDrivers(report) {
-        const container =
-            getElement("risk-drivers");
-
-        if (!container) {
-            return;
-        }
-
-        container.replaceChildren();
-
-        const drivers =
-            Array.isArray(
-                report.risk_drivers
-            )
-                ? report.risk_drivers
-                : [];
-
-        if (!drivers.length) {
-            const empty =
-                document.createElement("div");
-
-            empty.className =
-                "risk-driver empty";
-
-            empty.textContent =
-                "No additional quantified risk drivers available.";
-
-            container.appendChild(empty);
-
-            return;
-        }
-
-        drivers
-            .slice(0, 6)
-            .forEach((driver) => {
-                const card =
-                    document.createElement("div");
-
-                card.className =
-                    "risk-driver";
-
-                const title =
-                    document.createElement("strong");
-
-                const detail =
-                    document.createElement("span");
-
-                if (
-                    typeof driver ===
-                    "string"
-                ) {
-                    title.textContent =
-                        driver;
-
-                    detail.textContent =
-                        "Evidence signal";
-                } else {
-                    title.textContent =
-                        driver.name ||
-                        driver.title ||
-                        driver.factor ||
-                        "Risk driver";
-
-                    detail.textContent =
-                        driver.detail ||
-                        driver.description ||
-                        driver.reason ||
-                        "Quantitative risk signal";
-                }
-
-                card.appendChild(title);
-                card.appendChild(detail);
-
-                container.appendChild(card);
-            });
-        }
-
-        /* ============================================================
-   CRYPTORISK AI
-   FRONTEND INTELLIGENCE TERMINAL
-   PART 2 / 2
+/* ============================================================
+   INITIALIZATION
    ============================================================ */
 
-    /* ---------------------------------------------------------
-       STRESS TEST
-       --------------------------------------------------------- */
+async function initializeDashboard() {
+    /*
+     * OAuth callback.
+     */
+    consumeQueryToken();
 
-    function renderStress(report) {
-        const stress =
-            report.stress_test || {};
+    state.token =
+        getTokenFromStorage();
 
-        const beta =
-            numeric(stress.beta);
+    if (!state.token) {
+        redirectToHome();
 
-        const drawdown =
-            numeric(
-                stress.expected_drawdown_pct
+        return;
+    }
+
+    await loadDashboard();
+}
+
+
+function initializeIndexPage() {
+    const googleLinks =
+        $all(
+            'a[href="/api/auth/google"]'
+        );
+
+    googleLinks.forEach(
+        (link) => {
+            link.addEventListener(
+                "click",
+                () => {
+                    clearAnalysisError();
+                }
             );
+        }
+    );
+}
 
-        setText(
-            "stress-beta",
-            beta === null
-                ? "—"
-                : `${beta.toFixed(2)}x`
+
+/* ============================================================
+   END OF PART 1
+   ============================================================
+
+   Part 2 contains:
+
+   - Risk severity
+   - Risk score bars
+   - Risk profile
+   - Pillars
+   - Risk drivers
+   - Stress test
+   - AI report
+   - Data quality
+   - Complete report rendering
+   - History
+   - Auth
+   - Keyboard UX
+   - Visibility handling
+   - Final initialization
+   ============================================================ */
+
+
+   /* ============================================================
+   CryptoRisk AI — Dashboard Controller
+   Part 2 / 2
+   ============================================================ */
+
+
+/* ============================================================
+   RISK SEVERITY
+   ============================================================ */
+
+function normalizeSeverity(
+    value
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "Unavailable";
+    }
+
+    const text =
+        String(value)
+            .trim()
+            .toLowerCase();
+
+    if (
+        text.includes("critical")
+    ) {
+        return "Critical";
+    }
+
+    if (
+        text.includes("high") ||
+        text.includes("elevated")
+    ) {
+        return "High";
+    }
+
+    if (
+        text.includes("moderate") ||
+        text.includes("medium")
+    ) {
+        return "Moderate";
+    }
+
+    if (
+        text.includes("low") ||
+        text.includes("minimal")
+    ) {
+        return "Low";
+    }
+
+    if (
+        text.includes("unavailable")
+    ) {
+        return "Unavailable";
+    }
+
+    return String(value);
+}
+
+
+function severityClass(
+    severity
+) {
+    const normalized =
+        normalizeSeverity(
+            severity
+        ).toLowerCase();
+
+    if (
+        normalized === "critical"
+    ) {
+        return "risk-critical";
+    }
+
+    if (
+        normalized === "high"
+    ) {
+        return "risk-high";
+    }
+
+    if (
+        normalized === "moderate"
+    ) {
+        return "risk-moderate";
+    }
+
+    if (
+        normalized === "low"
+    ) {
+        return "risk-low";
+    }
+
+    return "";
+}
+
+
+function applyRiskClass(
+    element,
+    severity
+) {
+    if (!element) {
+        return;
+    }
+
+    element.classList.remove(
+        "risk-low",
+        "risk-moderate",
+        "risk-high",
+        "risk-critical"
+    );
+
+    const className =
+        severityClass(
+            severity
         );
 
-        setText(
-            "stress-drawdown",
-            drawdown === null
-                ? "—"
-                : formatPercent(drawdown)
+    if (className) {
+        element.classList.add(
+            className
+        );
+    }
+}
+
+
+/* ============================================================
+   RISK SCORE BAR
+   ============================================================ */
+
+function updateScoreBar(
+    bar,
+    score
+) {
+    if (!bar) {
+        return;
+    }
+
+    const numericScore =
+        clampScore(score);
+
+    /*
+     * Missing score:
+     * empty bar, NOT 0/100.
+     */
+    if (
+        numericScore === null
+    ) {
+        bar.style.width =
+            "0%";
+
+        bar.removeAttribute(
+            "aria-valuenow"
         );
 
-        setText(
-            "stress-resilience",
-            stress.resilience_label ||
-            "UNAVAILABLE"
+        return;
+    }
+
+    bar.style.width =
+        `${numericScore}%`;
+
+    bar.setAttribute(
+        "aria-valuenow",
+        String(
+            Math.round(
+                numericScore
+            )
+        )
+    );
+}
+
+
+/* ============================================================
+   MARKET RENDERING
+   ============================================================ */
+
+function renderMarket(
+    report
+) {
+    const market =
+        getMarket(report);
+
+    const asset =
+        report?.asset || {};
+
+    /*
+     * EXACT BACKEND SCHEMA 3.0
+     *
+     * Primary keys first, with legacy aliases as fallbacks
+     * so older persisted reports still render.
+     */
+    const price =
+        firstDefined(
+            market.price,
+            market.current_price_usd,
+            market.price_usd,
+            market.current_price
         );
 
-        setText(
-            "stress-confidence",
-            stress.confidence ||
-            "—"
+    const change24 =
+        firstDefined(
+            market.price_change_24h_pct,
+            market.change_24h_pct,
+            market.price_change_24h,
+            market.change_24h
         );
 
-        const ai =
-            report.ai || {};
+    const change7d =
+        firstDefined(
+            market.price_change_7d_pct,
+            market.change_7d_pct,
+            market.price_change_7d,
+            market.change_7d
+        );
 
-        setText(
-            "stress-verdict",
-            ai.stress_interpretation ||
-            stress.verdict ||
-            buildStressVerdict(stress)
+    const high24 =
+        firstDefined(
+            market.high_24h,
+            market.high_24h_usd,
+            market.highPrice,
+            market.high
+        );
+
+    const low24 =
+        firstDefined(
+            market.low_24h,
+            market.low_24h_usd,
+            market.lowPrice,
+            market.low
+        );
+
+    const volume =
+        firstDefined(
+            market.volume_24h,
+            market.volume_24h_usd,
+            market.quoteVolume,
+            market.volume
+        );
+
+    const marketCap =
+        firstDefined(
+            market.market_cap,
+            market.market_cap_usd
+        );
+
+    const source =
+        firstDefined(
+            market.source,
+            "Backend market feed"
+        );
+
+    const timestamp =
+        firstDefined(
+            market.timestamp,
+            market.updated_at
+        );
+
+    /*
+     * Token
+     */
+    setText(
+        "#report-token",
+        firstDefined(
+            asset.symbol,
+            report.token_symbol
+        )
+    );
+
+    /*
+     * Price
+     */
+    setText(
+        "#report-price",
+        formatUsd(price)
+    );
+
+    /*
+     * 24h change
+     */
+    setText(
+        "#report-change",
+        formatPercent(change24)
+    );
+
+    /*
+     * Volume
+     */
+    setText(
+        "#report-volume",
+        formatUsd(volume)
+    );
+
+    /*
+     * Market cap
+     */
+    setText(
+        "#report-market-cap",
+        formatUsd(marketCap)
+    );
+
+    /*
+     * 7D change / 24h high / 24h low.
+     *
+     * Backend Schema 3.0 provides these through:
+     *   market.price_change_7d_pct
+     *   market.high_24h
+     *   market.low_24h
+     */
+    setText(
+        "#report-change-7d",
+        formatPercent(change7d)
+    );
+
+    setText(
+        "#report-high",
+        formatUsd(high24)
+    );
+
+    setText(
+        "#report-low",
+        formatUsd(low24)
+    );
+
+    /*
+     * Change styling.
+     */
+    const changeElement =
+        $("#report-change");
+
+    if (changeElement) {
+        changeElement.classList.remove(
+            "positive",
+            "negative"
+        );
+
+        const numericChange =
+            Number(change24);
+
+        if (
+            Number.isFinite(
+                numericChange
+            )
+        ) {
+            changeElement.classList.add(
+                numericChange >= 0
+                    ? "positive"
+                    : "negative"
+            );
+        }
+    }
+
+    /*
+     * Metadata.
+     */
+    setText(
+        "#market-live-status",
+        "Live • Backend feed"
+    );
+
+    setText(
+        "#market-updated",
+        timestamp
+            ? formatRelativeTime(
+                  timestamp
+              )
+            : "Updated now"
+    );
+
+    setText(
+        "#data-source",
+        firstDefined(
+            source,
+            "Backend market feed"
+        )
+    );
+
+    setText(
+        "#market-source",
+        firstDefined(
+            source,
+            "Backend market feed"
+        )
+    );
+}
+
+
+/* ============================================================
+   MAIN RISK PROFILE
+   ============================================================ */
+
+function renderRiskProfile(
+    report
+) {
+    const risk =
+        getRiskProfile(report);
+
+    /*
+     * EXACT:
+     *
+     * risk_profile.composite_score
+     * risk_profile.label
+     * risk_profile.confidence
+     */
+    const compositeScore =
+        firstDefined(
+            risk.composite_score,
+            report.risk_score
+        );
+
+    const rawLabel =
+        firstDefined(
+            risk.label,
+            report.risk_label
+        );
+
+    const label =
+        normalizeSeverity(
+            rawLabel
+        );
+
+    const confidence =
+        firstDefined(
+            risk.confidence,
+            report.risk_confidence
+        );
+
+    /*
+     * Main score.
+     */
+    setText(
+        "#report-risk-score",
+        compositeScore !== null
+            ? `${formatScore(
+                  compositeScore
+              )}/100`
+            : "—"
+    );
+
+    /*
+     * Main label.
+     */
+    setText(
+        "#report-risk-label",
+        label
+    );
+
+    /*
+     * OUTLOOK:
+     *
+     * Exact backend:
+     * report.outlook
+     */
+    setText(
+        "#report-outlook",
+        firstDefined(
+            report.outlook,
+            report.risk_label,
+            risk.label
+        )
+    );
+
+    /*
+     * Confidence.
+     */
+    setText(
+        "#report-risk-confidence",
+        formatConfidence(
+            confidence
+        )
+    );
+
+    /*
+     * Styling.
+     */
+    applyRiskClass(
+        $("#report-risk-score"),
+        rawLabel
+    );
+
+    applyRiskClass(
+        $("#report-risk-label"),
+        rawLabel
+    );
+
+    applyRiskClass(
+        $("#report-outlook"),
+        report.outlook || rawLabel
+    );
+
+
+    /* ========================================================
+       VOLATILITY
+       ======================================================== */
+
+    renderPillar(
+        "volatility",
+        getPillar(
+            report,
+            "volatility"
+        )
+    );
+
+
+    /* ========================================================
+       LIQUIDITY
+       ======================================================== */
+
+    renderPillar(
+        "liquidity",
+        getPillar(
+            report,
+            "liquidity"
+        )
+    );
+
+
+    /* ========================================================
+       MARKET SENSITIVITY
+       ======================================================== */
+
+    const marketSensitivity =
+        getPillar(
+            report,
+            "market_sensitivity"
+        );
+
+    /*
+     * Most likely HTML:
+     *
+     * pillar-market-sensitivity-value
+     */
+    renderPillar(
+        "market-sensitivity",
+        marketSensitivity
+    );
+
+    /*
+     * Also support:
+     *
+     * pillar-market_sensitivity-value
+     */
+    renderPillar(
+        "market_sensitivity",
+        marketSensitivity
+    );
+
+
+    /* ========================================================
+       STRUCTURAL
+       ======================================================== */
+
+    const structural =
+        getPillar(
+            report,
+            "structural"
+        );
+
+    /*
+     * Correct backend name.
+     */
+    renderPillar(
+        "structural",
+        structural
+    );
+
+    /*
+     * Backward compatibility:
+     * old HTML may call structural "contract".
+     */
+    renderPillar(
+        "contract",
+        structural
+    );
+
+
+    /* ========================================================
+       COMPOSITE
+       ======================================================== */
+
+    renderPillar(
+        "composite",
+        {
+            score:
+                compositeScore,
+
+            label:
+                rawLabel,
+
+            confidence:
+                confidence,
+
+            detail:
+                "Combined evidence-based risk score."
+        }
+    );
+}
+
+
+/* ============================================================
+   RISK PILLARS
+   ============================================================ */
+
+function renderPillar(
+    name,
+    pillar
+) {
+    if (
+        !pillar ||
+        typeof pillar !== "object"
+    ) {
+        return;
+    }
+
+    /*
+     * EXACT:
+     *
+     * pillar.score
+     */
+    const score =
+        pillar.score;
+
+    /*
+     * EXACT:
+     *
+     * pillar.label
+     */
+    const label =
+        normalizeSeverity(
+            pillar.label
+        );
+
+    const valueElement =
+        $(`#pillar-${name}-value`);
+
+    const barElement =
+        $(`#pillar-${name}-bar`);
+
+    const detailElement =
+        $(`#pillar-${name}-detail`);
+
+    /*
+     * Score.
+     */
+    if (valueElement) {
+        if (
+            score === null ||
+            score === undefined ||
+            score === ""
+        ) {
+            /*
+             * IMPORTANT:
+             * unavailable != 0
+             */
+            valueElement.textContent =
+                "N/A";
+        } else {
+            valueElement.textContent =
+                `${formatScore(
+                    score
+                )}/100`;
+        }
+
+        applyRiskClass(
+            valueElement,
+            pillar.label
         );
     }
 
-    function buildStressVerdict(stress) {
-        const scenarios =
-            Array.isArray(stress.scenarios)
-                ? stress.scenarios
-                : [];
+    /*
+     * Bar.
+     */
+    if (barElement) {
+        updateScoreBar(
+            barElement,
+            score
+        );
 
-        if (!scenarios.length) {
-            return "Stress-test interpretation is unavailable.";
-        }
+        applyRiskClass(
+            barElement,
+            pillar.label
+        );
+    }
 
-        const scenario =
-            scenarios[0] || {};
-
-        const scenarioDrawdown =
-            numeric(
-                scenario.expected_drawdown_pct
+    /*
+     * Detail.
+     */
+    if (detailElement) {
+        detailElement.textContent =
+            buildPillarDetail(
+                name,
+                pillar
             );
+    }
+}
 
-        if (scenarioDrawdown !== null) {
-            return (
-                `The selected stress scenario estimates ` +
-                `an expected drawdown of ` +
-                `${formatPercent(scenarioDrawdown)}.`
-            );
-        }
 
+/* ============================================================
+   PILLAR DETAIL
+   ============================================================ */
+
+function buildPillarDetail(
+    name,
+    pillar
+) {
+    /*
+     * Guard against a missing / malformed pillar so the
+     * description text is never broken.
+     */
+    if (
+        !pillar ||
+        typeof pillar !== "object"
+    ) {
+        return firstDefined(
+            name &&
+                generatePillarFallbackDetail(
+                    name,
+                    null
+                ),
+            "Signal unavailable."
+        );
+    }
+
+    /*
+     * Backend's exact explanation.
+     */
+    if (
+        pillar.detail !== null &&
+        pillar.detail !== undefined &&
+        pillar.detail !== ""
+    ) {
+        return String(
+            pillar.detail
+        );
+    }
+
+    /*
+     * If unavailable.
+     */
+    if (
+        pillar.score === null ||
+        pillar.score === undefined
+    ) {
+        return firstDefined(
+            pillar.label,
+            generatePillarFallbackDetail(
+                name,
+                null
+            ),
+            "Signal unavailable."
+        );
+    }
+
+    return generatePillarFallbackDetail(
+        name,
+        pillar.score
+    );
+}
+
+
+function generatePillarFallbackDetail(
+    name,
+    score
+) {
+    const descriptions = {
+        volatility:
+            "Volatility risk contribution.",
+
+        liquidity:
+            "Liquidity and exit-risk contribution.",
+
+        "market-sensitivity":
+            "Market sensitivity contribution.",
+
+        market_sensitivity:
+            "Market sensitivity contribution.",
+
+        structural:
+            "Structural risk contribution.",
+
+        contract:
+            "Structural risk contribution.",
+
+        composite:
+            "Combined evidence-based risk score."
+    };
+
+    const missingDescriptions = {
+        liquidity:
+            "Liquidity signal unavailable — no volume or market-cap data to estimate exit risk.",
+
+        "market-sensitivity":
+            "Market sensitivity signal unavailable — no BTC beta could be calculated.",
+
+        market_sensitivity:
+            "Market sensitivity signal unavailable — no BTC beta could be calculated.",
+
+        volatility:
+            "Volatility signal unavailable — insufficient price history.",
+
+        structural:
+            "Structural signal unavailable — no contract/security data.",
+
+        contract:
+            "Structural signal unavailable — no contract/security data."
+    };
+
+    if (
+        score === null ||
+        score === undefined
+    ) {
         return (
-            "Stress scenario data is available for review."
+            missingDescriptions[name] ||
+            descriptions[name] ||
+            "Signal unavailable."
         );
     }
 
-    /* ---------------------------------------------------------
-       AUTOPSY / FORENSIC VIEW
-       --------------------------------------------------------- */
+    return (
+        descriptions[name] ||
+        "Risk contribution."
+    );
+}
 
-    function renderAutopsy(report) {
-        const ai =
-            report.ai || {};
 
-        const security =
-            report.security || {};
+/* ============================================================
+   RISK DRIVERS
+   ============================================================ */
 
-        setText(
-            "autopsy-summary",
-            ai.executive_summary ||
-            "No executive summary is available."
+function renderRiskDrivers(
+    report
+) {
+    const container =
+        $("#risk-drivers");
+
+    if (!container) {
+        return;
+    }
+
+    container.replaceChildren();
+
+    const drivers =
+        Array.isArray(
+            report?.risk_drivers
+        )
+            ? report.risk_drivers
+            : [];
+
+    if (!drivers.length) {
+        const empty =
+            document.createElement(
+                "div"
+            );
+
+        empty.className =
+            "empty-state";
+
+        empty.textContent =
+            "No material risk drivers were returned.";
+
+        container.appendChild(
+            empty
         );
 
-        const container =
-            getElement("forensic-cards");
+        return;
+    }
 
-        if (!container) {
-            return;
+    drivers.forEach(
+        (driver, index) => {
+            const card =
+                document.createElement(
+                    "article"
+                );
+
+            card.className =
+                "risk-driver-card";
+
+            const heading =
+                document.createElement(
+                    "h4"
+                );
+
+            const badge =
+                document.createElement(
+                    "span"
+                );
+
+            const body =
+                document.createElement(
+                    "p"
+                );
+
+            /*
+             * EXACT:
+             * driver.title
+             */
+            heading.textContent =
+                firstDefined(
+                    driver?.title,
+                    `Risk driver ${index + 1}`
+                );
+
+            /*
+             * EXACT:
+             * driver.severity
+             */
+            badge.textContent =
+                normalizeSeverity(
+                    driver?.severity
+                );
+
+            badge.className =
+                "risk-badge";
+
+            applyRiskClass(
+                badge,
+                driver?.severity
+            );
+
+            /*
+             * EXACT:
+             * driver.detail
+             */
+            body.textContent =
+                firstDefined(
+                    driver?.detail,
+                    "No additional detail was provided."
+                );
+
+            card.appendChild(
+                heading
+            );
+
+            card.appendChild(
+                badge
+            );
+
+            card.appendChild(
+                body
+            );
+
+            container.appendChild(
+                card
+            );
+        }
+    );
+}
+
+
+/* ============================================================
+   STRESS TEST
+   ============================================================ */
+
+function getExpectedDrawdown(
+    stress
+) {
+    const stressObj =
+        stress || {};
+
+    /*
+     * Backend Schema 3.0:
+     * stress_test.expected_drawdown_pct
+     * stress_test.drawdown_pct
+     */
+    const expected =
+        firstDefined(
+            stressObj.expected_drawdown_pct,
+            stressObj.drawdown_pct,
+            stressObj.max_drawdown_pct,
+            stressObj.expected_downside_pct
+        );
+
+    if (expected !== null) {
+        return expected;
+    }
+
+    /*
+     * Older payloads expose the -10% BTC shock scenario.
+     * Derive the expected drawdown from that scenario's
+     * estimated asset move.
+     */
+    const base =
+        stressObj.base_scenario || {};
+
+    if (
+        typeof base === "object" &&
+        base !== null
+    ) {
+        const move =
+            firstDefined(
+                base.estimated_asset_move_pct,
+                base.asset_move_pct,
+                base.drawdown_pct
+            );
+
+        const numericMove =
+            Number(move);
+
+        if (
+            Number.isFinite(
+                numericMove
+            )
+        ) {
+            return Math.abs(
+                numericMove
+            );
+        }
+    }
+
+    return null;
+}
+
+
+function getResilienceLabel(
+    stress
+) {
+    const stressObj =
+        stress || {};
+
+    const label =
+        firstDefined(
+            stressObj.resilience_label,
+            stressObj.resilience,
+            stressObj.resilience_status
+        );
+
+    if (label !== null) {
+        return label;
+    }
+
+    /*
+     * Derive a label from the base scenario's resilience
+     * score so the card is never left as a dash.
+     */
+    const base =
+        stressObj.base_scenario || {};
+
+    const rawScore =
+        firstDefined(
+            base.resilience_score,
+            stressObj.resilience_score
+        );
+
+    const score =
+        Number(rawScore);
+
+    if (
+        Number.isFinite(score)
+    ) {
+        if (score >= 65) {
+            return "Resilient";
         }
 
-        container.replaceChildren();
+        if (score >= 40) {
+            return "Moderate";
+        }
 
-        const secondary =
-            Array.isArray(
-                ai.secondary_risk_drivers
+        return "Fragile";
+    }
+
+    return null;
+}
+
+
+function getStressConfidence(
+    report,
+    stress
+) {
+    const stressObj =
+        stress || {};
+
+    const reportObj =
+        report || {};
+
+    return firstDefined(
+        stressObj.confidence,
+        reportObj.risk_confidence,
+        reportObj.ai?.confidence,
+        reportObj.risk_profile?.confidence
+    );
+}
+
+
+function renderStressTest(
+    report
+) {
+    const stress =
+        getStress(report);
+
+    /*
+     * EXACT:
+     * stress_test.beta
+     */
+    setText(
+        "#stress-beta",
+        formatNumber(
+            stress.beta,
+            3
+        )
+    );
+
+    /*
+     * EXACT:
+     * stress_test.beta
+     */
+    setText(
+        "#stress-beta",
+        formatNumber(
+            firstDefined(
+                stress.beta,
+                stress.beta_to_btc,
+                report?.quantitative?.beta?.beta,
+                report?.quantitative?.beta
+            ),
+            3
+        )
+    );
+
+    /*
+     * EXACT:
+     * stress_test.expected_drawdown_pct
+     */
+    setText(
+        "#stress-drawdown",
+        formatPercent(
+            getExpectedDrawdown(stress)
+        )
+    );
+
+    /*
+     * EXACT:
+     * stress_test.resilience_label
+     */
+    setText(
+        "#stress-resilience",
+        getResilienceLabel(stress)
+    );
+
+    /*
+     * EXACT:
+     * stress_test.confidence
+     */
+    setText(
+        "#stress-confidence",
+        formatConfidence(
+            getStressConfidence(
+                report,
+                stress
             )
-                ? ai.secondary_risk_drivers
-                : [];
+        )
+    );
 
-        const securityFlags =
-            Array.isArray(
-                security.red_flags
-            )
-                ? security.red_flags
-                : [];
+    /*
+     * EXACT:
+     * stress_test.verdict
+     */
+    setText(
+        "#stress-verdict",
+        firstDefined(
+            stress.verdict,
+            stress.interpretation,
+            stress.stress_interpretation,
+            "Scenario analysis unavailable."
+        )
+    );
 
-        const liquidityDetail =
-            report
-                .risk_profile
-                ?.pillars
-                ?.liquidity
-                ?.detail;
+    /*
+     * Styling.
+     */
+    applyRiskClass(
+        $("#stress-resilience"),
+        stress.resilience_label
+    );
 
-        const cards = [
-            {
-                title: "MARKET STRUCTURE",
-                text:
-                    ai.what_matters_now ||
-                    ai.primary_risk_driver ||
-                    "No market-structure interpretation available."
-            },
-            {
-                title: "RISK SIGNALS",
-                text:
-                    secondary[0] ||
-                    securityFlags[0] ||
-                    ai.primary_risk_driver ||
-                    "No additional risk signal available."
-            },
-            {
-                title: "LIQUIDITY PROFILE",
-                text:
-                    liquidityDetail ||
-                    ai.watch_next ||
-                    "Liquidity evidence should be monitored continuously."
-            }
-        ];
+    /*
+     * AI interpretation is separate.
+     */
+    setText(
+        "#ai-stress-interpretation",
+        getAI(report).stress_interpretation
+    );
+}
 
-        cards.forEach((item) => {
+
+/* ============================================================
+   AI REPORT
+   ============================================================ */
+
+function renderAI(
+    report
+) {
+    const ai =
+        getAI(report);
+
+    const security =
+        getSecurity(report);
+
+    const quality =
+        getDataQuality(report);
+
+    /*
+     * ========================================================
+     * EXECUTIVE SUMMARY
+     * ========================================================
+     */
+    setText(
+        "#executive-summary",
+        firstDefined(
+            ai.executive_summary,
+            "No executive summary was returned."
+        )
+    );
+
+
+    /*
+     * ========================================================
+     * MARKET / STRUCTURE INTERPRETATION
+     * ========================================================
+     */
+    setText(
+        "#ai-market-structure",
+        firstDefined(
+            ai.what_matters_now,
+            ai.primary_risk_driver,
+            ai.risk_regime,
+            "No market interpretation available."
+        )
+    );
+
+
+    /*
+     * ========================================================
+     * WATCH / MONITORING
+     * ========================================================
+     *
+     * This is NOT falsely labelled as a dedicated
+     * liquidity calculation.
+     */
+    setText(
+        "#ai-liquidity",
+        firstDefined(
+            ai.watch_next,
+            "No monitoring guidance returned."
+        )
+    );
+
+
+    /*
+     * ========================================================
+     * SECURITY
+     * ========================================================
+     */
+    const securityFlags =
+        Array.isArray(
+            security.red_flags
+        )
+            ? security.red_flags
+            : [];
+
+    let securityText =
+        firstDefined(
+            security.status,
+            "Unavailable"
+        );
+
+    if (
+        securityFlags.length
+    ) {
+        securityText =
+            securityFlags
+                .map(
+                    (flag) =>
+                        String(flag)
+                )
+                .join(
+                    " • "
+                );
+    }
+
+    setText(
+        "#ai-contract-risk",
+        securityText
+    );
+
+    applyRiskClass(
+        $("#ai-contract-risk"),
+        security.status
+    );
+
+
+    /*
+     * ========================================================
+     * EVIDENCE STATUS
+     * ========================================================
+     *
+     * There is NO report.evidence array in
+     * the supplied v3 schema.
+     */
+    const missingSignals =
+        Array.isArray(
+            quality.missing_signals
+        )
+            ? quality.missing_signals
+            : [];
+
+    const hasExecutiveSummary =
+        Boolean(
+            ai.executive_summary
+        );
+
+    let evidenceStatus;
+
+    if (
+        !hasExecutiveSummary
+    ) {
+        evidenceStatus =
+            "Unavailable";
+    } else if (
+        missingSignals.length === 0
+    ) {
+        evidenceStatus =
+            "Complete backend report";
+    } else {
+        evidenceStatus =
+            "Some signals unavailable";
+    }
+
+    setText(
+        "#ai-evidence-status",
+        evidenceStatus
+    );
+
+
+    /*
+     * ========================================================
+     * DIRECT AI FIELDS
+     * ========================================================
+     *
+     * These are optional HTML elements.
+     * If they don't exist, setText simply does nothing.
+     */
+    setText(
+        "#ai-risk-regime",
+        ai.risk_regime
+    );
+
+    setText(
+        "#ai-primary-risk-driver",
+        ai.primary_risk_driver
+    );
+
+    setText(
+        "#ai-what-changed",
+        ai.what_changed
+    );
+
+    setText(
+        "#ai-what-matters-now",
+        ai.what_matters_now
+    );
+
+    setText(
+        "#ai-watch-next",
+        ai.watch_next
+    );
+
+    setText(
+        "#ai-stress-interpretation",
+        ai.stress_interpretation
+    );
+
+
+    /*
+     * Intelligence cards.
+     */
+    renderForensicCards(
+        report
+    );
+}
+
+
+/* ============================================================
+   FORENSIC / INTELLIGENCE CARDS
+   ============================================================ */
+
+function renderForensicCards(
+    report
+) {
+    const container =
+        $("#forensic-cards");
+
+    if (!container) {
+        return;
+    }
+
+    container.replaceChildren();
+
+    const ai =
+        getAI(report);
+
+    const cards = [
+        {
+            title:
+                "Primary risk driver",
+
+            value:
+                firstDefined(
+                    ai.primary_risk_driver,
+                    "Not identified."
+                )
+        },
+
+        {
+            title:
+                "What changed",
+
+            value:
+                firstDefined(
+                    ai.what_changed,
+                    "No material change reported."
+                )
+        },
+
+        {
+            title:
+                "What matters now",
+
+            value:
+                firstDefined(
+                    ai.what_matters_now,
+                    "No immediate interpretation available."
+                )
+        },
+
+        {
+            title:
+                "Watch next",
+
+            value:
+                firstDefined(
+                    ai.watch_next,
+                    "No monitoring signal returned."
+                )
+        },
+
+        {
+            title:
+                "Stress interpretation",
+
+            value:
+                firstDefined(
+                    ai.stress_interpretation,
+                    "No stress interpretation returned."
+                )
+        }
+    ];
+
+    cards.forEach(
+        (item) => {
             const card =
-                document.createElement("article");
+                document.createElement(
+                    "article"
+                );
 
             card.className =
                 "forensic-card";
 
             const heading =
-                document.createElement("span");
+                document.createElement(
+                    "h4"
+                );
 
-            heading.className =
-                "forensic-label";
+            const text =
+                document.createElement(
+                    "p"
+                );
 
             heading.textContent =
                 item.title;
 
-            const body =
-                document.createElement("p");
-
-            body.textContent =
-                String(item.text);
-
-            card.appendChild(heading);
-            card.appendChild(body);
-
-            container.appendChild(card);
-        });
-    }
-
-    /* ---------------------------------------------------------
-       DATA QUALITY
-       --------------------------------------------------------- */
-
-    function renderDataQuality(report) {
-        const quality =
-            report.data_quality || {};
-
-        const evidence =
-            report.evidence || {};
-
-        const confidence =
-            quality.confidence ||
-            report.risk_profile?.confidence ||
-            "—";
-
-        const source =
-            quality.source ||
-            report.market?.source ||
-            evidence.market_source ||
-            "—";
-
-        setText(
-            "data-confidence",
-            confidence
-        );
-
-        setText(
-            "market-source",
-            source
-        );
-
-        const freshness =
-            numeric(
-                quality.freshness_seconds
-            );
-
-        setText(
-            "data-freshness",
-            freshness === null
-                ? "—"
-                : `${Math.round(
-                    freshness
-                )}s`
-        );
-
-        const missing =
-            Array.isArray(
-                quality.missing_signals
-            )
-                ? quality.missing_signals
-                : [];
-
-        const container =
-            getElement("missing-signals");
-
-        if (!container) {
-            return;
-        }
-
-        container.replaceChildren();
-
-        if (!missing.length) {
-            const item =
-                document.createElement("span");
-
-            item.textContent =
-                "No major missing signals reported.";
-
-            container.appendChild(item);
-
-            return;
-        }
-
-        missing
-            .slice(0, 8)
-            .forEach((signal) => {
-                const item =
-                    document.createElement("span");
-
-                item.textContent =
-                    String(signal);
-
-                container.appendChild(item);
-            });
-    }
-
-    /* ---------------------------------------------------------
-       HISTORY
-       --------------------------------------------------------- */
-
-    function renderHistory(history) {
-        const tbody =
-            getElement("history-tbody");
-
-        if (!tbody) {
-            return;
-        }
-
-        const rows =
-            Array.isArray(history)
-                ? history
-                : [];
-
-        setText(
-            "history-count",
-            rows.length
-        );
-
-        tbody.replaceChildren();
-
-        if (!rows.length) {
-            const row =
-                document.createElement("tr");
-
-            const cell =
-                document.createElement("td");
-
-            cell.colSpan = 5;
-            cell.className =
-                "history-empty";
-
-            cell.textContent =
-                "No analyses yet.";
-
-            row.appendChild(cell);
-            tbody.appendChild(row);
-
-            return;
-        }
-
-        rows.forEach((item) => {
-            const row =
-                document.createElement("tr");
-
-            const asset =
-                document.createElement("td");
-
-            const risk =
-                document.createElement("td");
-
-            const outlook =
-                document.createElement("td");
-
-            const date =
-                document.createElement("td");
-
-            const action =
-                document.createElement("td");
-
-            const symbol =
-                item.token_symbol ||
-                item.asset?.symbol ||
-                "—";
-
-            const severity =
-                item.risk_severity ||
-                item.severity ||
-                "—";
-
-            const score =
-                numeric(item.risk_score);
-
-            const trend =
-                item.trend ||
-                item.risk_regime ||
-                "—";
-
-            asset.textContent =
-                String(symbol);
-
-            risk.textContent =
-                score === null
-                    ? String(
-                        severity
-                    ).toUpperCase()
-                    : `${String(
-                        severity
-                    ).toUpperCase()} · ${Math.round(
-                        score
-                    )}`;
-
-            outlook.textContent =
-                String(trend);
-
-            date.textContent =
-                formatDate(
-                    item.created_at
+            text.textContent =
+                String(
+                    item.value
                 );
 
-            const openButton =
-                document.createElement("button");
-
-            openButton.type = "button";
-            openButton.className =
-                "history-action";
-
-            openButton.textContent =
-                "OPEN";
-
-            openButton.addEventListener(
-                "click",
-                () => {
-                    openHistoryReport(
-                        item.id
-                    );
-                }
+            card.appendChild(
+                heading
             );
 
-            action.appendChild(
-                openButton
+            card.appendChild(
+                text
             );
 
-            row.appendChild(asset);
-            row.appendChild(risk);
-            row.appendChild(outlook);
-            row.appendChild(date);
-            row.appendChild(action);
-
-            tbody.appendChild(row);
-        });
-    }
-
-    /* ---------------------------------------------------------
-       OPEN HISTORY REPORT
-       --------------------------------------------------------- */
-
-    async function openHistoryReport(id) {
-        if (!id) {
-            return;
-        }
-
-        try {
-            showError("");
-
-            const payload =
-                await apiRequest(
-                    `/api/history/${encodeURIComponent(
-                        id
-                    )}`
-                );
-
-            const report =
-                extractReport(payload);
-
-            if (!report) {
-                throw new Error(
-                    "This report could not be loaded."
-                );
-            }
-
-            renderReport(report);
-            startLivePolling();
-
-            window.scrollTo({
-                top: 0,
-                behavior: "smooth"
-            });
-
-        } catch (error) {
-            console.error(
-                "History error:",
-                error
+            container.appendChild(
+                card
             );
-
-            showError(
-                error.message ||
-                "Unable to load this report."
-            );
-        }
-    }
-
-    /* ---------------------------------------------------------
-       LOAD DASHBOARD
-       --------------------------------------------------------- */
-
-    async function loadDashboard() {
-        try {
-            const payload =
-                await apiRequest(
-                    "/api/dashboard"
-                );
-
-            if (payload?.user) {
-                renderUser(
-                    payload.user
-                );
-            }
-
-            state.history =
-                Array.isArray(
-                    payload?.history
-                )
-                    ? payload.history
-                    : [];
-
-            renderHistory(
-                state.history
-            );
-
-            const report =
-                extractReport(payload);
-
-            if (report) {
-                renderReport(report);
-                startLivePolling();
-            } else {
-                setReportVisible(false);
-            }
-
-        } catch (error) {
-            console.error(
-                "Dashboard loading error:",
-                error
-            );
-
-            showError(
-                error.message ||
-                "Unable to load the dashboard."
-            );
-        }
-    }
-
-    /* ---------------------------------------------------------
-       ANALYSIS
-       --------------------------------------------------------- */
-
-    async function runAnalysis(symbol) {
-        if (
-            state.analysisRunning
-        ) {
-            return;
-        }
-
-        state.analysisRunning = true;
-
-        showError("");
-        setAnalyzeLoading(true);
-        showProgress();
-
-        try {
-            updateProgress(
-                "Fetching live market data",
-                15
-            );
-
-            await delay(250);
-
-            updateProgress(
-                "Computing quantitative signals",
-                35
-            );
-
-            const payload =
-                await apiRequest(
-                    "/api/analyze",
-                    {
-                        method: "POST",
-                        body: JSON.stringify({
-                            token_symbol: symbol
-                        })
-                    }
-                );
-
-            updateProgress(
-                "Running stress model",
-                65
-            );
-
-            await delay(250);
-
-            updateProgress(
-                "Synthesizing evidence",
-                82
-            );
-
-            await delay(250);
-
-            const report =
-                extractReport(payload);
-
-            if (!report) {
-                throw new Error(
-                    "The analysis engine returned no report."
-                );
-            }
-
-            renderReport(report);
-
-            if (
-                Array.isArray(
-                    payload?.history
-                )
-            ) {
-                state.history =
-                    payload.history;
-
-                renderHistory(
-                    state.history
-                );
-            }
-
-            updateProgress(
-                "Saving report",
-                100
-            );
-
-            await delay(400);
-
-            startLivePolling();
-
-        } catch (error) {
-            console.error(
-                "Analysis error:",
-                error
-            );
-
-            showError(
-                error.message ||
-                "Analysis failed. Please try again."
-            );
-
-        } finally {
-            hideProgress();
-            setAnalyzeLoading(false);
-            state.analysisRunning = false;
-        }
-    }
-
-    function delay(milliseconds) {
-        return new Promise(
-            (resolve) => {
-                window.setTimeout(
-                    resolve,
-                    milliseconds
-                );
-            }
-        );
-    }
-
-    /* ---------------------------------------------------------
-       ANALYSIS FORM
-       --------------------------------------------------------- */
-
-    function setupAnalysisForm() {
-        const form =
-            getElement(
-                "analysis-form"
-            );
-
-        if (!form) {
-            return;
-        }
-
-        form.addEventListener(
-            "submit",
-            async (event) => {
-                event.preventDefault();
-
-                const input =
-                    getElement(
-                        "token-symbol"
-                    );
-
-                if (!input) {
-                    return;
-                }
-
-                const symbol =
-                    String(
-                        input.value || ""
-                    )
-                        .trim()
-                        .toUpperCase();
-
-                input.value =
-                    symbol;
-
-                if (
-                    !/^[A-Z0-9]{2,15}$/.test(
-                        symbol
-                    )
-                ) {
-                    showError(
-                        "Enter a valid token symbol using 2–15 letters or numbers."
-                    );
-
-                    input.focus();
-
-                    return;
-                }
-
-                await runAnalysis(
-                    symbol
-                );
-            }
-        );
-
-        const input =
-            getElement(
-                "token-symbol"
-            );
-
-        if (input) {
-            input.addEventListener(
-                "input",
-                () => {
-                    input.value =
-                        input.value
-                            .toUpperCase()
-                            .replace(
-                                /[^A-Z0-9]/g,
-                                ""
-                            )
-                            .slice(0, 15);
-
-                    if (
-                        input.value.length >= 2
-                    ) {
-                        showError("");
-                    }
-                }
-            );
-        }
-    }
-
-    /* ---------------------------------------------------------
-       LIVE MARKET REFRESH
-       --------------------------------------------------------- */
-
-    async function refreshLiveMarket() {
-        if (
-            state.liveRefreshing ||
-            !state.report?.asset?.symbol
-        ) {
-            return;
-        }
-
-        state.liveRefreshing = true;
-
-        const symbol =
-            String(
-                state.report.asset.symbol
-            ).toUpperCase();
-
-        try {
-            const payload =
-                await apiRequest(
-                    `/api/market/${encodeURIComponent(
-                        symbol
-                    )}`
-                );
-
-            const market =
-                payload?.market ||
-                payload?.data ||
-                payload;
-
-            if (market) {
-                updateLiveMarket(
-                    market
-                );
-            }
-
-        } catch (error) {
-            console.warn(
-                "Live market refresh failed:",
-                error.message
-            );
-
-        } finally {
-            state.liveRefreshing =
-                false;
-        }
-    }
-
-    function updateLiveMarket(market) {
-        const price =
-            market.current_price_usd ??
-            market.current_price ??
-            market.price;
-
-        const change =
-            market.price_change_24h_pct ??
-            market.price_change_percentage_24h ??
-            market.change_24h;
-
-        const volume =
-            market.total_volume_usd ??
-            market.total_volume ??
-            market.volume;
-
-        setText(
-            "report-price",
-            formatPrice(price)
-        );
-
-        const changeNumber =
-            numeric(change);
-
-        setText(
-            "report-change",
-            changeNumber === null
-                ? "—"
-                : formatPercent(
-                    changeNumber
-                )
-        );
-
-        setChangeClass(
-            "report-change",
-            changeNumber
-        );
-
-        setText(
-            "report-volume",
-            formatCompact(volume)
-        );
-
-        const status =
-            getElement(
-                "market-status"
-            );
-
-        if (status) {
-            status.textContent =
-                market.source
-                    ? `LIVE · ${market.source}`
-                    : "LIVE MARKET DATA";
-        }
-
-        setText(
-            "market-live-status",
-            market.source
-                ? `LIVE · ${market.source}`
-                : "LIVE"
-        );
-
-        setText(
-            "market-updated",
-            market.timestamp
-                ? `Updated ${formatDate(
-                    market.timestamp
-                )}`
-                : "Just refreshed"
-        );
-    }
-
-    function startLivePolling() {
-        stopLivePolling();
-
-        if (
-            !state.report?.asset?.symbol
-        ) {
-            return;
-        }
-
-        refreshLiveMarket();
-
-        state.liveTimer =
-            window.setInterval(
-                refreshLiveMarket,
-                LIVE_REFRESH_INTERVAL
-            );
-    }
-
-    function stopLivePolling() {
-        if (state.liveTimer) {
-            window.clearInterval(
-                state.liveTimer
-            );
-
-            state.liveTimer = null;
-        }
-    }
-
-    /* ---------------------------------------------------------
-       DELETE CURRENT REPORT
-       --------------------------------------------------------- */
-
-    async function deleteCurrentReport() {
-        const button =
-            getElement(
-                "delete-current-report"
-            );
-
-        if (!button) {
-            return;
-        }
-
-        const reportId =
-            state.report?.id ||
-            state.report?.analysis_id ||
-            state.report?.report_id;
-
-        if (!reportId) {
-            showError(
-                "No saved report is selected."
-            );
-
-            return;
-        }
-
-        const confirmed =
-            window.confirm(
-                "Delete this analysis from your history?"
-            );
-
-        if (!confirmed) {
-            return;
-        }
-
-        button.disabled = true;
-
-        try {
-            await apiRequest(
-                `/api/history/${encodeURIComponent(
-                    reportId
-                )}`,
-                {
-                    method: "DELETE"
-                }
-            );
-
-            state.history =
-                state.history.filter(
-                    (item) =>
-                        String(item.id) !==
-                        String(reportId)
-                );
-
-            state.report = null;
-
-            stopLivePolling();
-
-            renderHistory(
-                state.history
-            );
-
-            setReportVisible(
-                false
-            );
-
-            showError("");
-
-        } catch (error) {
-            console.error(
-                "Delete error:",
-                error
-            );
-
-            showError(
-                error.message ||
-                "Unable to delete the report."
-            );
-
-        } finally {
-            button.disabled = false;
-        }
-    }
-
-    function setupDelete() {
-        const button =
-            getElement(
-                "delete-current-report"
-            );
-
-        if (!button) {
-            return;
-        }
-
-        button.addEventListener(
-            "click",
-            deleteCurrentReport
-        );
-    }
-
-    /* ---------------------------------------------------------
-       LANDING PAGE
-       --------------------------------------------------------- */
-
-    function setupLandingPage() {
-        queryAll(
-            'a[href^="#"]'
-        ).forEach((link) => {
-            link.addEventListener(
-                "click",
-                (event) => {
-                    const targetID =
-                        link.getAttribute(
-                            "href"
-                        );
-
-                    if (
-                        !targetID ||
-                        targetID === "#"
-                    ) {
-                        return;
-                    }
-
-                    const target =
-                        document.querySelector(
-                            targetID
-                        );
-
-                    if (!target) {
-                        return;
-                    }
-
-                    event.preventDefault();
-
-                    target.scrollIntoView({
-                        behavior: "smooth",
-                        block: "start"
-                    });
-                }
-            );
-        });
-    }
-
-    /* ---------------------------------------------------------
-       REVEAL EFFECTS
-       --------------------------------------------------------- */
-
-    function setupRevealEffects() {
-        const elements =
-            queryAll(
-                ".feature-card, " +
-                ".process-card, " +
-                ".search-card, " +
-                ".intelligence-report, " +
-                ".forensic-card"
-            );
-
-        if (!elements.length) {
-            return;
-        }
-
-        if (
-            !("IntersectionObserver" in window)
-        ) {
-            elements.forEach(
-                (element) => {
-                    element.classList.add(
-                        "is-visible"
-                    );
-                }
-            );
-
-            return;
-        }
-
-        const observer =
-            new IntersectionObserver(
-                (entries) => {
-                    entries.forEach(
-                        (entry) => {
-                            if (
-                                !entry.isIntersecting
-                            ) {
-                                return;
-                            }
-
-                            entry.target.classList.add(
-                                "is-visible"
-                            );
-
-                            observer.unobserve(
-                                entry.target
-                            );
-                        }
-                    );
-                },
-                {
-                    threshold: 0.08
-                }
-            );
-
-        elements.forEach(
-            (element) => {
-                observer.observe(
-                    element
-                );
-            }
-        );
-    }
-
-    /* ---------------------------------------------------------
-       POINTER / 3D EFFECT
-       --------------------------------------------------------- */
-
-    function setupPointerEffects() {
-        if (
-            window.matchMedia &&
-            window.matchMedia(
-                "(prefers-reduced-motion: reduce)"
-            ).matches
-        ) {
-            return;
-        }
-
-        const cards =
-            queryAll(
-                ".feature-card, " +
-                ".process-card, " +
-                ".search-card, " +
-                ".risk-pillar, " +
-                ".stress-card, " +
-                ".forensic-card"
-            );
-
-        cards.forEach((card) => {
-            card.addEventListener(
-                "pointermove",
-                (event) => {
-                    const rect =
-                        card.getBoundingClientRect();
-
-                    if (
-                        !rect.width ||
-                        !rect.height
-                    ) {
-                        return;
-                    }
-
-                    const x =
-                        (
-                            (event.clientX -
-                                rect.left) /
-                                rect.width -
-                            0.5
-                        ) * 2;
-
-                    const y =
-                        (
-                            (event.clientY -
-                                rect.top) /
-                                rect.height -
-                            0.5
-                        ) * 2;
-
-                    card.style.setProperty(
-                        "--pointer-x",
-                        x.toFixed(3)
-                    );
-
-                    card.style.setProperty(
-                        "--pointer-y",
-                        y.toFixed(3)
-                    );
-                }
-            );
-
-            card.addEventListener(
-                "pointerleave",
-                () => {
-                    card.style.removeProperty(
-                        "--pointer-x"
-                    );
-
-                    card.style.removeProperty(
-                        "--pointer-y"
-                    );
-                }
-            );
-        });
-    }
-
-    /* ---------------------------------------------------------
-       DASHBOARD INITIALIZATION
-       --------------------------------------------------------- */
-
-    async function initializeDashboard() {
-        processOAuthToken();
-
-        state.token =
-            getToken();
-
-        if (!state.token) {
-            window.location.replace(
-                "index.html"
-            );
-
-            return;
-        }
-
-        setupGoogleLogin();
-        setupLogout();
-        setupAnalysisForm();
-        setupDelete();
-
-        ensureProgressOverlay();
-
-        try {
-            await loadUser();
-        } catch (error) {
-            console.warn(
-                "Unable to load user:",
-                error.message
-            );
-        }
-
-        await loadDashboard();
-    }
-
-    /* ---------------------------------------------------------
-       LANDING INITIALIZATION
-       --------------------------------------------------------- */
-
-    function initializeLanding() {
-        setupGoogleLogin();
-        setupLandingPage();
-        setupRevealEffects();
-        setupPointerEffects();
-    }
-
-    /* ---------------------------------------------------------
-       APPLICATION INITIALIZATION
-       --------------------------------------------------------- */
-
-    function initialize() {
-        if (isDashboardPage()) {
-            initializeDashboard();
-        } else {
-            initializeLanding();
-        }
-    }
-
-    /* ---------------------------------------------------------
-       CLEANUP
-       --------------------------------------------------------- */
-
-    window.addEventListener(
-        "beforeunload",
-        () => {
-            stopLivePolling();
         }
     );
+}
 
-    /* ---------------------------------------------------------
-       START
-       --------------------------------------------------------- */
 
-    if (
-        document.readyState ===
-        "loading"
-    ) {
-        document.addEventListener(
-            "DOMContentLoaded",
-            initialize,
-            {
-                once: true
-            }
+/* ============================================================
+   DATA QUALITY
+   ============================================================ */
+
+function renderDataQuality(
+    report
+) {
+    const quality =
+        getDataQuality(report);
+
+    const reportObj =
+        report || {};
+
+    /*
+     * EXACT:
+     * data_quality.confidence
+     *
+     * Fallback chain so the Data Confidence card never
+     * falls back to a dash when the nested object is empty.
+     */
+    const confidence =
+        firstDefined(
+            quality.confidence,
+            reportObj.risk_confidence,
+            reportObj.ai?.confidence,
+            reportObj.risk_profile?.confidence
         );
-    } else {
-        initialize();
+
+    setText(
+        "#data-confidence",
+        formatConfidence(
+            confidence
+        )
+    );
+
+    /*
+     * Source belongs to market.
+     */
+    setText(
+        "#market-source",
+        firstDefined(
+            reportObj?.market?.source,
+            quality.source,
+            "Backend market feed"
+        )
+    );
+
+    /*
+     * Timestamp belongs to market.
+     */
+    const timestamp =
+        reportObj?.market?.timestamp;
+
+    setText(
+        "#data-freshness",
+        timestamp
+            ? formatRelativeTime(
+                  timestamp
+              )
+            : "Unknown"
+    );
+
+    /*
+     * Exact:
+     * data_quality.missing_signals
+     */
+    renderMissingSignals(
+        firstDefined(
+            quality.missing_signals,
+            quality.missing,
+            []
+        )
+    );
+}
+
+
+/* ============================================================
+   MISSING SIGNALS
+   ============================================================ */
+
+function renderMissingSignals(
+    missing
+) {
+    const container =
+        $("#missing-signals");
+
+    if (!container) {
+        return;
     }
 
-})();
+    container.replaceChildren();
+
+    let signals = [];
+
+    if (
+        Array.isArray(missing)
+    ) {
+        signals =
+            missing.filter(
+                (signal) =>
+                    signal !== null &&
+                    signal !== undefined &&
+                    String(signal).trim() !== ""
+            );
+    } else if (
+        typeof missing === "string" &&
+        missing.trim()
+    ) {
+        signals = [
+            missing
+        ];
+    }
+
+    /*
+     * No missing signals.
+     */
+    if (!signals.length) {
+        const item =
+            document.createElement(
+                "span"
+            );
+
+        item.className =
+            "data-ok";
+
+        item.textContent =
+            "No major missing signals reported.";
+
+        container.appendChild(
+            item
+        );
+
+        return;
+    }
+
+    /*
+     * Missing signals.
+     */
+    signals.forEach(
+        (signal) => {
+            const item =
+                document.createElement(
+                    "span"
+                );
+
+            item.className =
+                "missing-signal";
+
+            item.textContent =
+                String(signal);
+
+            container.appendChild(
+                item
+            );
+        }
+    );
+}
+
+
+/* ============================================================
+   COMPLETE REPORT RENDERER
+   ============================================================ */
+
+function renderReport(
+    report
+) {
+    if (
+        !report ||
+        typeof report !== "object"
+    ) {
+        clearReportView();
+
+        return;
+    }
+
+    /*
+     * Debugging:
+     * this lets us confirm exactly what reached
+     * the renderer.
+     */
+    console.log(
+        "Rendering CryptoRisk report:",
+        report
+    );
+
+    /*
+     * Store.
+     */
+    state.latestReport =
+        report;
+
+    /*
+     * Token.
+     */
+    state.currentSymbol =
+        firstDefined(
+            report?.asset?.symbol,
+            report?.token_symbol,
+            state.currentSymbol
+        );
+
+    /*
+     * Render every section.
+     */
+    renderMarket(
+        report
+    );
+
+    renderRiskProfile(
+        report
+    );
+
+    renderRiskDrivers(
+        report
+    );
+
+    renderStressTest(
+        report
+    );
+
+    renderAI(
+        report
+    );
+
+    renderDataQuality(
+        report
+    );
+
+    updateCurrentReportDeleteButton();
+
+    /*
+     * Optional generated timestamp.
+     */
+    if (
+        report.generated_at
+    ) {
+        const generated =
+            document.querySelector(
+                "[data-report-generated]"
+            );
+
+        if (generated) {
+            generated.textContent =
+                formatDate(
+                    report.generated_at
+                );
+        }
+    }
+}
+
+
+/* ============================================================
+   DELETE BUTTON STATE
+   ============================================================ */
+
+function updateCurrentReportDeleteButton() {
+    const button =
+        $("#delete-current-report");
+
+    if (!button) {
+        return;
+    }
+
+    button.disabled =
+        !state.currentReportId;
+}
+
+
+/* ============================================================
+   HISTORY TABLE
+   ============================================================ */
+
+function renderHistory(
+    history
+) {
+    const tbody =
+        $("#history-tbody");
+
+    if (!tbody) {
+        return;
+    }
+
+    tbody.replaceChildren();
+
+    const records =
+        Array.isArray(history)
+            ? history
+            : [];
+
+    setText(
+        "#history-count",
+        String(
+            records.length
+        )
+    );
+
+    if (!records.length) {
+        const row =
+            document.createElement(
+                "tr"
+            );
+
+        const cell =
+            document.createElement(
+                "td"
+            );
+
+        cell.colSpan = 6;
+
+        cell.className =
+            "empty-history";
+
+        cell.textContent =
+            "No analyses yet.";
+
+        row.appendChild(
+            cell
+        );
+
+        tbody.appendChild(
+            row
+        );
+
+        return;
+    }
+
+    records.forEach(
+        (record) => {
+            const row =
+                document.createElement(
+                    "tr"
+                );
+
+            row.dataset.reportId =
+                String(
+                    record.id
+                );
+
+            /*
+             * Asset
+             */
+            const assetCell =
+                createHistoryCell(
+                    firstDefined(
+                        record.token_symbol,
+                        record.asset?.symbol,
+                        record.symbol,
+                        "—"
+                    )
+                );
+
+            /*
+             * Risk
+             */
+            const riskCell =
+                document.createElement(
+                    "td"
+                );
+
+            const riskValue =
+                firstDefined(
+                    record.risk_label,
+                    record.risk_severity,
+                    record.label
+                );
+
+            const risk =
+                normalizeSeverity(
+                    riskValue
+                );
+
+            const riskBadge =
+                document.createElement(
+                    "span"
+                );
+
+            riskBadge.className =
+                "risk-badge";
+
+            riskBadge.textContent =
+                risk;
+
+            applyRiskClass(
+                riskBadge,
+                risk
+            );
+
+            riskCell.appendChild(
+                riskBadge
+            );
+
+            /*
+             * Outlook
+             */
+            const outlookCell =
+                createHistoryCell(
+                    firstDefined(
+                        record.outlook,
+                        record.trend,
+                        "—"
+                    )
+                );
+
+            /*
+             * Score
+             */
+            const score =
+                firstDefined(
+                    record.risk_score,
+                    record.composite_score
+                );
+
+            const scoreCell =
+                createHistoryCell(
+                    score !== null
+                        ? `${formatScore(
+                              score
+                          )}/100`
+                        : "—"
+                );
+
+            /*
+             * Date
+             */
+            const dateValue =
+                firstDefined(
+                    record.created_at,
+                    record.timestamp,
+                    record.generated_at
+                );
+
+            const dateCell =
+                createHistoryCell(
+                    dateValue
+                        ? formatDate(
+                              dateValue
+                          )
+                        : "—"
+                );
+
+            /*
+             * Actions
+             */
+            const actionCell =
+                document.createElement(
+                    "td"
+                );
+
+            const viewButton =
+                document.createElement(
+                    "button"
+                );
+
+            viewButton.type =
+                "button";
+
+            viewButton.className =
+                "history-view";
+
+            viewButton.textContent =
+                "View";
+
+            viewButton.dataset.action =
+                "view-history";
+
+            viewButton.dataset.id =
+                String(
+                    record.id
+                );
+
+            const deleteButton =
+                document.createElement(
+                    "button"
+                );
+
+            deleteButton.type =
+                "button";
+
+            deleteButton.className =
+                "history-delete";
+
+            deleteButton.textContent =
+                "Delete";
+
+            deleteButton.dataset.action =
+                "delete-history";
+
+            deleteButton.dataset.id =
+                String(
+                    record.id
+                );
+
+            actionCell.appendChild(
+                viewButton
+            );
+
+            actionCell.appendChild(
+                deleteButton
+            );
+
+            /*
+             * Row.
+             */
+            row.appendChild(
+                assetCell
+            );
+
+            row.appendChild(
+                riskCell
+            );
+
+            row.appendChild(
+                outlookCell
+            );
+
+            row.appendChild(
+                scoreCell
+            );
+
+            row.appendChild(
+                dateCell
+            );
+
+            row.appendChild(
+                actionCell
+            );
+
+            tbody.appendChild(
+                row
+            );
+        }
+    );
+}
+
+
+function createHistoryCell(
+    value
+) {
+    const cell =
+        document.createElement(
+            "td"
+        );
+
+    cell.textContent =
+        value === null ||
+        value === undefined ||
+        value === ""
+            ? "—"
+            : String(value);
+
+    return cell;
+}
+
+
+/* ============================================================
+   HISTORY EVENT DELEGATION
+   ============================================================ */
+
+function handleHistoryClick(
+    event
+) {
+    const target =
+        event.target.closest(
+            "[data-action]"
+        );
+
+    if (!target) {
+        return;
+    }
+
+    const action =
+        target.dataset.action;
+
+    const id =
+        target.dataset.id;
+
+    if (!id) {
+        return;
+    }
+
+    event.preventDefault();
+
+    event.stopPropagation();
+
+    if (
+        action ===
+        "view-history"
+    ) {
+        loadHistoryReport(
+            id
+        );
+
+        return;
+    }
+
+    if (
+        action ===
+        "delete-history"
+    ) {
+        deleteReport(
+            id
+        );
+    }
+}
+
+
+/* ============================================================
+   LOGIN / SIGNUP
+   ============================================================ */
+
+async function handleAuthForm(
+    event
+) {
+    const form =
+        event.currentTarget;
+
+    event.preventDefault();
+
+    const action =
+        form.dataset.auth;
+
+    if (
+        action !== "login" &&
+        action !== "signup"
+    ) {
+        return;
+    }
+
+    const email =
+        form.querySelector(
+            "[name='email']"
+        )?.value
+            ?.trim();
+
+    const password =
+        form.querySelector(
+            "[name='password']"
+        )?.value;
+
+    const username =
+        form.querySelector(
+            "[name='username']"
+        )?.value
+            ?.trim();
+
+    if (
+        !email ||
+        !password
+    ) {
+        showAnalysisError(
+            "Email and password are required."
+        );
+
+        return;
+    }
+
+    const endpoint =
+        action === "signup"
+            ? "/api/auth/signup"
+            : "/api/auth/login";
+
+    const body =
+        action === "signup"
+            ? {
+                  username,
+                  email,
+                  password
+              }
+            : {
+                  email,
+                  password
+              };
+
+    try {
+        const payload =
+            await apiRequest(
+                endpoint,
+                {
+                    method: "POST",
+                    body
+                }
+            );
+
+        const token =
+            firstDefined(
+                payload.token,
+                payload.access_token
+            );
+
+        if (!token) {
+            throw new Error(
+                "Authentication succeeded but no session token was returned."
+            );
+        }
+
+        saveToken(
+            token
+        );
+
+        window.location.href =
+            "/dashboard";
+
+    } catch (error) {
+        showAnalysisError(
+            error.message ||
+            "Authentication failed."
+        );
+    }
+}
+
+
+/* ============================================================
+   KEYBOARD UX
+   ============================================================ */
+
+function setupKeyboardShortcuts() {
+    document.addEventListener(
+        "keydown",
+        (event) => {
+            if (
+                event.key !== "/" ||
+                event.ctrlKey ||
+                event.metaKey ||
+                event.altKey
+            ) {
+                return;
+            }
+
+            const active =
+                document.activeElement;
+
+            const isTyping =
+                active &&
+                (
+                    active.tagName ===
+                        "INPUT" ||
+                    active.tagName ===
+                        "TEXTAREA" ||
+                    active.isContentEditable
+                );
+
+            if (isTyping) {
+                return;
+            }
+
+            const input =
+                $("#token-symbol");
+
+            if (!input) {
+                return;
+            }
+
+            event.preventDefault();
+
+            input.focus();
+        }
+    );
+}
+
+
+/* ============================================================
+   PAGE VISIBILITY
+   ============================================================ */
+
+function setupVisibilityHandling() {
+    document.addEventListener(
+        "visibilitychange",
+        () => {
+            if (
+                document.hidden
+            ) {
+                stopLivePolling();
+
+                return;
+            }
+
+            if (
+                state.currentSymbol &&
+                state.token
+            ) {
+                startLivePolling(
+                    state.currentSymbol
+                );
+            }
+        }
+    );
+}
+
+
+/* ============================================================
+   BEFORE UNLOAD
+   ============================================================ */
+
+window.addEventListener(
+    "beforeunload",
+    () => {
+        stopLivePolling();
+    }
+);
+
+
+/* ============================================================
+   FINAL DOM INITIALIZATION
+   ============================================================ */
+
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+        /*
+         * Analysis form.
+         */
+        const analysisForm =
+            $("#analysis-form");
+
+        if (analysisForm) {
+            analysisForm.addEventListener(
+                "submit",
+                handleAnalysisSubmit
+            );
+        }
+
+        /*
+         * Logout buttons.
+         */
+        const logoutButtons =
+            $all(
+                "[data-action='logout'], #logout-button"
+            );
+
+        logoutButtons.forEach(
+            (button) => {
+                button.addEventListener(
+                    "click",
+                    (event) => {
+                        event.preventDefault();
+
+                        logout();
+                    }
+                );
+            }
+        );
+
+        /*
+         * Current report delete.
+         */
+        const deleteButton =
+            $("#delete-current-report");
+
+        if (deleteButton) {
+            deleteButton.addEventListener(
+                "click",
+                async () => {
+                    await deleteCurrentReport();
+                }
+            );
+        }
+
+        /*
+         * History delegation.
+         */
+        const historyBody =
+            $("#history-tbody");
+
+        if (historyBody) {
+            historyBody.addEventListener(
+                "click",
+                handleHistoryClick
+            );
+        }
+
+        /*
+         * Login/signup forms.
+         */
+        $all(
+            "form[data-auth]"
+        ).forEach(
+            (form) => {
+                form.addEventListener(
+                    "submit",
+                    handleAuthForm
+                );
+            }
+        );
+
+        /*
+         * Keyboard shortcuts.
+         */
+        setupKeyboardShortcuts();
+
+        /*
+         * Visibility-aware polling.
+         */
+        setupVisibilityHandling();
+
+        /*
+         * Determine page.
+         */
+        if (
+            document.querySelector(
+                "#analysis-form"
+            )
+        ) {
+            initializeDashboard();
+        } else {
+            initializeIndexPage();
+        }
+    }
+);
+
+
+/* ============================================================
+   GLOBAL ERROR SAFETY
+   ============================================================ */
+
+window.addEventListener(
+    "error",
+    (event) => {
+        console.error(
+            "Frontend error:",
+            event.error ||
+            event.message
+        );
+    }
+);
+
+
+window.addEventListener(
+    "unhandledrejection",
+    (event) => {
+        console.error(
+            "Unhandled promise rejection:",
+            event.reason
+        );
+    }
+);
+
+
+/* ============================================================
+   END OF SCRIPT
+   ============================================================ */

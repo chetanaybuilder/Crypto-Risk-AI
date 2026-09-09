@@ -1,17 +1,47 @@
-# Python cache
+# ============================================================
+# Git Ignore Configuration
+# CryptoRisk AI — Production Repository
+# ============================================================
+# Prevents sensitive, generated, and OS-specific files from
+# being tracked in version control.
+# ============================================================
+
+# Python cache and compiled bytecode
 __pycache__/
 *.py[cod]
+*.egg-info/
+*.egg
 
-# Environment variables
+# Environment variables (NEVER commit)
 .env
+.env.local
+.env.*.local
 
-# Virtual environment
+# Virtual environments
 venv/
 .venv/
+env/
+ENV/
 
-# VS Code
+# VS Code editor settings
 .vscode/
+*.code-workspace
 
-# OS files
+# OS-generated files
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# IDE files
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Distribution / packaging
+dist/
+build/
+*.tar.gz

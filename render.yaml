@@ -1,4 +1,21 @@
+# ============================================================
+# Render Deployment Configuration
+# CryptoRisk AI — Production Infrastructure
+# ============================================================
+# Defines the backend web service, static frontend site, and
+# PostgreSQL database for deployment on Render.com.
+#
+# Services:
+#   - cryptorisk-ai-backend: Flask API server (Gunicorn)
+#   - cryptorisk-ai-frontend: Static HTML/CSS/JS site
+#   - cryptorisk-db: PostgreSQL database
+#
+# Environment variables marked sync: false must be manually
+# configured in the Render dashboard.
+# ============================================================
+
 services:
+  # Backend API Service — Flask + Gunicorn
   - type: web
     name: cryptorisk-ai-backend
     runtime: python
@@ -7,29 +24,38 @@ services:
     startCommand: gunicorn --chdir backend app:app --bind 0.0.0.0:$PORT
     healthCheckPath: /api/health
     envVars:
+      # Auto-generated secure secrets
       - key: SECRET_KEY
         generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
+
+      # Database connection (auto-linked)
       - key: DATABASE_URL
         fromDatabase:
           name: cryptorisk-db
           property: connectionString
+
+      # API keys (configure manually in Render dashboard)
       - key: GEMINI_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
+
+      # Frontend URL for CORS configuration
       - key: FRONTEND_URL
         value: https://crypto-risk-ai.vercel.app
 
+  # Static Frontend Site — HTML/CSS/JS
   - type: static_site
     name: cryptorisk-ai-frontend
     plan: free
     buildCommand: echo "Static frontend ready"
     staticPublishPath: frontend
 
+# PostgreSQL Database
 databases:
   - name: cryptorisk-db
     plan: free

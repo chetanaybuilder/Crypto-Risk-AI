@@ -2,6 +2,12 @@
 <html lang="en">
 <head>
 
+    <!-- =========================================================
+         DOCUMENT METADATA
+         Defines encoding, responsive behavior, SEO description,
+         and the browser tab title for the dashboard.
+    ========================================================== -->
+
     <meta charset="UTF-8">
 
     <meta
@@ -17,6 +23,13 @@
     <title>
         CryptoRisk AI — Intelligence Terminal
     </title>
+
+
+    <!-- =========================================================
+         EXTERNAL FONTS
+         Loads the typography used throughout the CryptoRisk AI
+         terminal interface.
+    ========================================================== -->
 
     <link
         rel="preconnect"
@@ -34,6 +47,13 @@
         rel="stylesheet"
     >
 
+
+    <!-- =========================================================
+         APPLICATION STYLESHEET
+         Flask resolves the CSS file from the static directory
+         using the url_for() helper.
+    ========================================================== -->
+
     <link
         rel="stylesheet"
         href="{{ url_for('static', filename='style.css') }}"
@@ -44,12 +64,18 @@
 
 <body class="dashboard-page">
 
-
     <!-- =========================================================
          NAVIGATION
+         Top-level dashboard navigation containing the product
+         identity, live terminal status, authenticated user
+         information, avatar, and logout action.
     ========================================================== -->
 
     <nav class="top-nav">
+
+        <!-- =====================================================
+             PRODUCT BRANDING
+        ====================================================== -->
 
         <div class="brand">
 
@@ -72,6 +98,12 @@
         </div>
 
 
+        <!-- =====================================================
+             TERMINAL STATUS
+             Indicates that the dashboard is operating as the
+             live CryptoRisk intelligence terminal.
+        ====================================================== -->
+
         <div class="nav-center">
 
             <span class="terminal-status">
@@ -84,6 +116,12 @@
 
         </div>
 
+
+        <!-- =====================================================
+             USER SESSION AREA
+             Displays the currently authenticated analyst's
+             identity and provides the logout control.
+        ====================================================== -->
 
         <div class="nav-user">
 
@@ -105,14 +143,18 @@
             </div>
 
 
+            <!-- User avatar / dynamically populated initial -->
+
             <div
                 class="user-avatar"
                 id="user-avatar"
-                aria-hidden="true"
+                aria-label="User avatar"
             >
-                A
+                <span id="user-avatar-initial">A</span>
             </div>
 
+
+            <!-- Terminates the authenticated user session -->
 
             <button
                 type="button"
@@ -128,7 +170,9 @@
 
 
     <!-- =========================================================
-         MAIN
+         MAIN DASHBOARD
+         Contains the complete analysis workflow, intelligence
+         report, quantitative metrics, AI synthesis, and history.
     ========================================================== -->
 
     <main class="dashboard-container">
@@ -136,6 +180,8 @@
 
         <!-- =====================================================
              TERMINAL HEADER
+             Introduces the dashboard and exposes high-level
+             information about the active intelligence engine.
         ====================================================== -->
 
         <header class="terminal-header">
@@ -160,6 +206,12 @@
 
             </div>
 
+
+            <!-- =================================================
+                 ENGINE METADATA
+                 Displays the engine version, operating mode,
+                 and the source currently supplying market data.
+            ================================================== -->
 
             <div class="terminal-meta">
 
@@ -208,6 +260,8 @@
 
         <!-- =====================================================
              SEARCH / ANALYSIS
+             Primary input interface used to submit a
+             cryptocurrency symbol for risk analysis.
         ====================================================== -->
 
         <section class="search-card">
@@ -232,6 +286,9 @@
                 </div>
 
 
+                <!-- Displays the current readiness state of
+                     the analysis system. -->
+
                 <div class="scan-indicator">
 
                     <span
@@ -247,6 +304,12 @@
 
             </div>
 
+
+            <!-- =================================================
+                 ANALYSIS FORM
+                 Collects the cryptocurrency symbol and triggers
+                 the frontend analysis workflow.
+            ================================================== -->
 
             <form
                 id="analysis-form"
@@ -273,6 +336,8 @@
                 </div>
 
 
+                <!-- Starts the asset analysis request -->
+
                 <button
                     type="submit"
                     class="analyze-button"
@@ -282,6 +347,8 @@
                     <span class="button-text">
                         Analyze Asset
                     </span>
+
+                    <!-- Loading indicator controlled by JavaScript -->
 
                     <span
                         class="button-loader"
@@ -293,6 +360,8 @@
 
             </form>
 
+
+            <!-- Dynamic error output for failed analysis requests -->
 
             <div
                 id="analysis-error"
@@ -306,6 +375,8 @@
 
         <!-- =====================================================
              ANALYSIS PROGRESS
+             Visualizes the individual stages of the intelligence
+             pipeline while an asset is being analyzed.
         ====================================================== -->
 
         <section
@@ -329,6 +400,8 @@
                 </div>
 
 
+                <!-- Dynamic percentage updated during analysis -->
+
                 <strong id="progress-percent">
                     0%
                 </strong>
@@ -336,12 +409,20 @@
             </div>
 
 
+            <!-- Overall pipeline completion bar -->
+
             <div class="progress-bar">
 
                 <span id="progress-fill"></span>
 
             </div>
 
+
+            <!-- =================================================
+                 PIPELINE STAGES
+                 Represents the logical processing sequence:
+                 market data → model → stress → AI → persistence.
+            ================================================== -->
 
             <div class="progress-stages">
 
@@ -387,6 +468,8 @@
 
         <!-- =====================================================
              INTELLIGENCE REPORT
+             Main report container populated with the results of
+             the completed cryptocurrency risk analysis.
         ====================================================== -->
 
         <section
@@ -397,6 +480,8 @@
 
             <!-- =================================================
                  REPORT HEADER
+                 Identifies the analyzed asset and presents its
+                 composite risk score and analytical outlook.
             ================================================== -->
 
             <div class="report-header">
@@ -422,6 +507,12 @@
 
                 </div>
 
+
+                <!-- =================================================
+                     COMPOSITE RISK SCORE
+                     High-level score representing the combined
+                     quantitative risk assessment.
+                ================================================== -->
 
                 <div class="risk-score-card">
 
@@ -457,6 +548,8 @@
 
             <!-- =================================================
                  LIVE MARKET SNAPSHOT
+                 Displays the current market conditions and
+                 associated market-data freshness information.
             ================================================== -->
 
             <section class="report-section">
@@ -475,6 +568,8 @@
 
                     </div>
 
+
+                    <!-- Live market-data status and update time -->
 
                     <div class="live-data-status">
 
@@ -496,8 +591,16 @@
                 </div>
 
 
+                <!-- =================================================
+                     MARKET METRICS
+                     Individual cards containing the primary
+                     market statistics for the analyzed asset.
+                ================================================== -->
+
                 <div class="market-grid">
 
+
+                    <!-- Current asset price and 24h movement -->
 
                     <article class="market-card">
 
@@ -519,6 +622,8 @@
                     </article>
 
 
+                    <!-- Current 24-hour trading volume -->
+
                     <article class="market-card">
 
                         <span class="card-label">
@@ -535,6 +640,8 @@
 
                     </article>
 
+
+                    <!-- Current market capitalization -->
 
                     <article class="market-card">
 
@@ -553,6 +660,8 @@
                     </article>
 
 
+                    <!-- Seven-day market movement -->
+
                     <article class="market-card">
 
                         <span class="card-label">
@@ -570,6 +679,8 @@
                     </article>
 
 
+                    <!-- Highest observed price over the current session -->
+
                     <article class="market-card">
 
                         <span class="card-label">
@@ -586,6 +697,8 @@
 
                     </article>
 
+
+                    <!-- Lowest observed price over the current session -->
 
                     <article class="market-card">
 
@@ -610,6 +723,8 @@
 
             <!-- =================================================
                  RISK PILLARS
+                 Breaks the composite risk assessment into the
+                 underlying quantitative components.
             ================================================== -->
 
             <section class="report-section">
@@ -629,6 +744,9 @@
                     </div>
 
 
+                    <!-- Risk scale used throughout the quantitative
+                         pillar visualization. -->
+
                     <span class="section-caption">
                         0 = LOW RISK · 100 = HIGH RISK
                     </span>
@@ -638,6 +756,11 @@
 
                 <div class="risk-pillars">
 
+
+                    <!-- =================================================
+                         VOLATILITY
+                         Represents realized price instability.
+                    ================================================== -->
 
                     <!-- VOLATILITY -->
 
@@ -683,6 +806,12 @@
                     </article>
 
 
+                    <!-- =================================================
+                         LIQUIDITY
+                         Represents exit, depth, and market-liquidity
+                         related risk.
+                    ================================================== -->
+
                     <!-- LIQUIDITY -->
 
                     <article class="risk-pillar">
@@ -727,6 +856,12 @@
                     </article>
 
 
+                    <!-- =================================================
+                         CONTRACT
+                         Represents the smart-contract and structural
+                         evidence associated with the asset.
+                    ================================================== -->
+
                     <!-- CONTRACT -->
 
                     <article class="risk-pillar">
@@ -770,6 +905,12 @@
 
                     </article>
 
+
+                    <!-- =================================================
+                         COMPOSITE
+                         Represents the final combined quantitative
+                         risk assessment.
+                    ================================================== -->
 
                     <!-- COMPOSITE -->
 
@@ -821,6 +962,8 @@
 
             <!-- =================================================
                  KEY RISK DRIVERS
+                 Dynamic section used to display the major signals
+                 contributing to the calculated risk profile.
             ================================================== -->
 
             <section class="report-section">
@@ -841,6 +984,9 @@
 
                 </div>
 
+
+                <!-- Dynamic risk-driver cards are inserted/updated
+                     by the frontend analysis logic. -->
 
                 <div
                     id="risk-drivers"
@@ -905,6 +1051,8 @@
 
             <!-- =================================================
                  DOWNSIDE SIMULATOR
+                 Displays the modeled response of the analyzed
+                 asset under the selected BTC shock scenario.
             ================================================== -->
 
             <section class="report-section stress-section">
@@ -924,6 +1072,8 @@
                     </div>
 
 
+                    <!-- Current scenario represented by the simulator -->
+
                     <span class="scenario-badge">
                         BTC -10% SHOCK
                     </span>
@@ -933,6 +1083,8 @@
 
                 <div class="stress-grid">
 
+
+                    <!-- Historical BTC sensitivity -->
 
                     <article class="stress-card">
 
@@ -951,6 +1103,8 @@
                     </article>
 
 
+                    <!-- Modeled response to the selected downside shock -->
+
                     <article class="stress-card">
 
                         <span class="card-label">
@@ -968,6 +1122,8 @@
                     </article>
 
 
+                    <!-- Estimated scenario resilience -->
+
                     <article class="stress-card">
 
                         <span class="card-label">
@@ -984,6 +1140,8 @@
 
                     </article>
 
+
+                    <!-- Confidence of the scenario model -->
 
                     <article class="stress-card">
 
@@ -1004,6 +1162,8 @@
                 </div>
 
 
+                <!-- Human-readable interpretation of the scenario -->
+
                 <div class="stress-verdict-card">
 
                     <span class="card-label">
@@ -1021,6 +1181,8 @@
 
             <!-- =================================================
                  EXECUTIVE INTELLIGENCE
+                 AI synthesis layer that interprets the measured
+                 quantitative evidence and market signals.
             ================================================== -->
 
             <section class="report-section autopsy-section">
@@ -1040,6 +1202,9 @@
                     </div>
 
 
+                    <!-- Indicates whether the AI has sufficient
+                         evidence available for synthesis. -->
+
                     <span
                         id="ai-evidence-status"
                         class="autopsy-token"
@@ -1049,6 +1214,8 @@
 
                 </div>
 
+
+                <!-- High-level AI-generated assessment -->
 
                 <div class="autopsy-summary">
 
@@ -1064,10 +1231,18 @@
                 </div>
 
 
+                <!-- =================================================
+                     AI FORENSIC CARDS
+                     Provides focused AI interpretations for the
+                     major evidence categories.
+                ================================================== -->
+
                 <div
                     id="forensic-cards"
                     class="forensic-grid"
                 >
+
+                    <!-- Market structure interpretation -->
 
                     <article class="forensic-card">
 
@@ -1086,6 +1261,8 @@
                     </article>
 
 
+                    <!-- Liquidity interpretation -->
+
                     <article class="forensic-card">
 
                         <span class="forensic-index">
@@ -1102,6 +1279,8 @@
 
                     </article>
 
+
+                    <!-- Contract and structural-risk interpretation -->
 
                     <article class="forensic-card">
 
@@ -1126,6 +1305,8 @@
 
             <!-- =================================================
                  DATA QUALITY
+                 Shows confidence, source, freshness, and missing
+                 signals associated with the generated evidence.
             ================================================== -->
 
             <section class="report-section">
@@ -1149,6 +1330,8 @@
 
                 <div class="stress-grid">
 
+                    <!-- Overall evidence confidence -->
+
                     <article class="stress-card">
 
                         <span class="card-label">
@@ -1165,6 +1348,8 @@
 
                     </article>
 
+
+                    <!-- Primary market-data source -->
 
                     <article class="stress-card">
 
@@ -1183,6 +1368,8 @@
                     </article>
 
 
+                    <!-- Age/freshness of the underlying evidence -->
+
                     <article class="stress-card">
 
                         <span class="card-label">
@@ -1200,6 +1387,8 @@
                     </article>
 
 
+                    <!-- Signals that were unavailable during analysis -->
+
                     <article class="stress-card">
 
                         <span class="card-label">
@@ -1210,10 +1399,6 @@
                             —
                         </strong>
 
-                        <p>
-                            Evidence unavailable to the model.
-                        </p>
-
                     </article>
 
                 </div>
@@ -1223,6 +1408,8 @@
 
             <!-- =================================================
                  REPORT ACTIONS
+                 User controls for actions on the currently
+                 displayed intelligence report.
             ================================================== -->
 
             <div class="report-actions">
@@ -1242,6 +1429,8 @@
 
         <!-- =====================================================
              HISTORY
+             Persistent list of previously generated analysis
+             reports associated with the user.
         ====================================================== -->
 
         <section class="history-section">
@@ -1261,6 +1450,8 @@
                 </div>
 
 
+                <!-- Number of saved reports -->
+
                 <div class="history-counter">
 
                     <span id="history-count">
@@ -1275,6 +1466,12 @@
 
             </div>
 
+
+            <!-- =================================================
+                 HISTORY TABLE
+                 Displays previously saved analyses and their
+                 associated actions.
+            ================================================== -->
 
             <div class="history-table-wrapper">
 
@@ -1313,7 +1510,11 @@
                     </thead>
 
 
+                    <!-- Dynamic history rows populated by JavaScript -->
+
                     <tbody id="history-tbody">
+
+                        <!-- Default state before any saved reports exist -->
 
                         <tr class="empty-history">
 
@@ -1336,6 +1537,8 @@
 
     <!-- =========================================================
          FOOTER
+         Displays product identity and current application
+         version information.
     ========================================================== -->
 
     <footer class="dashboard-footer">
@@ -1353,6 +1556,9 @@
 
     <!-- =========================================================
          FLASH MESSAGES
+         Flask/Jinja server-side messages such as authentication
+         errors, warnings, or application notifications are
+         rendered into this container.
     ========================================================== -->
 
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -1382,7 +1588,9 @@
 
 
     <!-- =========================================================
-         STATIC JS
+         STATIC JAVASCRIPT
+         Loads the dashboard's client-side application logic.
+         Flask resolves the script from the static directory.
     ========================================================== -->
 
     <script

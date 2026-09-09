@@ -1,18 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <!-- ============================================================
+         CryptoRisk AI — Landing Page
+         ============================================================
+         Public-facing landing page for the CryptoRisk AI platform.
+         Features hero section, feature highlights, and CTA.
+
+         External Dependencies:
+           - Google Fonts (Inter, Space Grotesk, JetBrains Mono, Fira Code)
+           - style.css (main stylesheet)
+           - script.js (page interactions)
+         ============================================================ -->
+
     <meta charset="UTF-8">
 
+    <!-- Viewport for responsive design -->
     <meta
         name="viewport"
         content="width=device-width, initial-scale=1.0"
     >
 
+    <!-- SEO meta tags -->
     <meta
         name="description"
         content="CryptoRisk AI — Evidence-first cryptocurrency risk intelligence."
     >
-
     <meta
         name="theme-color"
         content="#070a10"
@@ -20,14 +33,17 @@
 
     <title>CryptoRisk AI — Intelligence Before The Noise</title>
 
+    <!-- Preconnect to Google Fonts for performance -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 
+    <!-- Google Fonts: Inter, Space Grotesk, JetBrains Mono, Fira Code -->
     <link
         href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
         rel="stylesheet"
     >
 
+    <!-- Main stylesheet -->
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -77,21 +93,7 @@
         aria-hidden="true"
     ></div>
 
-    <div
-        class="floating-object floating-cube"
-        aria-hidden="true"
-    ></div>
-
-    <div
-        class="floating-object floating-ring"
-        aria-hidden="true"
-    ></div>
-
-    <div
-        class="floating-object floating-sphere"
-        aria-hidden="true"
-    ></div>
-
+    <canvas id="meteor-canvas" aria-hidden="true"></canvas>
 
     <!-- =====================================================
          NAVIGATION

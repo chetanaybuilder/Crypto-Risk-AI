@@ -1,6 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+
+    <!-- =========================================================
+         DOCUMENT HEAD
+         Defines page metadata, responsive behavior, SEO details,
+         browser title, external fonts, and application styling.
+    ========================================================== -->
+
     <meta charset="UTF-8">
 
     <meta
@@ -14,6 +21,13 @@
     >
 
     <title>CryptoRisk AI — Risk Intelligence Terminal</title>
+
+
+    <!-- =========================================================
+         TYPOGRAPHY
+         Preconnects to Google Fonts and loads the font families
+         used throughout the CryptoRisk AI interface.
+    ========================================================== -->
 
     <link
         rel="preconnect"
@@ -31,6 +45,13 @@
         rel="stylesheet"
     >
 
+
+    <!-- =========================================================
+         APPLICATION STYLES
+         Flask's url_for() generates the URL for the stylesheet
+         stored inside the application's static directory.
+    ========================================================== -->
+
     <link
         rel="stylesheet"
         href="{{ url_for('static', filename='style.css') }}"
@@ -38,6 +59,15 @@
 </head>
 
 <body class="landing-page">
+
+    <!-- =========================================================
+         AMBIENT BACKGROUND
+         Decorative visual layers used to create the terminal/
+         intelligence aesthetic of the landing page.
+         
+         aria-hidden="true" prevents decorative elements from
+         being interpreted as meaningful content by screen readers.
+    ========================================================== -->
 
     <div class="ambient-canvas" aria-hidden="true"></div>
     <div class="landing-noise" aria-hidden="true"></div>
@@ -47,6 +77,13 @@
     <div class="bg-orb bg-orb-cyan" aria-hidden="true"></div>
     <div class="bg-orb bg-orb-blue" aria-hidden="true"></div>
 
+
+    <!-- =========================================================
+         FLOATING CRYPTO TOKENS
+         Decorative cryptocurrency/terminal symbols positioned
+         around the landing page through CSS animations.
+    ========================================================== -->
+
     <div class="physics-tokens" aria-hidden="true">
         <span class="physics-token token-btc">₿</span>
         <span class="physics-token token-eth">◆</span>
@@ -54,19 +91,28 @@
         <span class="physics-token token-node">+</span>
     </div>
 
-    <div class="floating-object floating-cube" aria-hidden="true"></div>
-    <div class="floating-object floating-ring" aria-hidden="true"></div>
-    <div class="floating-object floating-sphere" aria-hidden="true"></div>
+
+    <!-- =========================================================
+         METEOR CANVAS
+         Canvas used by the frontend JavaScript to render the
+         animated meteor/background visual effect.
+    ========================================================== -->
+
+    <canvas id="meteor-canvas" aria-hidden="true"></canvas>
 
 
     <!-- =========================================================
          NAVIGATION
+         Primary navigation bar containing the brand identity,
+         system status indicator, and authentication entry point.
     ========================================================== -->
 
     <header class="landing-navbar">
 
+        <!-- Brand / Home Link -->
+
         <a
-            href="{{ url_for('home') }}"
+            href="/"
             class="brand"
             aria-label="CryptoRisk AI home"
         >
@@ -82,6 +128,8 @@
         </a>
 
 
+        <!-- Live Intelligence Status -->
+
         <div class="landing-nav-status">
 
             <span class="status-dot"></span>
@@ -92,6 +140,8 @@
 
         </div>
 
+
+        <!-- Google Authentication Entry Point -->
 
         <a
             href="{{ url_for('google_login') }}"
@@ -106,6 +156,8 @@
 
     <!-- =========================================================
          HERO
+         Main landing-page section responsible for communicating
+         the product's value proposition and primary actions.
     ========================================================== -->
 
     <main>
@@ -113,6 +165,8 @@
         <section class="hero-section">
 
             <div class="hero-content">
+
+                <!-- Hero Product Identifier -->
 
                 <div class="hero-eyebrow">
 
@@ -123,6 +177,8 @@
                 </div>
 
 
+                <!-- Primary Product Headline -->
+
                 <h1 class="hero-title">
 
                     Know the risk
@@ -130,6 +186,8 @@
 
                 </h1>
 
+
+                <!-- Product Value Proposition -->
 
                 <p class="hero-description">
 
@@ -141,7 +199,15 @@
                 </p>
 
 
+                <!-- =================================================
+                     HERO ACTIONS
+                     Primary action sends the user into authentication.
+                     Secondary action scrolls to the intelligence layer.
+                ================================================== -->
+
                 <div class="hero-actions">
+
+                    <!-- Primary Product Entry -->
 
                     <a
                         href="{{ url_for('google_login') }}"
@@ -167,6 +233,8 @@
                     </a>
 
 
+                    <!-- Secondary Section Navigation -->
+
                     <a
                         href="#intelligence"
                         class="hero-secondary-button"
@@ -177,6 +245,8 @@
 
                 </div>
 
+
+                <!-- Product Capability / Trust Indicators -->
 
                 <div class="hero-trust-row">
 
@@ -206,6 +276,8 @@
 
             <!-- =================================================
                  TERMINAL PREVIEW
+                 Visual representation of the CryptoRisk AI
+                 analysis environment shown beside the hero copy.
             ================================================== -->
 
             <div class="hero-visual">
@@ -213,6 +285,9 @@
                 <div class="terminal-glow"></div>
 
                 <div class="hero-terminal">
+
+
+                    <!-- Terminal Window Header -->
 
                     <div class="terminal-topbar">
 
@@ -233,7 +308,12 @@
                     </div>
 
 
+                    <!-- Terminal Content Area -->
+
                     <div class="terminal-body">
+
+
+                        <!-- Simulated Analysis Command -->
 
                         <div class="terminal-command">
 
@@ -248,8 +328,12 @@
                         </div>
 
 
+                        <!-- Terminal Section Separator -->
+
                         <div class="terminal-line"></div>
 
+
+                        <!-- Live Market Data Status -->
 
                         <div class="terminal-live-row">
 
@@ -263,6 +347,8 @@
 
                         </div>
 
+
+                        <!-- High-Level Asset Metrics -->
 
                         <div class="terminal-metrics">
 
@@ -307,6 +393,8 @@
                         </div>
 
 
+                        <!-- Evidence Synthesis Preview -->
+
                         <div class="terminal-analysis">
 
                             <div class="analysis-heading">
@@ -329,6 +417,8 @@
 
                         </div>
 
+
+                        <!-- Quantitative Risk Signal Visualization -->
 
                         <div class="terminal-bars">
 
@@ -387,6 +477,8 @@
                     </div>
 
 
+                    <!-- Terminal Engine Status -->
+
                     <div class="terminal-floating-label">
 
                         <span class="status-dot"></span>
@@ -404,12 +496,17 @@
 
         <!-- =====================================================
              INTELLIGENCE LAYER
+             Explains the core architecture behind CryptoRisk AI:
+             market intelligence, quantitative modeling, and
+             evidence-based AI synthesis.
         ====================================================== -->
 
         <section
             id="intelligence"
             class="landing-section intelligence-section"
         >
+
+            <!-- Intelligence Section Introduction -->
 
             <div class="section-heading-centered">
 
@@ -430,7 +527,12 @@
             </div>
 
 
+            <!-- Intelligence Capability Cards -->
+
             <div class="feature-grid">
+
+
+                <!-- Feature 01: Live Market Intelligence -->
 
                 <article class="feature-card">
 
@@ -460,6 +562,8 @@
                 </article>
 
 
+                <!-- Feature 02: Quantitative Risk Engine -->
+
                 <article class="feature-card feature-card-highlight">
 
                     <div class="feature-number">
@@ -488,6 +592,8 @@
 
                 </article>
 
+
+                <!-- Feature 03: AI Evidence Synthesis -->
 
                 <article class="feature-card">
 
@@ -522,10 +628,14 @@
 
 
         <!-- =====================================================
-             PIPELINE
+             INTELLIGENCE PIPELINE
+             Visualizes the three-stage flow used to transform
+             raw market information into structured intelligence.
         ====================================================== -->
 
         <section class="process-section">
+
+            <!-- Pipeline Header -->
 
             <div class="process-header">
 
@@ -543,6 +653,8 @@
                 </div>
 
 
+                <!-- Pipeline Philosophy / Status -->
+
                 <div class="process-badge">
 
                     <span class="status-dot"></span>
@@ -554,7 +666,12 @@
             </div>
 
 
+            <!-- Pipeline Stages -->
+
             <div class="process-grid">
+
+
+                <!-- Pipeline Stage 01: Market Data -->
 
                 <div class="process-step">
 
@@ -582,8 +699,12 @@
                 </div>
 
 
+                <!-- Visual Connector -->
+
                 <div class="process-connector"></div>
 
+
+                <!-- Pipeline Stage 02: Quantitative Modeling -->
 
                 <div class="process-step">
 
@@ -611,8 +732,12 @@
                 </div>
 
 
+                <!-- Visual Connector -->
+
                 <div class="process-connector"></div>
 
+
+                <!-- Pipeline Stage 03: AI Synthesis -->
 
                 <div class="process-step">
 
@@ -645,7 +770,9 @@
 
 
         <!-- =====================================================
-             DIFFERENTIATOR
+             DIFFERENTIATOR / FINAL CTA
+             Reinforces the core product philosophy and provides
+             another entry point into the CryptoRisk AI terminal.
         ====================================================== -->
 
         <section class="final-cta">
@@ -668,6 +795,8 @@
                     what the numbers actually mean.
                 </p>
 
+
+                <!-- Final Product Entry Point -->
 
                 <a
                     href="{{ url_for('google_login') }}"
@@ -696,14 +825,38 @@
 
         </section>
 
+
+        <!-- =========================================================
+             LIVE TICKER TAPE
+             Displays a visual market snapshot at the bottom of the
+             landing page.
+        ========================================================== -->
+
+        <div class="ticker-tape-container">
+            <div class="ticker-tape">
+                <span class="ticker-item"><span class="ticker-symbol">BTC</span> <span class="ticker-price">$67,432.18</span> <span class="ticker-change positive">+2.34%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">ETH</span> <span class="ticker-price">$3,521.47</span> <span class="ticker-change positive">+1.87%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">SOL</span> <span class="ticker-price">$178.92</span> <span class="ticker-change negative">-0.43%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">BNB</span> <span class="ticker-price">$612.30</span> <span class="ticker-change positive">+0.92%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">XRP</span> <span class="ticker-price">$0.6234</span> <span class="ticker-change positive">+3.21%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">ADA</span> <span class="ticker-price">$0.4512</span> <span class="ticker-change negative">-1.12%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">DOGE</span> <span class="ticker-price">$0.1547</span> <span class="ticker-change positive">+5.67%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">AVAX</span> <span class="ticker-price">$38.92</span> <span class="ticker-change positive">+2.01%</span></span>
+            </div>
+        </div>
+
     </main>
 
 
     <!-- =========================================================
          FOOTER
+         Contains the product identity, positioning statement,
+         and educational-use disclaimer.
     ========================================================== -->
 
     <footer class="landing-footer">
+
+        <!-- Footer Brand -->
 
         <div class="footer-brand">
 
@@ -717,9 +870,13 @@
 
         </div>
 
+        <!-- Product Positioning -->
+
         <span>
             Evidence-driven cryptocurrency risk intelligence.
         </span>
+
+        <!-- Usage Disclaimer -->
 
         <span>
             Educational use only.
@@ -730,6 +887,11 @@
 
     <!-- =========================================================
          FLASH MESSAGES
+         Server-side Flask messages are rendered here when
+         available.
+         
+         get_flashed_messages() retrieves messages created by
+         Flask's flash() mechanism, including their categories.
     ========================================================== -->
 
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -757,6 +919,15 @@
 
     {% endwith %}
 
+
+    <!-- =========================================================
+         FRONTEND JAVASCRIPT
+         Loads the landing-page JavaScript responsible for
+         client-side interactions and visual behavior.
+         
+         Flask's url_for() resolves the script from the static
+         directory.
+    ========================================================== -->
 
     <script
         src="{{ url_for('static', filename='script.js') }}"
