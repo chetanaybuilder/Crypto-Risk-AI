@@ -1,108 +1,117 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <!-- ============================================================
-         CryptoRisk AI — Landing Page
-         ============================================================
-         Public-facing landing page for the CryptoRisk AI platform.
-         Features hero section, feature highlights, and CTA.
 
-         External Dependencies:
-           - Google Fonts (Inter, Space Grotesk, JetBrains Mono, Fira Code)
-           - style.css (main stylesheet)
-           - script.js (page interactions)
-         ============================================================ -->
+    <!-- =========================================================
+         DOCUMENT HEAD
+         Defines page metadata, responsive behavior, SEO details,
+         browser title, external fonts, and application styling.
+    ========================================================== -->
 
     <meta charset="UTF-8">
 
-    <!-- Viewport for responsive design -->
     <meta
         name="viewport"
         content="width=device-width, initial-scale=1.0"
     >
 
-    <!-- SEO meta tags -->
     <meta
         name="description"
-        content="CryptoRisk AI — Evidence-first cryptocurrency risk intelligence."
-    >
-    <meta
-        name="theme-color"
-        content="#070a10"
+        content="CryptoRisk AI — Evidence-driven cryptocurrency risk intelligence."
     >
 
-    <title>CryptoRisk AI — Intelligence Before The Noise</title>
+    <title>CryptoRisk AI — Risk Intelligence Terminal</title>
 
-    <!-- Preconnect to Google Fonts for performance -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 
-    <!-- Google Fonts: Inter, Space Grotesk, JetBrains Mono, Fira Code -->
+    <!-- =========================================================
+         TYPOGRAPHY
+         Preconnects to Google Fonts and loads the font families
+         used throughout the CryptoRisk AI interface.
+    ========================================================== -->
+
+    <link
+        rel="preconnect"
+        href="https://fonts.googleapis.com"
+    >
+
+    <link
+        rel="preconnect"
+        href="https://fonts.gstatic.com"
+        crossorigin
+    >
+
     <link
         href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
         rel="stylesheet"
     >
 
-    <!-- Main stylesheet -->
-    <link rel="stylesheet" href="style.css">
+
+    <!-- =========================================================
+         APPLICATION STYLES
+         Static frontend stylesheet.
+    ========================================================== -->
+
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
 </head>
 
 <body class="landing-page">
 
-    <!-- =====================================================
-         AMBIENT ENVIRONMENT
-    ====================================================== -->
+    <!-- =========================================================
+         AMBIENT BACKGROUND
+         Decorative visual layers used to create the terminal/
+         intelligence aesthetic of the landing page.
+         
+         aria-hidden="true" prevents decorative elements from
+         being interpreted as meaningful content by screen readers.
+    ========================================================== -->
 
-    <div
-        class="ambient-canvas"
-        aria-hidden="true"
-    ></div>
+    <div class="ambient-canvas" aria-hidden="true"></div>
+    <div class="landing-noise" aria-hidden="true"></div>
+    <div class="grid-background" aria-hidden="true"></div>
 
-    <div
-        class="physics-tokens"
-        aria-hidden="true"
-    >
+    <div class="bg-orb bg-orb-purple" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-cyan" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-blue" aria-hidden="true"></div>
+
+
+    <!-- =========================================================
+         FLOATING CRYPTO TOKENS
+         Decorative cryptocurrency/terminal symbols positioned
+         around the landing page through CSS animations.
+    ========================================================== -->
+
+    <div class="physics-tokens" aria-hidden="true">
         <span class="physics-token token-btc">₿</span>
         <span class="physics-token token-eth">◆</span>
         <span class="physics-token token-sol">S</span>
         <span class="physics-token token-node">+</span>
     </div>
 
-    <div
-        class="landing-noise"
-        aria-hidden="true"
-    ></div>
 
-    <div
-        class="bg-orb bg-orb-purple"
-        aria-hidden="true"
-    ></div>
-
-    <div
-        class="bg-orb bg-orb-cyan"
-        aria-hidden="true"
-    ></div>
-
-    <div
-        class="bg-orb bg-orb-blue"
-        aria-hidden="true"
-    ></div>
-
-    <div
-        class="grid-background"
-        aria-hidden="true"
-    ></div>
+    <!-- =========================================================
+         METEOR CANVAS
+         Canvas used by the frontend JavaScript to render the
+         animated meteor/background visual effect.
+    ========================================================== -->
 
     <canvas id="meteor-canvas" aria-hidden="true"></canvas>
 
-    <!-- =====================================================
+
+    <!-- =========================================================
          NAVIGATION
-    ====================================================== -->
+         Primary navigation bar containing the brand identity,
+         system status indicator, and authentication entry point.
+    ========================================================== -->
 
     <header class="landing-navbar">
 
+        <!-- Brand / Home Link -->
+
         <a
-            href="./index.html"
+            href="/"
             class="brand"
             aria-label="CryptoRisk AI home"
         >
@@ -118,43 +127,45 @@
         </a>
 
 
+        <!-- Live Intelligence Status -->
+
         <div class="landing-nav-status">
 
             <span class="status-dot"></span>
 
             <span>
-                AI RISK INTELLIGENCE
+                LIVE RISK INTELLIGENCE
             </span>
 
         </div>
 
 
+        <!-- Google Authentication Entry Point -->
+
         <a
-            href="#"
+            href="https://crypto-risk-ai-j1ag.onrender.com/api/auth/google"
             class="nav-login-button"
-            data-google-login
         >
             Sign in
-            <span aria-hidden="true">→</span>
+            <span>→</span>
         </a>
 
     </header>
 
 
-    <!-- =====================================================
-         MAIN
-    ====================================================== -->
+    <!-- =========================================================
+         HERO
+         Main landing-page section responsible for communicating
+         the product's value proposition and primary actions.
+    ========================================================== -->
 
     <main>
-
-
-        <!-- =================================================
-             HERO
-        ================================================== -->
 
         <section class="hero-section">
 
             <div class="hero-content">
+
+                <!-- Hero Product Identifier -->
 
                 <div class="hero-eyebrow">
 
@@ -165,55 +176,54 @@
                 </div>
 
 
+                <!-- Primary Product Headline -->
+
                 <h1 class="hero-title">
 
-                    Understand the risk
-
-                    <span>
-                        before the noise.
-                    </span>
+                    Know the risk
+                    <span>before you act.</span>
 
                 </h1>
 
 
+                <!-- Product Value Proposition -->
+
                 <p class="hero-description">
 
-                    Turn a cryptocurrency symbol into a
-                    structured, evidence-first risk intelligence
-                    report built from live market data,
-                    quantitative analysis and AI synthesis.
+                    CryptoRisk AI combines live market data,
+                    quantitative risk models, liquidity signals,
+                    stress testing and AI synthesis into one
+                    evidence-driven cryptocurrency intelligence terminal.
 
                 </p>
 
 
+                <!-- =================================================
+                     HERO ACTIONS
+                     Primary action sends the user into authentication.
+                     Secondary action scrolls to the intelligence layer.
+                ================================================== -->
+
                 <div class="hero-actions">
 
+                    <!-- Primary Product Entry -->
+
                     <a
-                        href="#"
+                        href="https://crypto-risk-ai-j1ag.onrender.com/api/auth/google"
                         class="hero-primary-button"
-                        data-google-login
                     >
 
-                        <span
-                            class="button-glow"
-                            aria-hidden="true"
-                        ></span>
+                        <span class="button-glow"></span>
 
                         <span class="button-content">
 
-                            <span
-                                class="button-icon"
-                                aria-hidden="true"
-                            >
+                            <span class="button-icon">
                                 ◈
                             </span>
 
                             Start analyzing
 
-                            <span
-                                class="button-arrow"
-                                aria-hidden="true"
-                            >
+                            <span class="button-arrow">
                                 →
                             </span>
 
@@ -222,76 +232,40 @@
                     </a>
 
 
+                    <!-- Secondary Section Navigation -->
+
                     <a
                         href="#intelligence"
                         class="hero-secondary-button"
                     >
                         Explore intelligence
-                        <span aria-hidden="true">↓</span>
+                        <span>↓</span>
                     </a>
 
                 </div>
 
 
+                <!-- Product Capability / Trust Indicators -->
+
                 <div class="hero-trust-row">
 
                     <div class="trust-item">
-
-                        <span
-                            class="trust-icon"
-                            aria-hidden="true"
-                        >
-                            ✦
-                        </span>
-
-                        <span>
-                            Evidence-first analysis
-                        </span>
-
+                        <span class="trust-icon">◉</span>
+                        <span>Live market intelligence</span>
                     </div>
 
-
-                    <div
-                        class="trust-divider"
-                        aria-hidden="true"
-                    ></div>
-
+                    <div class="trust-divider"></div>
 
                     <div class="trust-item">
-
-                        <span
-                            class="trust-icon"
-                            aria-hidden="true"
-                        >
-                            ◉
-                        </span>
-
-                        <span>
-                            Persistent intelligence history
-                        </span>
-
+                        <span class="trust-icon">✦</span>
+                        <span>Quantitative risk engine</span>
                     </div>
 
-
-                    <div
-                        class="trust-divider"
-                        aria-hidden="true"
-                    ></div>
-
+                    <div class="trust-divider"></div>
 
                     <div class="trust-item">
-
-                        <span
-                            class="trust-icon"
-                            aria-hidden="true"
-                        >
-                            ◇
-                        </span>
-
-                        <span>
-                            Quantitative risk engine
-                        </span>
-
+                        <span class="trust-icon">◇</span>
+                        <span>Evidence-backed AI</span>
                     </div>
 
                 </div>
@@ -301,17 +275,18 @@
 
             <!-- =================================================
                  TERMINAL PREVIEW
+                 Visual representation of the CryptoRisk AI
+                 analysis environment shown beside the hero copy.
             ================================================== -->
 
             <div class="hero-visual">
 
-                <div
-                    class="terminal-glow"
-                    aria-hidden="true"
-                ></div>
-
+                <div class="terminal-glow"></div>
 
                 <div class="hero-terminal">
+
+
+                    <!-- Terminal Window Header -->
 
                     <div class="terminal-topbar">
 
@@ -322,20 +297,22 @@
                         </div>
 
                         <span>
-                            CRYPTORISK / TERMINAL
+                            CRYPTORISK / LIVE TERMINAL
                         </span>
 
-                        <span
-                            class="terminal-lock"
-                            aria-hidden="true"
-                        >
+                        <span class="terminal-lock">
                             ◈
                         </span>
 
                     </div>
 
 
+                    <!-- Terminal Content Area -->
+
                     <div class="terminal-body">
+
+
+                        <!-- Simulated Analysis Command -->
 
                         <div class="terminal-command">
 
@@ -345,19 +322,32 @@
 
                             analyze BTC
 
-                            <span
-                                class="terminal-cursor"
-                                aria-hidden="true"
-                            ></span>
+                            <span class="terminal-cursor"></span>
 
                         </div>
 
 
-                        <div
-                            class="terminal-line"
-                            aria-hidden="true"
-                        ></div>
+                        <!-- Terminal Section Separator -->
 
+                        <div class="terminal-line"></div>
+
+
+                        <!-- Live Market Data Status -->
+
+                        <div class="terminal-live-row">
+
+                            <span class="status-dot"></span>
+
+                            LIVE MARKET DATA
+
+                            <span>
+                                ●
+                            </span>
+
+                        </div>
+
+
+                        <!-- High-Level Asset Metrics -->
 
                         <div class="terminal-metrics">
 
@@ -377,11 +367,11 @@
                             <div class="terminal-metric">
 
                                 <span>
-                                    RISK
+                                    PRICE
                                 </span>
 
-                                <strong class="metric-high">
-                                    HIGH
+                                <strong>
+                                    LIVE
                                 </strong>
 
                             </div>
@@ -390,11 +380,11 @@
                             <div class="terminal-metric">
 
                                 <span>
-                                    OUTLOOK
+                                    RISK
                                 </span>
 
-                                <strong>
-                                    NEUTRAL
+                                <strong class="metric-high">
+                                    MODEL
                                 </strong>
 
                             </div>
@@ -402,54 +392,47 @@
                         </div>
 
 
+                        <!-- Evidence Synthesis Preview -->
+
                         <div class="terminal-analysis">
 
                             <div class="analysis-heading">
 
-                                <span
-                                    class="analysis-symbol"
-                                    aria-hidden="true"
-                                >
+                                <span class="analysis-symbol">
                                     ✦
                                 </span>
 
                                 <span>
-                                    EXECUTIVE INTELLIGENCE
+                                    EVIDENCE SYNTHESIS
                                 </span>
 
                             </div>
 
-
                             <p>
-                                A structured risk view combining
-                                market conditions, quantitative
-                                signals, stress scenarios and
-                                evidence-backed AI interpretation.
+                                Market structure, volatility,
+                                liquidity and downside exposure
+                                are evaluated before AI synthesis.
                             </p>
 
                         </div>
 
 
-                        <!--
-                            VISUAL PRODUCT PREVIEW ONLY.
-                            These are illustrative values,
-                            not live BTC measurements.
-                        -->
+                        <!-- Quantitative Risk Signal Visualization -->
 
                         <div class="terminal-bars">
 
                             <div class="terminal-bar-row">
 
                                 <span>
-                                    Market volatility
+                                    Volatility
                                 </span>
 
                                 <div class="terminal-bar">
-                                    <span style="width: 82%"></span>
+                                    <span style="width:72%"></span>
                                 </div>
 
                                 <b>
-                                    82
+                                    —
                                 </b>
 
                             </div>
@@ -458,15 +441,15 @@
                             <div class="terminal-bar-row">
 
                                 <span>
-                                    Liquidity risk
+                                    Liquidity
                                 </span>
 
                                 <div class="terminal-bar">
-                                    <span style="width: 64%"></span>
+                                    <span style="width:46%"></span>
                                 </div>
 
                                 <b>
-                                    64
+                                    —
                                 </b>
 
                             </div>
@@ -475,34 +458,31 @@
                             <div class="terminal-bar-row">
 
                                 <span>
-                                    Structural risk
+                                    Stress exposure
                                 </span>
 
                                 <div class="terminal-bar">
-                                    <span style="width: 71%"></span>
+                                    <span style="width:61%"></span>
                                 </div>
 
                                 <b>
-                                    71
+                                    —
                                 </b>
 
                             </div>
 
-                        </div>
-
-
-                        <div class="terminal-preview-note">
-                            Illustrative terminal preview
                         </div>
 
                     </div>
 
 
+                    <!-- Terminal Engine Status -->
+
                     <div class="terminal-floating-label">
 
                         <span class="status-dot"></span>
 
-                        AI ENGINE READY
+                        ENGINE READY
 
                     </div>
 
@@ -513,14 +493,19 @@
         </section>
 
 
-        <!-- =================================================
-             INTELLIGENCE
-        ================================================== -->
+        <!-- =====================================================
+             INTELLIGENCE LAYER
+             Explains the core architecture behind CryptoRisk AI:
+             market intelligence, quantitative modeling, and
+             evidence-based AI synthesis.
+        ====================================================== -->
 
         <section
             id="intelligence"
             class="landing-section intelligence-section"
         >
+
+            <!-- Intelligence Section Introduction -->
 
             <div class="section-heading-centered">
 
@@ -529,22 +514,24 @@
                 </span>
 
                 <h2>
-                    Less noise.
-                    <span>More signal.</span>
+                    Not another AI wrapper.
+                    <span>Evidence first.</span>
                 </h2>
 
                 <p>
-                    CryptoRisk AI converts market data and
-                    quantitative signals into a structured
-                    risk intelligence layer designed to make
-                    uncertainty easier to understand.
+                    CryptoRisk AI calculates the underlying signals
+                    first, then uses AI to explain those signals.
                 </p>
 
             </div>
 
 
+            <!-- Intelligence Capability Cards -->
+
             <div class="feature-grid">
 
+
+                <!-- Feature 01: Live Market Intelligence -->
 
                 <article class="feature-card">
 
@@ -552,11 +539,38 @@
                         01
                     </div>
 
-                    <div
-                        class="feature-icon"
-                        aria-hidden="true"
-                    >
+                    <div class="feature-icon">
                         ◈
+                    </div>
+
+                    <span class="feature-kicker">
+                        LIVE MARKET
+                    </span>
+
+                    <h3>
+                        See what is happening now.
+                    </h3>
+
+                    <p>
+                        Monitor price, volume, market activity,
+                        changes and data freshness from live sources.
+                    </p>
+
+                    <div class="feature-line"></div>
+
+                </article>
+
+
+                <!-- Feature 02: Quantitative Risk Engine -->
+
+                <article class="feature-card feature-card-highlight">
+
+                    <div class="feature-number">
+                        02
+                    </div>
+
+                    <div class="feature-icon">
+                        ✦
                     </div>
 
                     <span class="feature-kicker">
@@ -564,59 +578,21 @@
                     </span>
 
                     <h3>
-                        See the downside clearly.
+                        Measure risk instead of guessing it.
                     </h3>
 
                     <p>
-                        Decompose risk across volatility,
-                        liquidity, market sensitivity and
-                        structural signals.
+                        Realized volatility, liquidity conditions,
+                        market sensitivity and stress exposure are
+                        calculated independently of the AI.
                     </p>
 
-                    <div
-                        class="feature-line"
-                        aria-hidden="true"
-                    ></div>
+                    <div class="feature-line"></div>
 
                 </article>
 
 
-                <article
-                    class="feature-card feature-card-highlight"
-                >
-
-                    <div class="feature-number">
-                        02
-                    </div>
-
-                    <div
-                        class="feature-icon"
-                        aria-hidden="true"
-                    >
-                        ✦
-                    </div>
-
-                    <span class="feature-kicker">
-                        EVIDENCE-BACKED AI
-                    </span>
-
-                    <h3>
-                        Turn complexity into intelligence.
-                    </h3>
-
-                    <p>
-                        Gemini interprets structured evidence
-                        instead of inventing the underlying
-                        market or risk measurements.
-                    </p>
-
-                    <div
-                        class="feature-line"
-                        aria-hidden="true"
-                    ></div>
-
-                </article>
-
+                <!-- Feature 03: AI Evidence Synthesis -->
 
                 <article class="feature-card">
 
@@ -624,31 +600,24 @@
                         03
                     </div>
 
-                    <div
-                        class="feature-icon"
-                        aria-hidden="true"
-                    >
+                    <div class="feature-icon">
                         ◌
                     </div>
 
                     <span class="feature-kicker">
-                        MONITORING
+                        AI SYNTHESIS
                     </span>
 
                     <h3>
-                        Know what deserves attention.
+                        Understand the evidence.
                     </h3>
 
                     <p>
-                        Track your previous analyses and
-                        compare the signals that matter as
-                        your intelligence history grows.
+                        Gemini interprets the calculated evidence
+                        instead of inventing prices, scores or facts.
                     </p>
 
-                    <div
-                        class="feature-line"
-                        aria-hidden="true"
-                    ></div>
+                    <div class="feature-line"></div>
 
                 </article>
 
@@ -657,41 +626,51 @@
         </section>
 
 
-        <!-- =================================================
-             PIPELINE
-        ================================================== -->
+        <!-- =====================================================
+             INTELLIGENCE PIPELINE
+             Visualizes the three-stage flow used to transform
+             raw market information into structured intelligence.
+        ====================================================== -->
 
         <section class="process-section">
+
+            <!-- Pipeline Header -->
 
             <div class="process-header">
 
                 <div>
 
                     <span class="section-kicker">
-                        EVIDENCE-FIRST PIPELINE
+                        INTELLIGENCE PIPELINE
                     </span>
 
                     <h2>
                         One symbol.
-                        <span>Deep intelligence.</span>
+                        <span>Multiple layers of evidence.</span>
                     </h2>
 
                 </div>
 
 
+                <!-- Pipeline Philosophy / Status -->
+
                 <div class="process-badge">
 
                     <span class="status-dot"></span>
 
-                    4 STAGE ENGINE
+                    EVIDENCE FIRST
 
                 </div>
 
             </div>
 
 
+            <!-- Pipeline Stages -->
+
             <div class="process-grid">
 
+
+                <!-- Pipeline Stage 01: Market Data -->
 
                 <div class="process-step">
 
@@ -706,13 +685,12 @@
                         </span>
 
                         <h3>
-                            Collect live evidence
+                            Collect live data
                         </h3>
 
                         <p>
-                            Market data and available asset
-                            signals are collected and normalized
-                            before analysis begins.
+                            Price, volume, market capitalization,
+                            historical movement and market signals.
                         </p>
 
                     </div>
@@ -720,11 +698,12 @@
                 </div>
 
 
-                <div
-                    class="process-connector"
-                    aria-hidden="true"
-                ></div>
+                <!-- Visual Connector -->
 
+                <div class="process-connector"></div>
+
+
+                <!-- Pipeline Stage 02: Quantitative Modeling -->
 
                 <div class="process-step">
 
@@ -735,17 +714,16 @@
                     <div class="process-step-content">
 
                         <span>
-                            QUANT
+                            MODEL
                         </span>
 
                         <h3>
-                            Measure the risk
+                            Calculate exposure
                         </h3>
 
                         <p>
-                            The quantitative engine calculates
-                            volatility, liquidity, sensitivity,
-                            structural signals and composite risk.
+                            Quantitative engines calculate volatility,
+                            liquidity, beta and downside scenarios.
                         </p>
 
                     </div>
@@ -753,11 +731,12 @@
                 </div>
 
 
-                <div
-                    class="process-connector"
-                    aria-hidden="true"
-                ></div>
+                <!-- Visual Connector -->
 
+                <div class="process-connector"></div>
+
+
+                <!-- Pipeline Stage 03: AI Synthesis -->
 
                 <div class="process-step">
 
@@ -768,50 +747,16 @@
                     <div class="process-step-content">
 
                         <span>
-                            STRESS
-                        </span>
-
-                        <h3>
-                            Simulate downside
-                        </h3>
-
-                        <p>
-                            Market-shock scenarios estimate how
-                            the asset may respond under defined
-                            adverse conditions.
-                        </p>
-
-                    </div>
-
-                </div>
-
-
-                <div
-                    class="process-connector"
-                    aria-hidden="true"
-                ></div>
-
-
-                <div class="process-step">
-
-                    <div class="process-step-number">
-                        04
-                    </div>
-
-                    <div class="process-step-content">
-
-                        <span>
                             SYNTHESIS
                         </span>
 
                         <h3>
-                            Generate intelligence
+                            Explain the evidence
                         </h3>
 
                         <p>
-                            AI interprets the evidence and
-                            produces a structured report with
-                            confidence and key signals.
+                            AI converts the measured evidence into
+                            structured, decision-relevant intelligence.
                         </p>
 
                     </div>
@@ -823,17 +768,15 @@
         </section>
 
 
-        <!-- =================================================
-             FINAL CTA
-        ================================================== -->
+        <!-- =====================================================
+             DIFFERENTIATOR / FINAL CTA
+             Reinforces the core product philosophy and provides
+             another entry point into the CryptoRisk AI terminal.
+        ====================================================== -->
 
         <section class="final-cta">
 
-            <div
-                class="final-cta-glow"
-                aria-hidden="true"
-            ></div>
-
+            <div class="final-cta-glow"></div>
 
             <div class="final-cta-content">
 
@@ -842,43 +785,34 @@
                 </span>
 
                 <h2>
-                    Stop chasing the noise.
-                    <span>Understand the risk.</span>
+                    Don't ask AI
+                    <span>what it thinks.</span>
                 </h2>
 
                 <p>
-                    Enter the intelligence terminal and
-                    generate your first cryptocurrency
-                    risk intelligence report.
+                    Give AI the evidence and let it explain
+                    what the numbers actually mean.
                 </p>
 
 
+                <!-- Final Product Entry Point -->
+
                 <a
-                    href="#"
+                    href="https://crypto-risk-ai-j1ag.onrender.com/api/auth/google"
                     class="hero-primary-button final-button"
-                    data-google-login
                 >
 
-                    <span
-                        class="button-glow"
-                        aria-hidden="true"
-                    ></span>
+                    <span class="button-glow"></span>
 
                     <span class="button-content">
 
-                        <span
-                            class="button-icon"
-                            aria-hidden="true"
-                        >
+                        <span class="button-icon">
                             ◈
                         </span>
 
                         Enter CryptoRisk AI
 
-                        <span
-                            class="button-arrow"
-                            aria-hidden="true"
-                        >
+                        <span class="button-arrow">
                             →
                         </span>
 
@@ -890,14 +824,38 @@
 
         </section>
 
+
+        <!-- =========================================================
+             LIVE TICKER TAPE
+             Displays a visual market snapshot at the bottom of the
+             landing page.
+        ========================================================== -->
+
+        <div class="ticker-tape-container">
+            <div class="ticker-tape">
+                <span class="ticker-item"><span class="ticker-symbol">BTC</span> <span class="ticker-price">$67,432.18</span> <span class="ticker-change positive">+2.34%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">ETH</span> <span class="ticker-price">$3,521.47</span> <span class="ticker-change positive">+1.87%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">SOL</span> <span class="ticker-price">$178.92</span> <span class="ticker-change negative">-0.43%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">BNB</span> <span class="ticker-price">$612.30</span> <span class="ticker-change positive">+0.92%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">XRP</span> <span class="ticker-price">$0.6234</span> <span class="ticker-change positive">+3.21%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">ADA</span> <span class="ticker-price">$0.4512</span> <span class="ticker-change negative">-1.12%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">DOGE</span> <span class="ticker-price">$0.1547</span> <span class="ticker-change positive">+5.67%</span></span>
+                <span class="ticker-item"><span class="ticker-symbol">AVAX</span> <span class="ticker-price">$38.92</span> <span class="ticker-change positive">+2.01%</span></span>
+            </div>
+        </div>
+
     </main>
 
 
-    <!-- =====================================================
+    <!-- =========================================================
          FOOTER
-    ====================================================== -->
+         Contains the product identity, positioning statement,
+         and educational-use disclaimer.
+    ========================================================== -->
 
     <footer class="landing-footer">
+
+        <!-- Footer Brand -->
 
         <div class="footer-brand">
 
@@ -911,9 +869,13 @@
 
         </div>
 
+        <!-- Product Positioning -->
+
         <span>
-            Evidence-first cryptocurrency risk intelligence.
+            Evidence-driven cryptocurrency risk intelligence.
         </span>
+
+        <!-- Usage Disclaimer -->
 
         <span>
             Educational use only.
@@ -922,12 +884,15 @@
     </footer>
 
 
-    <!-- =====================================================
-         FRONTEND ASSETS
-    ====================================================== -->
+    <!-- =========================================================
+         FRONTEND JAVASCRIPT
+         Loads the landing-page JavaScript responsible for
+         client-side interactions and visual behavior.
+    ========================================================== -->
 
-    <script src="config.js"></script>
-    <script src="script.js"></script>
+    <script
+        src="script.js"
+    ></script>
 
 </body>
 </html>
