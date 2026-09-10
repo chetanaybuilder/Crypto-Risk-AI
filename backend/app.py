@@ -520,6 +520,75 @@ BINANCE_API_URL = (
     "https://api.binance.com/api/v3"
 )
 
+# CoinCap — Alternative market data provider (price, volume, mcap)
+# Requires a free API key at https://coincap.io for full access.
+# Without a key the provider is auto-skipped in the chain.
+COINCAP_API_URL = (
+    "https://api.coincap.io/v2"
+)
+
+# Kraken — Public exchange API (no key required)
+KRAKEN_API_URL = (
+    "https://api.kraken.com/0"
+)
+
+# Coinbase Pro/Exchange — Public API (no key required)
+# Returns 24h OHLCV stats that are reliably accessible from Render.
+COINBASE_API_URL = (
+    "https://api.exchange.coinbase.com"
+)
+
+# Optional API keys — increase rate limits when configured.
+COINCAP_API_KEY = (
+    os.getenv(
+        "COINCAP_API_KEY",
+        "",
+    ).strip()
+)
+
+COINGECKO_API_KEY = (
+    os.getenv(
+        "COINGECKO_API_KEY",
+        "",
+    ).strip()
+)
+
+# Provider cooldown durations (seconds).
+# 429 (rate-limit) gets the longest cooldown so the backend
+# backs off and lets the rate limit window reset before retrying.
+PROVIDER_COOLDOWN_429 = max(
+    10,
+    int(
+        os.getenv(
+            "PROVIDER_COOLDOWN_429",
+            "30",
+        )
+    ),
+)
+
+# 403 / 451 (auth / geo-block) cooldown — these are unlikely
+# to resolve quickly, so skip the provider for a while.
+PROVIDER_COOLDOWN_FORBIDDEN = max(
+    10,
+    int(
+        os.getenv(
+            "PROVIDER_COOLDOWN_FORBIDDEN",
+            "60",
+        )
+    ),
+)
+
+# Generic / 5xx cooldown — short, providers may recover quickly.
+PROVIDER_COOLDOWN_DEFAULT = max(
+    5,
+    int(
+        os.getenv(
+            "PROVIDER_COOLDOWN_DEFAULT",
+            "15",
+        )
+    ),
+)
+
 # GoPlus — Token security and contract risk data
 GOPLUS_API_URL = (
     "https://api.gopluslabs.io/api/v1/token_security"
@@ -552,9 +621,98 @@ TOKEN_MAP = {
     "UNI": "uniswap",
     "XLM": "stellar",
     "TRX": "tron",
+        "SHIB": "shiba-inu",
+}
+
+
+# ============================================================
+# COINCAP SLUG MAP
+# ============================================================
+# Maps user-input symbols to CoinCap v2 asset slugs.
+# Used by fetch_coincap_market() as a fallback provider.
+# ============================================================
+
+COINCAP_ID_MAP = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "BNB": "binance-coin",
+    "XRP": "ripple",
+    "ADA": "cardano",
+    "DOGE": "dogecoin",
+    "AVAX": "avalanche",
+    "DOT": "polkadot",
+    "MATIC": "polygon",
+    "POL": "polygon",
+    "LINK": "chainlink",
+    "LTC": "litecoin",
+    "BCH": "bitcoin-cash",
+    "ATOM": "cosmos",
+    "UNI": "uniswap",
+    "XLM": "stellar",
+    "TRX": "tron",
     "SHIB": "shiba-inu",
 }
 
+
+# ============================================================
+# COINBASE PRODUCT PAIR MAP
+# ============================================================
+# Maps symbols to Coinbase Exchange product IDs (e.g. BTC-USD).
+# Used by fetch_coinbase_market() — a no-key provider that
+# is reliably accessible from Render.
+# ============================================================
+
+COINBASE_PAIR_MAP = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+    "SOL": "SOL-USD",
+    "BNB": "BNB-USD",
+    "XRP": "XRP-USD",
+    "ADA": "ADA-USD",
+    "DOGE": "DOGE-USD",
+    "AVAX": "AVAX-USD",
+    "DOT": "DOT-USD",
+    "MATIC": "MATIC-USD",
+    "POL": "POL-USD",
+    "LINK": "LINK-USD",
+    "LTC": "LTC-USD",
+    "BCH": "BCH-USD",
+    "ATOM": "ATOM-USD",
+    "UNI": "UNI-USD",
+    "XLM": "XLM-USD",
+    "TRX": "TRX-USD",
+    "SHIB": "SHIB-USD",
+}
+
+
+# ============================================================
+# KRAKEN PAIR MAP
+# ============================================================
+# Maps symbols to Kraken pairs for the public Ticker endpoint.
+# ============================================================
+
+KRAKEN_PAIR_MAP = {
+    "BTC": "XBTUSD",
+    "ETH": "ETHUSD",
+    "SOL": "SOLUSD",
+    "BNB": "BNBUSDT",
+    "XRP": "XRPUSD",
+    "ADA": "ADAUSD",
+    "DOGE": "DOGEUSD",
+    "AVAX": "AVAXUSD",
+    "DOT": "DOTUSD",
+    "MATIC": "POLUSD",
+    "POL": "POLUSD",
+    "LINK": "LINKUSD",
+    "LTC": "LTCUSD",
+    "BCH": "BCHUSD",
+    "ATOM": "ATOMUSD",
+    "UNI": "UNIUSD",
+    "XLM": "XLMUSD",
+    "TRX": "TRXUSD",
+    "SHIB": "SHIBUSD",
+}
 
 
 # Native blockchain assets (not ERC-20 tokens)
@@ -588,6 +746,120 @@ _history_cache = {}
 _coin_resolution_cache = {}
 
 _cache_lock = Lock()
+
+
+# ============================================================
+# PROVIDER COOLDOWN + IN-FLIGHT DEDUPLICATION
+# ============================================================
+# When a provider returns 429/403/451/5xx it is placed on a
+# cooldown so subsequent requests skip it immediately and fall
+# through to the next provider.
+#
+# Per-symbol fetch locks prevent concurrent requests for the
+# same symbol from triggering duplicate upstream calls.
+# ============================================================
+
+_provider_cooldown = {}
+_provider_cooldown_lock = Lock()
+
+_symbol_fetch_locks = {}
+_symbol_fetch_locks_guard = Lock()
+
+
+def _provider_is_cooling(
+    name: str,
+) -> bool:
+    """Return True if *name* is currently on cooldown."""
+    with _provider_cooldown_lock:
+        entry = _provider_cooldown.get(
+            name
+        )
+        if (
+            entry
+            and isinstance(
+                entry,
+                dict,
+            )
+            and time.time() < entry.get(
+                "until",
+                0
+            )
+        ):
+            logger.info(
+                "[MARKET] %s on cooldown (%s), skipping",
+                name,
+                entry.get(
+                    "reason",
+                    "cooldown",
+                ),
+            )
+            return True
+        return False
+
+
+def _mark_provider_failure(
+    name: str,
+    status_code,
+    reason: str,
+) -> None:
+    """Record a provider failure and start its cooldown."""
+    if status_code == 429:
+        seconds = PROVIDER_COOLDOWN_429
+    elif status_code in (
+        403,
+        451,
+    ):
+        seconds = PROVIDER_COOLDOWN_FORBIDDEN
+    elif (
+        status_code is not None
+        and status_code >= 500
+    ):
+        seconds = PROVIDER_COOLDOWN_DEFAULT
+    else:
+        seconds = PROVIDER_COOLDOWN_DEFAULT
+
+    with _provider_cooldown_lock:
+        _provider_cooldown[name] = {
+            "until": time.time() + seconds,
+            "reason": reason,
+        }
+
+    logger.warning(
+        "[MARKET] %s marked on cooldown for %ds (%s)",
+        name,
+        seconds,
+        reason,
+    )
+
+
+def _clear_provider_success(
+    name: str,
+) -> None:
+    """Clear a provider's cooldown after a successful fetch."""
+    with _provider_cooldown_lock:
+        if name in _provider_cooldown:
+            logger.info(
+                "[MARKET] %s recovered, clearing cooldown",
+                name,
+            )
+            _provider_cooldown.pop(
+                name,
+                None,
+            )
+
+
+def _get_symbol_fetch_lock(
+    symbol: str,
+) -> Lock:
+    """Return (creating if necessary) the per-symbol dedup lock."""
+    with _symbol_fetch_locks_guard:
+        lock = _symbol_fetch_locks.get(
+            symbol
+        )
+        if lock is None:
+            lock = Lock()
+            _symbol_fetch_locks[symbol] = lock
+        return lock
 
 
 # ============================================================
