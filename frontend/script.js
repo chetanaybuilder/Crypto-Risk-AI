@@ -3,35 +3,29 @@
 /*
  * ============================================================
  * CryptoRisk AI — Dashboard Controller
- *
  * Backend Report Schema: 3.0
+ *
  * Backend is the single source of truth.
  *
- * Gothic Halloween Wealth Edition Features:
- * - Cursor-repulsion physics for floating tokens
- * - Dollar-sign analysis beam animation
- * - Fire hover effects on interactive elements
- * - Particle effects for wealth burst
- *
- * FIX LOG:
- *  - Removed a fully duplicated `MoneyMeteor` object literal.
- *    The second copy had its methods pasted outside any
- *    object/class body (bare `foo() {...}` statements and
- *    stray `const startX = ...` lines at top level), which is
- *    a hard SyntaxError in JS — the whole file failed to parse.
- *  - Consolidated two conflicting `spawnMeteor()` variants
- *    (one used short keys like `sSize`/`isB`/`cCore`, the other
- *    used long keys like `symbolSize`/`isBitcoin`/`colorCore`).
- *    Kept the short-key version since drawTrail/drawCore/updM
- *    all read those keys.
- *  - Added `AnalysisBeam.renderParticles()` — called every
- *    frame from `startParticleLoop()` but never defined.
- *  - Added `AnalysisBeam.triggerWealthBurst()` — called from
- *    `animateProgress()` but never defined.
- *  - Removed a dead duplicate `setText("#stress-beta", ...)`
- *    call in `renderStressTest()`.
+ * FIXES:
+ *  - Robust nested API/report response extraction
+ *  - Robust /api/market response extraction
+ *  - CoinGecko source normalization
+ *  - Live status only shown after successful market response
+ *  - Live polling race protection
+ *  - No duplicate polling intervals
+ *  - Better HTTP/network error messages
+ *  - Correct progress completion stage
+ *  - Prevent stale risk-pillar values
+ *  - Supports multiple timestamp fields
+ *  - Correct Bitcoin symbol ₿
+ *  - Safer report detection
+ *  - Clears unavailable market values instead of leaving stale data
+ *  - Better auth/session handling
+ *  - Safer AnalysisBeam lifecycle
  * ============================================================
  */
+
 
 /* ============================================================
    CURSOR-REPULSION PHYSICS ENGINE
@@ -44,45 +38,76 @@ const CursorPhysics = {
     targetY: 0,
     tokens: [],
     isActive: false,
+    animationId: null,
 
     init() {
-        this.tokens = document.querySelectorAll('.physics-token');
-        if (this.tokens.length === 0) return;
+        this.tokens = document.querySelectorAll(".physics-token");
+
+        if (!this.tokens.length) return;
+
         this.isActive = true;
-        document.addEventListener('mousemove', (e) => {
-            this.targetX = e.clientX;
-            this.targetY = e.clientY;
+
+        document.addEventListener("mousemove", (event) => {
+            this.targetX = event.clientX;
+            this.targetY = event.clientY;
         });
+
         this.animate();
     },
 
     animate() {
         if (!this.isActive) return;
+
         this.cursorX += (this.targetX - this.cursorX) * 0.08;
         this.cursorY += (this.targetY - this.cursorY) * 0.08;
 
         this.tokens.forEach((token, index) => {
             const rect = token.getBoundingClientRect();
-            const tokenCenterX = rect.left + rect.width / 2;
-            const tokenCenterY = rect.top + rect.height / 2;
-            const deltaX = tokenCenterX - this.cursorX;
-            const deltaY = tokenCenterY - this.cursorY;
-            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            const deltaX = centerX - this.cursorX;
+            const deltaY = centerY - this.cursorY;
+
+            const distance = Math.sqrt(
+                deltaX * deltaX + deltaY * deltaY
+            );
+
             const repulsionRadius = 250;
 
             if (distance < repulsionRadius && distance > 0) {
-                const force = Math.pow(1 - distance / repulsionRadius, 2) * 60;
+                const force =
+                    Math.pow(
+                        1 - distance / repulsionRadius,
+                        2
+                    ) * 60;
+
                 const dirX = deltaX / distance;
                 const dirY = deltaY / distance;
-                const displaceX = dirX * force;
-                const displaceY = dirY * force;
-                const displaceZ = force * 0.5 + index * 10;
-                token.style.transform = `translate3d(${displaceX}px, ${displaceY}px, ${displaceZ}px) rotateZ(${dirX * 5}deg)`;
+
+                const displacementX = dirX * force;
+                const displacementY = dirY * force;
+                const displacementZ = force * 0.5 + index * 10;
+
+                token.style.transform =
+                    `translate3d(${displacementX}px, ${displacementY}px, ${displacementZ}px) ` +
+                    `rotateZ(${dirX * 5}deg)`;
             } else {
-                token.style.transform = '';
+                token.style.transform = "";
             }
         });
-        requestAnimationFrame(() => this.animate());
+
+        this.animationId = requestAnimationFrame(() => this.animate());
+    },
+
+    destroy() {
+        this.isActive = false;
+
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
     }
 };
 
@@ -97,9 +122,14 @@ const API = {
     logout: "/api/auth/logout",
     me: "/api/auth/me",
 
-    market: (symbol) => `/api/market/${encodeURIComponent(symbol)}`,
-    history: (id) => `/api/history/${encodeURIComponent(id)}`,
-    deleteHistory: (id) => `/api/history/${encodeURIComponent(id)}`
+    market: (symbol) =>
+        `/api/market/${encodeURIComponent(symbol)}`,
+
+    history: (id) =>
+        `/api/history/${encodeURIComponent(id)}`,
+
+    deleteHistory: (id) =>
+        `/api/history/${encodeURIComponent(id)}`
 };
 
 
@@ -122,7 +152,11 @@ const state = {
     latestReport: null,
     currentReportId: null,
     currentSymbol: null,
+
     livePollTimer: null,
+    liveRequestId: 0,
+    isLiveRequestInFlight: false,
+
     isAnalyzing: false
 };
 
@@ -141,9 +175,14 @@ function $all(selector) {
 
 function setText(selector, value, fallback = "—") {
     const element = $(selector);
+
     if (!element) return;
 
-    if (value === null || value === undefined || value === "") {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
         element.textContent = fallback;
         return;
     }
@@ -153,6 +192,7 @@ function setText(selector, value, fallback = "—") {
 
 function setHTML(selector, html) {
     const element = $(selector);
+
     if (element) {
         element.innerHTML = html;
     }
@@ -160,12 +200,14 @@ function setHTML(selector, html) {
 
 function show(element) {
     if (!element) return;
+
     element.hidden = false;
     element.style.display = "";
 }
 
 function hide(element) {
     if (!element) return;
+
     element.hidden = true;
     element.style.display = "none";
 }
@@ -180,26 +222,118 @@ function toggle(element, visible) {
 
 
 /* ============================================================
+   SAFE VALUE HELPERS
+   ============================================================ */
+
+function firstDefined(...values) {
+    for (const value of values) {
+        if (
+            value !== undefined &&
+            value !== null &&
+            value !== ""
+        ) {
+            return value;
+        }
+    }
+
+    return null;
+}
+
+function isPlainObject(value) {
+    return (
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value)
+    );
+}
+
+function normalizeSymbol(symbol) {
+    if (symbol === null || symbol === undefined) {
+        return null;
+    }
+
+    const normalized = String(symbol)
+        .trim()
+        .toUpperCase();
+
+    return normalized || null;
+}
+
+function normalizeSource(source) {
+    if (
+        source === null ||
+        source === undefined ||
+        source === ""
+    ) {
+        return "Backend market feed";
+    }
+
+    const text = String(source).trim();
+
+    const normalized = text.toLowerCase();
+
+    if (
+        normalized.includes("coingecko") ||
+        normalized === "coin gecko"
+    ) {
+        return "CoinGecko";
+    }
+
+    if (normalized.includes("binance")) {
+        return "Binance";
+    }
+
+    if (normalized.includes("backend")) {
+        return "Backend market feed";
+    }
+
+    return text;
+}
+
+
+/* ============================================================
    AUTH
    ============================================================ */
 
 function getTokenFromStorage() {
-    return localStorage.getItem(STORAGE_KEYS.token);
+    try {
+        return localStorage.getItem(STORAGE_KEYS.token);
+    } catch (error) {
+        console.warn("Unable to read auth token:", error);
+        return null;
+    }
 }
 
 function saveToken(token) {
     if (!token) return;
+
     state.token = token;
-    localStorage.setItem(STORAGE_KEYS.token, token);
+
+    try {
+        localStorage.setItem(
+            STORAGE_KEYS.token,
+            token
+        );
+    } catch (error) {
+        console.warn("Unable to save auth token:", error);
+    }
 }
 
 function clearToken() {
     state.token = null;
-    localStorage.removeItem(STORAGE_KEYS.token);
+
+    try {
+        localStorage.removeItem(STORAGE_KEYS.token);
+    } catch (error) {
+        console.warn("Unable to clear auth token:", error);
+    }
 }
 
 function consumeQueryToken() {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(
+        window.location.search
+    );
+
     const token = params.get("token");
 
     if (!token) {
@@ -208,38 +342,54 @@ function consumeQueryToken() {
 
     saveToken(token);
 
-    const cleanUrl = window.location.pathname + window.location.hash;
-    window.history.replaceState({}, document.title, cleanUrl);
+    const cleanUrl =
+        window.location.pathname +
+        window.location.hash;
+
+    window.history.replaceState(
+        {},
+        document.title,
+        cleanUrl
+    );
 
     return token;
 }
 
 function getAuthHeaders() {
-    const token = state.token || getTokenFromStorage();
-    if (!token) return {};
-    return { Authorization: `Bearer ${token}` };
+    const token =
+        state.token ||
+        getTokenFromStorage();
+
+    if (!token) {
+        return {};
+    }
+
+    if (!state.token) {
+        state.token = token;
+    }
+
+    return {
+        Authorization: `Bearer ${token}`
+    };
 }
 
 function redirectToHome() {
     clearToken();
     stopLivePolling();
+
     window.location.href = "/";
 }
 
+
 /* ============================================================
-   API REQUEST LAYER
+   API URL RESOLUTION
    ============================================================ */
 
 function resolveApiUrl(url) {
-    // Dynamically fallback to Render backend if running in production on Vercel
-    const defaultBase = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost'
-        ? 'http://127.0.0.1:5000'
-        : 'https://crypto-risk-ai-j1ag.onrender.com';
-
     const configured =
-        (typeof window !== "undefined" &&
+        typeof window !== "undefined" &&
         window.CONFIG &&
-        window.CONFIG.API_BASE_URL) || defaultBase;
+        window.CONFIG.API_BASE_URL;
 
     const base =
         typeof configured === "string"
@@ -263,8 +413,17 @@ function resolveApiUrl(url) {
     return `${base}/${url}`;
 }
 
+
+/* ============================================================
+   API REQUEST LAYER
+   ============================================================ */
+
 async function apiRequest(url, options = {}) {
     const resolvedUrl = resolveApiUrl(url);
+
+    let requestOptions = {
+        ...options
+    };
 
     const headers = {
         Accept: "application/json",
@@ -272,41 +431,84 @@ async function apiRequest(url, options = {}) {
         ...getAuthHeaders()
     };
 
-    if (options.body && typeof options.body !== "string") {
-        headers["Content-Type"] = "application/json";
-        options = {
-            ...options,
-            body: JSON.stringify(options.body)
-        };
+    if (
+        options.body &&
+        typeof options.body !== "string"
+    ) {
+        headers["Content-Type"] =
+            "application/json";
+
+        requestOptions.body =
+            JSON.stringify(options.body);
     }
+
+    requestOptions.headers = headers;
 
     let response;
 
     try {
-        response = await fetch(resolvedUrl, { ...options, headers });
+        response = await fetch(
+            resolvedUrl,
+            requestOptions
+        );
     } catch (error) {
-        console.error("Network error:", error);
-        throw new Error("Unable to connect to the CryptoRisk backend.");
+        console.error(
+            "Network error:",
+            error
+        );
+
+        const networkError = new Error(
+            "Unable to connect to the CryptoRisk backend. Check that the backend is running and reachable."
+        );
+
+        networkError.code = "NETWORK_ERROR";
+
+        throw networkError;
     }
 
     let payload = null;
-    const contentType = response.headers.get("content-type") || "";
 
-    if (contentType.includes("application/json")) {
+    const contentType =
+        response.headers.get("content-type") || "";
+
+    if (
+        contentType
+            .toLowerCase()
+            .includes("application/json")
+    ) {
         try {
             payload = await response.json();
         } catch (error) {
-            console.warn("Could not parse JSON response.", error);
-            payload = null;
+            console.warn(
+                "Could not parse JSON response.",
+                error
+            );
+
+            if (response.ok) {
+                const parseError = new Error(
+                    "Backend returned an invalid JSON response."
+                );
+
+                parseError.code =
+                    "INVALID_JSON";
+
+                throw parseError;
+            }
         }
     } else {
         try {
             const text = await response.text();
+
             if (text) {
-                payload = { message: text };
+                payload = {
+                    message: text
+                };
             }
-        } catch {
-            payload = null;
+        } catch (error) {
+            console.warn(
+                "Could not read backend response.",
+                error
+            );
         }
     }
 
@@ -314,23 +516,74 @@ async function apiRequest(url, options = {}) {
         clearToken();
         stopLivePolling();
 
-        if (window.location.pathname !== "/" && window.location.pathname !== "") {
+        if (
+            window.location.pathname !== "/" &&
+            window.location.pathname !== ""
+        ) {
             window.location.href = "/";
         }
 
-        throw new Error(
-            payload?.message || payload?.error || "Your session has expired."
+        const authError = new Error(
+            payload?.message ||
+            payload?.error ||
+            "Your session has expired."
         );
+
+        authError.status = 401;
+        authError.code = "AUTH_EXPIRED";
+
+        throw authError;
     }
 
     if (!response.ok) {
-        const message =
+        let message =
             payload?.message ||
             payload?.error ||
-            payload?.detail ||
-            `Request failed (${response.status}).`;
+            payload?.detail;
 
-        throw new Error(message);
+        if (!message) {
+            switch (response.status) {
+                case 404:
+                    message =
+                        "The requested CryptoRisk endpoint was not found.";
+                    break;
+
+                case 429:
+                    message =
+                        "The market data service is rate-limited. Please try again shortly.";
+                    break;
+
+                case 500:
+                    message =
+                        "CryptoRisk backend returned an internal server error.";
+                    break;
+
+                case 502:
+                    message =
+                        "CryptoRisk backend received a bad upstream response.";
+                    break;
+
+                case 503:
+                    message =
+                        "CryptoRisk backend is temporarily unavailable.";
+                    break;
+
+                default:
+                    message =
+                        `Request failed (${response.status}).`;
+            }
+        }
+
+        const requestError = new Error(
+            String(message)
+        );
+
+        requestError.status =
+            response.status;
+
+        requestError.payload = payload;
+
+        throw requestError;
     }
 
     return payload || {};
@@ -349,14 +602,19 @@ function showAnalysisError(message) {
         return;
     }
 
-    element.textContent = message || "Something went wrong.";
+    element.textContent =
+        message || "Something went wrong.";
+
     show(element);
 }
 
 function clearAnalysisError() {
     const element = $("#analysis-error");
+
     if (!element) return;
+
     element.textContent = "";
+
     hide(element);
 }
 
@@ -366,24 +624,43 @@ function clearAnalysisError() {
    ============================================================ */
 
 function renderUser(user) {
-    if (!user || typeof user !== "object") return;
+    if (!isPlainObject(user)) {
+        return;
+    }
 
     state.user = user;
 
-    const displayName = firstDefined(user.username, user.name, user.email, "User");
+    const displayName = firstDefined(
+        user.username,
+        user.name,
+        user.email,
+        "User"
+    );
 
-    setText(".user-name", displayName);
-    setText(".user-email", user.email || "");
+    setText(
+        ".user-name",
+        displayName
+    );
 
-    const avatars = $all(".user-avatar");
+    setText(
+        ".user-email",
+        user.email || ""
+    );
+
+    const avatars =
+        $all(".user-avatar");
 
     avatars.forEach((avatar) => {
         if (user.avatar_url) {
             avatar.src = user.avatar_url;
-            avatar.alt = displayName;
+            avatar.alt = String(
+                displayName
+            );
         } else {
             avatar.removeAttribute("src");
-            avatar.alt = displayName;
+            avatar.alt = String(
+                displayName
+            );
         }
     });
 }
@@ -394,15 +671,47 @@ function renderUser(user) {
    ============================================================ */
 
 const PROGRESS_STAGES = {
-    market: { percent: 20, title: "Fetching live market data" },
-    model: { percent: 45, title: "Running quantitative risk engine" },
-    stress: { percent: 65, title: "Running stress scenarios" },
-    ai: { percent: 82, title: "Synthesizing evidence" },
-    save: { percent: 96, title: "Saving intelligence report" },
-    complete: { percent: 100, title: "Analysis complete" }
+    market: {
+        percent: 20,
+        title: "Fetching live market data"
+    },
+
+    model: {
+        percent: 45,
+        title: "Running quantitative risk engine"
+    },
+
+    stress: {
+        percent: 65,
+        title: "Running stress scenarios"
+    },
+
+    ai: {
+        percent: 82,
+        title: "Synthesizing evidence"
+    },
+
+    save: {
+        percent: 96,
+        title: "Saving intelligence report"
+    },
+
+    complete: {
+        percent: 100,
+        title: "Analysis complete"
+    }
 };
 
+const PROGRESS_ORDER = [
+    "market",
+    "model",
+    "stress",
+    "ai",
+    "save"
+];
+
 let _progressAnim = null;
+let _progressCurrent = 0;
 
 function _stageForPercent(percent) {
     if (percent >= 96) return "save";
@@ -412,116 +721,250 @@ function _stageForPercent(percent) {
     return "market";
 }
 
-function animateProgress(targetPercent = 100) {
+function updateProgressDOM(
+    current,
+    stageOverride = null
+) {
     const fill = $("#progress-fill");
-    const percentEl = $("#progress-percent");
+    const percentEl =
+        $("#progress-percent");
 
-    const startPercent = 1;
-    const startTime = performance.now();
-    const durationMs = 4500;
+    const clamped = Math.max(
+        0,
+        Math.min(100, current)
+    );
+
+    const stageName =
+        stageOverride ||
+        _stageForPercent(clamped);
+
+    const config =
+        PROGRESS_STAGES[stageName] ||
+        PROGRESS_STAGES.market;
+
+    if (fill) {
+        fill.style.width =
+            `${clamped}%`;
+    }
+
+    if (percentEl) {
+        percentEl.textContent =
+            `${Math.round(clamped)}%`;
+    }
+
+    setText(
+        "#progress-title",
+        config.title
+    );
+
+    const currentIndex =
+        PROGRESS_ORDER.indexOf(
+            stageName
+        );
+
+    $all(".progress-status")
+        .forEach((element) => {
+            element.classList.remove(
+                "active",
+                "complete"
+            );
+
+            const index =
+                PROGRESS_ORDER.indexOf(
+                    element.dataset.stage
+                );
+
+            if (index < 0) return;
+
+            if (
+                currentIndex >= 0 &&
+                index < currentIndex
+            ) {
+                element.classList.add(
+                    "complete"
+                );
+            }
+
+            if (
+                index === currentIndex
+            ) {
+                element.classList.add(
+                    "active"
+                );
+            }
+        });
+}
+
+function animateProgress(
+    targetPercent = 100,
+    durationMs = 4500
+) {
+    const target = Math.max(
+        _progressCurrent,
+        Math.min(100, targetPercent)
+    );
 
     if (_progressAnim) {
-        cancelAnimationFrame(_progressAnim);
+        cancelAnimationFrame(
+            _progressAnim
+        );
+
         _progressAnim = null;
     }
 
+    const startPercent =
+        _progressCurrent;
+
+    const startTime =
+        performance.now();
+
     function frame(now) {
-        const elapsed = now - startTime;
-        const t = Math.min(elapsed / durationMs, 1);
-        const eased = 1 - Math.pow(1 - t, 3);
-        const current = startPercent + (targetPercent - startPercent) * eased;
+        const elapsed =
+            now - startTime;
 
-        const stageName = _stageForPercent(current);
-        const config = PROGRESS_STAGES[stageName] || PROGRESS_STAGES.market;
+        const t = Math.min(
+            elapsed / durationMs,
+            1
+        );
 
-        if (fill) {
-            fill.style.width = `${current}%`;
-        }
+        const eased =
+            1 -
+            Math.pow(
+                1 - t,
+                3
+            );
 
-        if (percentEl) {
-            percentEl.textContent = `${Math.round(current)}%`;
-        }
+        const current =
+            startPercent +
+            (target - startPercent) *
+                eased;
 
-        setText("#progress-title", config.title);
+        _progressCurrent =
+            current;
 
-        const stageOrder = ["market", "model", "stress", "ai", "save"];
-        const currentIndex = stageOrder.indexOf(stageName);
+        updateProgressDOM(
+            current
+        );
 
-        $all(".progress-status").forEach((element) => {
-            element.classList.remove("active", "complete");
-
-            const index = stageOrder.indexOf(element.dataset.stage);
-            if (index < 0) return;
-
-            if (index < currentIndex) {
-                element.classList.add("complete");
-            } else if (index === currentIndex) {
-                element.classList.add("active");
-            }
-        });
-
-        if (t < 1 && current < targetPercent) {
-            _progressAnim = requestAnimationFrame(frame);
+        if (t < 1) {
+            _progressAnim =
+                requestAnimationFrame(
+                    frame
+                );
             return;
         }
 
-        setProgressStage(_stageForPercent(targetPercent));
+        _progressCurrent =
+            target;
+
+        updateProgressDOM(
+            target
+        );
+
+        _progressAnim = null;
     }
 
-    _progressAnim = requestAnimationFrame(frame);
+    _progressAnim =
+        requestAnimationFrame(
+            frame
+        );
 }
 
 function setProgressStage(stage) {
-    const config = PROGRESS_STAGES[stage] || PROGRESS_STAGES.market;
+    const config =
+        PROGRESS_STAGES[stage] ||
+        PROGRESS_STAGES.market;
 
-    setText("#progress-title", config.title);
-    setText("#progress-percent", `${config.percent}%`);
+    const percent =
+        config.percent;
 
-    const fill = $("#progress-fill");
-    if (fill) {
-        fill.style.width = `${config.percent}%`;
-    }
+    _progressCurrent =
+        percent;
 
-    $all(".progress-status").forEach((element) => {
-        element.classList.remove("active", "complete");
-
-        const stageName = element.dataset.stage;
-        if (stageName === stage) {
-            element.classList.add("active");
-        }
-    });
-
-    const stageOrder = ["market", "model", "stress", "ai", "save"];
-    const currentIndex = stageOrder.indexOf(stage);
-
-    if (currentIndex < 0) return;
-
-    $all(".progress-status").forEach((element) => {
-        const index = stageOrder.indexOf(element.dataset.stage);
-        if (index >= 0 && index < currentIndex) {
-            element.classList.add("complete");
-        }
-    });
+    updateProgressDOM(
+        percent,
+        stage
+    );
 }
 
 function startProgress() {
-    const overlay = $("#analysis-progress");
+    const overlay =
+        $("#analysis-progress");
+
     if (!overlay) return;
 
     show(overlay);
-    animateProgress(95);
+
+    _progressCurrent = 1;
+
+    updateProgressDOM(
+        _progressCurrent,
+        "market"
+    );
+
+    animateProgress(
+        95,
+        4500
+    );
+
+    if (
+        typeof AnalysisBeam !==
+        "undefined"
+    ) {
+        AnalysisBeam.create();
+        AnalysisBeam.setProgress(95);
+    }
 }
 
 function finishProgress() {
-    const overlay = $("#analysis-progress");
+    const overlay =
+        $("#analysis-progress");
+
     if (!overlay) return;
 
-    animateProgress(100);
-    setProgressStage("complete");
+    if (_progressAnim) {
+        cancelAnimationFrame(
+            _progressAnim
+        );
+
+        _progressAnim = null;
+    }
+
+    _progressCurrent = Math.max(
+        _progressCurrent,
+        95
+    );
+
+    animateProgress(
+        100,
+        550
+    );
+
+    if (
+        typeof AnalysisBeam !==
+        "undefined"
+    ) {
+        AnalysisBeam.setProgress(
+            100
+        );
+    }
+
+    setTimeout(() => {
+        setProgressStage(
+            "complete"
+        );
+    }, 560);
 
     setTimeout(() => {
         hide(overlay);
-    }, 450);
+
+        if (
+            typeof AnalysisBeam !==
+            "undefined"
+        ) {
+            AnalysisBeam.remove();
+        }
+    }, 1000);
 }
 
 
@@ -529,155 +972,440 @@ function finishProgress() {
    FORMATTERS
    ============================================================ */
 
-function formatNumber(value, decimals = 2) {
-    if (value === null || value === undefined || value === "") return "—";
+function formatNumber(
+    value,
+    decimals = 2
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
 
     const number = Number(value);
-    if (!Number.isFinite(number)) return "—";
 
-    return number.toLocaleString(undefined, { maximumFractionDigits: decimals });
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    return number.toLocaleString(
+        undefined,
+        {
+            maximumFractionDigits:
+                decimals
+        }
+    );
 }
 
 function formatUsd(value) {
-    if (value === null || value === undefined || value === "") return "—";
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
 
     const number = Number(value);
-    if (!Number.isFinite(number)) return "—";
 
-    if (Math.abs(number) >= 1_000_000_000) {
-        return `$${formatNumber(number / 1_000_000_000, 2)}B`;
+    if (!Number.isFinite(number)) {
+        return "—";
     }
 
-    if (Math.abs(number) >= 1_000_000) {
-        return `$${formatNumber(number / 1_000_000, 2)}M`;
+    if (
+        Math.abs(number) >=
+        1_000_000_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000_000_000,
+            2
+        )}B`;
     }
 
-    if (Math.abs(number) >= 1_000) {
-        return `$${formatNumber(number / 1_000, 2)}K`;
+    if (
+        Math.abs(number) >=
+        1_000_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000_000,
+            2
+        )}M`;
     }
 
-    if (Math.abs(number) >= 1) {
-        return `$${formatNumber(number, 2)}`;
+    if (
+        Math.abs(number) >=
+        1_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000,
+            2
+        )}K`;
+    }
+
+    if (
+        Math.abs(number) >= 1
+    ) {
+        return `$${formatNumber(
+            number,
+            2
+        )}`;
     }
 
     return `$${number.toFixed(6)}`;
 }
 
 function formatPercent(value) {
-    if (value === null || value === undefined || value === "") return "—";
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
 
     const number = Number(value);
-    if (!Number.isFinite(number)) return "—";
 
-    const sign = number > 0 ? "+" : "";
-    return `${sign}${number.toFixed(2)}%`;
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    const sign =
+        number > 0 ? "+" : "";
+
+    return `${sign}${number.toFixed(
+        2
+    )}%`;
 }
 
 function formatScore(value) {
-    if (value === null || value === undefined || value === "") return "—";
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
 
     const number = Number(value);
-    if (!Number.isFinite(number)) return "—";
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
 
     return Math.round(number);
 }
 
 function formatConfidence(value) {
-    if (value === null || value === undefined || value === "") return "—";
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
 
     const number = Number(value);
-    if (!Number.isFinite(number)) return "—";
 
-    return `${number.toFixed(1)}%`;
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    /*
+     * Supports both:
+     * 0.82  -> 82.0%
+     * 82    -> 82.0%
+     */
+    const normalized =
+        number >= 0 &&
+        number <= 1
+            ? number * 100
+            : number;
+
+    return `${normalized.toFixed(
+        1
+    )}%`;
 }
 
 function formatDate(value) {
     if (!value) return "—";
 
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return String(value);
+    const date =
+        new Date(value);
 
-    return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return String(value);
+    }
+
+    return date.toLocaleString(
+        undefined,
+        {
+            dateStyle: "medium",
+            timeStyle: "short"
+        }
+    );
 }
 
 function formatRelativeTime(value) {
     if (!value) return "—";
 
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return formatDate(value);
+    const date =
+        new Date(value);
 
-    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return formatDate(value);
+    }
 
-    if (seconds < 10) return "just now";
-    if (seconds < 60) return `${seconds}s ago`;
+    const seconds = Math.floor(
+        (Date.now() -
+            date.getTime()) /
+            1000
+    );
 
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
+    if (seconds < 10) {
+        return "just now";
+    }
 
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
+    if (seconds < 60) {
+        return `${seconds}s ago`;
+    }
 
-    return `${Math.floor(hours / 24)}d ago`;
+    const minutes =
+        Math.floor(
+            seconds / 60
+        );
+
+    if (minutes < 60) {
+        return `${minutes}m ago`;
+    }
+
+    const hours =
+        Math.floor(
+            minutes / 60
+        );
+
+    if (hours < 24) {
+        return `${hours}h ago`;
+    }
+
+    return `${Math.floor(
+        hours / 24
+    )}d ago`;
 }
 
 function clampScore(value) {
-    if (value === null || value === undefined || value === "") return null;
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return null;
+    }
 
     const number = Number(value);
-    if (!Number.isFinite(number)) return null;
 
-    return Math.max(0, Math.min(100, number));
+    if (!Number.isFinite(number)) {
+        return null;
+    }
+
+    return Math.max(
+        0,
+        Math.min(100, number)
+    );
 }
 
 
 /* ============================================================
-   SAFE DATA HELPERS
+   REPORT EXTRACTION
    ============================================================ */
 
-function firstDefined(...values) {
-    for (const value of values) {
-        if (value !== undefined && value !== null && value !== "") {
-            return value;
-        }
-    }
-    return null;
-}
-
 function isRiskReport(value) {
-    if (!value || typeof value !== "object") return false;
+    if (
+        !isPlainObject(value)
+    ) {
+        return false;
+    }
 
+    /*
+     * Strong report markers.
+     */
     if (
         value.schema_version ||
         value.risk_profile ||
         value.risk_drivers ||
         value.stress_test ||
-        value.data_quality
+        value.data_quality ||
+        value.ai
     ) {
         return true;
     }
 
-    return Boolean(
-        value.risk_score !== undefined && (value.asset || value.token_symbol)
-    );
+    /*
+     * Standard score-based report.
+     */
+    if (
+        value.risk_score !==
+            undefined &&
+        (
+            value.asset ||
+            value.token_symbol ||
+            value.symbol
+        )
+    ) {
+        return true;
+    }
+
+    /*
+     * Some backend versions may put
+     * the score inside risk_profile.
+     */
+    if (
+        value.risk_profile &&
+        (
+            value.risk_profile
+                .composite_score !==
+                undefined ||
+            value.risk_profile.score !==
+                undefined
+        )
+    ) {
+        return true;
+    }
+
+    return false;
 }
 
-function getReportFromPayload(payload) {
-    if (!payload) return null;
+function getReportFromPayload(
+    payload
+) {
+    if (!payload) {
+        return null;
+    }
 
     if (isRiskReport(payload)) {
         return payload;
     }
 
+    /*
+     * Search only known report-wrapper
+     * locations. Do not blindly accept
+     * arbitrary nested objects.
+     */
     const candidates = [
-        payload.analysis,
         payload.report,
+        payload.analysis,
+
         payload.latest?.report,
+        payload.latest?.analysis,
         payload.latest,
-        payload.data
+
+        payload.data?.report,
+        payload.data?.analysis,
+        payload.data?.latest?.report,
+        payload.data?.latest?.analysis,
+        payload.data?.latest,
+        payload.data,
+
+        payload.result?.report,
+        payload.result?.analysis,
+        payload.result,
+
+        payload.response?.report,
+        payload.response?.analysis,
+        payload.response
     ];
 
-    for (const candidate of candidates) {
-        if (isRiskReport(candidate)) {
+    for (
+        const candidate of candidates
+    ) {
+        if (
+            isRiskReport(candidate)
+        ) {
+            return candidate;
+        }
+    }
+
+    return null;
+}
+
+
+/* ============================================================
+   MARKET RESPONSE EXTRACTION
+   ============================================================ */
+
+function getMarketFromPayload(
+    payload
+) {
+    if (!payload) {
+        return null;
+    }
+
+    /*
+     * Direct market object:
+     * { price, source, ... }
+     */
+    if (
+        isPlainObject(payload) &&
+        (
+            payload.price !==
+                undefined ||
+            payload.current_price_usd !==
+                undefined ||
+            payload.current_price !==
+                undefined
+        )
+    ) {
+        return payload;
+    }
+
+    const candidates = [
+        payload.market,
+
+        payload.data?.market,
+        payload.data,
+
+        payload.result?.market,
+        payload.result,
+
+        payload.response?.market,
+        payload.response,
+
+        payload.report?.market,
+        payload.analysis?.market,
+
+        payload.latest?.market,
+        payload.latest?.report?.market,
+        payload.latest?.analysis?.market,
+
+        payload.data?.report?.market,
+        payload.data?.analysis?.market
+    ];
+
+    for (
+        const candidate of candidates
+    ) {
+        if (
+            isPlainObject(candidate) &&
+            (
+                candidate.price !==
+                    undefined ||
+                candidate.current_price_usd !==
+                    undefined ||
+                candidate.current_price !==
+                    undefined ||
+                candidate.price_usd !==
+                    undefined
+            )
+        ) {
             return candidate;
         }
     }
@@ -691,35 +1419,78 @@ function getReportFromPayload(payload) {
    ============================================================ */
 
 function getRiskProfile(report) {
-    return report?.risk_profile || {};
+    return isPlainObject(
+        report?.risk_profile
+    )
+        ? report.risk_profile
+        : {};
 }
 
 function getPillars(report) {
-    return report?.risk_profile?.pillars || {};
+    const pillars =
+        getRiskProfile(report)
+            .pillars;
+
+    return isPlainObject(pillars)
+        ? pillars
+        : {};
 }
 
-function getPillar(report, name) {
-    return report?.risk_profile?.pillars?.[name] || {};
+function getPillar(
+    report,
+    name
+) {
+    const pillars =
+        getPillars(report);
+
+    const pillar =
+        pillars[name];
+
+    return isPlainObject(pillar)
+        ? pillar
+        : {};
 }
 
 function getAI(report) {
-    return report?.ai || {};
+    return isPlainObject(report?.ai)
+        ? report.ai
+        : {};
 }
 
 function getMarket(report) {
-    return report?.market || {};
+    return isPlainObject(report?.market)
+        ? report.market
+        : {};
 }
 
 function getSecurity(report) {
-    return report?.security || {};
+    return isPlainObject(
+        report?.security
+    )
+        ? report.security
+        : {};
 }
 
 function getStress(report) {
-    return report?.stress_test || report?.stress || {};
+    return isPlainObject(
+        report?.stress_test
+    )
+        ? report.stress_test
+        : (
+            isPlainObject(
+                report?.stress
+            )
+                ? report.stress
+                : {}
+        );
 }
 
 function getDataQuality(report) {
-    return report?.data_quality || {};
+    return isPlainObject(
+        report?.data_quality
+    )
+        ? report.data_quality
+        : {};
 }
 
 
@@ -734,60 +1505,140 @@ async function loadDashboard() {
     }
 
     try {
-        const payload = await apiRequest(API.dashboard);
+        const payload =
+            await apiRequest(
+                API.dashboard
+            );
 
-        console.log("CryptoRisk dashboard payload:", payload);
+        console.log(
+            "CryptoRisk dashboard payload:",
+            payload
+        );
 
         if (payload.user) {
-            renderUser(payload.user);
+            renderUser(
+                payload.user
+            );
         }
 
-        const latest = payload.latest;
+        /*
+         * Support:
+         * payload.latest
+         * payload.data.latest
+         * payload.report
+         * etc.
+         */
+        const latest =
+            payload.latest ||
+            payload.data?.latest ||
+            payload.report ||
+            payload.data?.report ||
+            null;
 
-        if (latest) {
-            const report = getReportFromPayload(latest);
+        const report =
+            getReportFromPayload(
+                latest || payload
+            );
 
-            if (report) {
-                state.latestReport = report;
+        if (report) {
+            state.latestReport =
+                report;
 
-                state.currentReportId =
-                    latest.id || latest.analysis_id || report.id || null;
-
-                state.currentSymbol = firstDefined(
-                    report?.asset?.symbol,
-                    report?.token_symbol
+            state.currentReportId =
+                firstDefined(
+                    latest?.id,
+                    latest?.analysis_id,
+                    payload.analysis_id,
+                    report.id
                 );
 
-                renderReport(report);
-
-                if (state.currentSymbol) {
-                    startLivePolling(state.currentSymbol);
-                }
-            } else {
-                console.warn(
-                    "Latest dashboard item did not contain a valid report.",
-                    latest
+            state.currentSymbol =
+                normalizeSymbol(
+                    firstDefined(
+                        report?.asset?.symbol,
+                        report?.token_symbol,
+                        report?.symbol
+                    )
                 );
-                clearReportView();
+
+            renderReport(
+                report
+            );
+
+            if (
+                state.currentSymbol
+            ) {
+                startLivePolling(
+                    state.currentSymbol
+                );
             }
         } else {
+            console.warn(
+                "No valid latest report found:",
+                payload
+            );
+
+            state.currentReportId =
+                null;
+
+            state.currentSymbol =
+                null;
+
+            stopLivePolling();
             clearReportView();
         }
 
-        renderHistory(Array.isArray(payload.history) ? payload.history : []);
+        const history =
+            Array.isArray(
+                payload.history
+            )
+                ? payload.history
+                : (
+                    Array.isArray(
+                        payload.data?.history
+                    )
+                        ? payload.data.history
+                        : []
+                );
+
+        renderHistory(
+            history
+        );
     } catch (error) {
-        console.error("Dashboard load failed:", error);
-        showAnalysisError(error.message || "Unable to load dashboard.");
+        console.error(
+            "Dashboard load failed:",
+            error
+        );
+
+        showAnalysisError(
+            error.message ||
+            "Unable to load dashboard."
+        );
     }
 }
 
 
 /* ============================================================
-   ANALYSIS — Frontend Analysis Orchestrator
+   ANALYSIS
    ============================================================ */
 
-async function runAnalysis(symbol) {
-    if (state.isAnalyzing) return;
+async function runAnalysis(
+    symbol
+) {
+    if (state.isAnalyzing) {
+        return;
+    }
+
+    const normalizedSymbol =
+        normalizeSymbol(symbol);
+
+    if (!normalizedSymbol) {
+        showAnalysisError(
+            "Enter a token symbol."
+        );
+
+        return;
+    }
 
     state.isAnalyzing = true;
 
@@ -795,24 +1646,28 @@ async function runAnalysis(symbol) {
     startProgress();
     stopLivePolling();
 
-    const normalizedSymbol = String(symbol || "").trim().toUpperCase();
-
-    if (!normalizedSymbol) {
-        state.isAnalyzing = false;
-        hide($("#analysis-progress"));
-        showAnalysisError("Enter a token symbol.");
-        return;
-    }
-
     try {
-        const payload = await apiRequest(API.analyze, {
-            method: "POST",
-            body: { token_symbol: normalizedSymbol }
-        });
+        const payload =
+            await apiRequest(
+                API.analyze,
+                {
+                    method: "POST",
+                    body: {
+                        token_symbol:
+                            normalizedSymbol
+                    }
+                }
+            );
 
-        console.log("CryptoRisk analyze payload:", payload);
+        console.log(
+            "CryptoRisk analyze payload:",
+            payload
+        );
 
-        const report = getReportFromPayload(payload);
+        const report =
+            getReportFromPayload(
+                payload
+            );
 
         if (!report) {
             console.error(
@@ -825,44 +1680,97 @@ async function runAnalysis(symbol) {
             );
         }
 
-        state.latestReport = report;
+        state.latestReport =
+            report;
 
-        state.currentReportId = firstDefined(
-            payload.analysis_id,
-            payload.id,
-            payload.analysis?.id,
-            payload.report?.id,
-            payload.latest?.id,
-            report.id
-        );
+        state.currentReportId =
+            firstDefined(
+                payload.analysis_id,
+                payload.id,
 
-        state.currentSymbol = firstDefined(
-            report?.asset?.symbol,
-            report?.token_symbol,
-            normalizedSymbol
-        );
+                payload.analysis?.id,
+                payload.report?.id,
+
+                payload.data?.analysis_id,
+                payload.data?.id,
+                payload.data?.analysis?.id,
+                payload.data?.report?.id,
+
+                payload.latest?.id,
+
+                report.id
+            );
+
+        state.currentSymbol =
+            normalizeSymbol(
+                firstDefined(
+                    report?.asset?.symbol,
+                    report?.token_symbol,
+                    report?.symbol,
+                    normalizedSymbol
+                )
+            );
 
         if (payload.user) {
-            renderUser(payload.user);
+            renderUser(
+                payload.user
+            );
         }
 
-        renderReport(report);
+        renderReport(
+            report
+        );
 
-        if (Array.isArray(payload.history)) {
-            renderHistory(payload.history);
+        const history =
+            Array.isArray(
+                payload.history
+            )
+                ? payload.history
+                : Array.isArray(
+                    payload.data?.history
+                )
+                    ? payload.data.history
+                    : null;
+
+        if (history) {
+            renderHistory(
+                history
+            );
         } else {
             await refreshHistory();
         }
 
         finishProgress();
 
-        startLivePolling(state.currentSymbol);
+        if (state.currentSymbol) {
+            startLivePolling(
+                state.currentSymbol
+            );
+        }
     } catch (error) {
-        console.error("Analysis failed:", error);
-        showAnalysisError(error.message || "Analysis failed.");
-        hide($("#analysis-progress"));
+        console.error(
+            "Analysis failed:",
+            error
+        );
+
+        showAnalysisError(
+            error.message ||
+            "Analysis failed."
+        );
+
+        hide(
+            $("#analysis-progress")
+        );
+
+        if (
+            typeof AnalysisBeam !==
+            "undefined"
+        ) {
+            AnalysisBeam.remove();
+        }
     } finally {
-        state.isAnalyzing = false;
+        state.isAnalyzing =
+            false;
     }
 }
 
@@ -873,15 +1781,36 @@ async function runAnalysis(symbol) {
 
 async function refreshHistory() {
     try {
-        const payload = await apiRequest(API.dashboard);
+        const payload =
+            await apiRequest(
+                API.dashboard
+            );
 
         if (payload.user) {
-            renderUser(payload.user);
+            renderUser(
+                payload.user
+            );
         }
 
-        renderHistory(Array.isArray(payload.history) ? payload.history : []);
+        const history =
+            Array.isArray(
+                payload.history
+            )
+                ? payload.history
+                : Array.isArray(
+                    payload.data?.history
+                )
+                    ? payload.data.history
+                    : [];
+
+        renderHistory(
+            history
+        );
     } catch (error) {
-        console.error("History refresh failed:", error);
+        console.error(
+            "History refresh failed:",
+            error
+        );
     }
 }
 
@@ -890,40 +1819,77 @@ async function refreshHistory() {
    SINGLE HISTORY REPORT
    ============================================================ */
 
-async function loadHistoryReport(id) {
+async function loadHistoryReport(
+    id
+) {
     if (!id) return;
 
     clearAnalysisError();
+    stopLivePolling();
 
     try {
-        const payload = await apiRequest(API.history(id));
+        const payload =
+            await apiRequest(
+                API.history(id)
+            );
 
-        console.log("History report payload:", payload);
-
-        const report = getReportFromPayload(payload);
-
-        if (!report) {
-            throw new Error("This report could not be loaded.");
-        }
-
-        state.latestReport = report;
-        state.currentReportId = id;
-
-        state.currentSymbol = firstDefined(
-            report?.asset?.symbol,
-            report?.token_symbol
+        console.log(
+            "History report payload:",
+            payload
         );
 
-        renderReport(report);
+        const report =
+            getReportFromPayload(
+                payload
+            );
 
-        if (state.currentSymbol) {
-            startLivePolling(state.currentSymbol);
+        if (!report) {
+            throw new Error(
+                "This report could not be loaded."
+            );
         }
 
-        window.scrollTo({ top: 0, behavior: "smooth" });
+        state.latestReport =
+            report;
+
+        state.currentReportId =
+            id;
+
+        state.currentSymbol =
+            normalizeSymbol(
+                firstDefined(
+                    report?.asset?.symbol,
+                    report?.token_symbol,
+                    report?.symbol
+                )
+            );
+
+        renderReport(
+            report
+        );
+
+        if (
+            state.currentSymbol
+        ) {
+            startLivePolling(
+                state.currentSymbol
+            );
+        }
+
+        window.scrollTo({
+            top: 0,
+            behavior: "smooth"
+        });
     } catch (error) {
-        console.error("History report load failed:", error);
-        showAnalysisError(error.message || "Unable to load report.");
+        console.error(
+            "History report load failed:",
+            error
+        );
+
+        showAnalysisError(
+            error.message ||
+            "Unable to load report."
+        );
     }
 }
 
@@ -936,25 +1902,53 @@ async function deleteReport(id) {
     if (!id) return;
 
     try {
-        await apiRequest(API.deleteHistory(id), { method: "DELETE" });
+        await apiRequest(
+            API.deleteHistory(id),
+            {
+                method: "DELETE"
+            }
+        );
 
-        if (String(state.currentReportId) === String(id)) {
-            state.currentReportId = null;
-            state.latestReport = null;
+        if (
+            String(
+                state.currentReportId
+            ) === String(id)
+        ) {
+            state.currentReportId =
+                null;
+
+            state.latestReport =
+                null;
+
+            state.currentSymbol =
+                null;
+
             clearReportView();
             stopLivePolling();
         }
 
         await refreshHistory();
     } catch (error) {
-        console.error("Delete report failed:", error);
-        showAnalysisError(error.message || "Unable to delete report.");
+        console.error(
+            "Delete report failed:",
+            error
+        );
+
+        showAnalysisError(
+            error.message ||
+            "Unable to delete report."
+        );
     }
 }
 
 async function deleteCurrentReport() {
-    if (!state.currentReportId) return;
-    await deleteReport(state.currentReportId);
+    if (!state.currentReportId) {
+        return;
+    }
+
+    await deleteReport(
+        state.currentReportId
+    );
 }
 
 
@@ -965,13 +1959,22 @@ async function deleteCurrentReport() {
 async function logout() {
     try {
         if (state.token) {
-            await apiRequest(API.logout, { method: "POST" });
+            await apiRequest(
+                API.logout,
+                {
+                    method: "POST"
+                }
+            );
         }
     } catch (error) {
-        console.warn("Logout request failed:", error);
+        console.warn(
+            "Logout request failed:",
+            error
+        );
     } finally {
         clearToken();
         stopLivePolling();
+
         window.location.href = "/";
     }
 }
@@ -983,122 +1986,391 @@ async function logout() {
 
 function stopLivePolling() {
     if (state.livePollTimer) {
-        clearInterval(state.livePollTimer);
+        clearInterval(
+            state.livePollTimer
+        );
+
         state.livePollTimer = null;
     }
+
+    state.liveRequestId++;
+
+    state.isLiveRequestInFlight =
+        false;
 }
 
 function startLivePolling(symbol) {
     stopLivePolling();
 
-    if (!symbol) return;
+    const normalizedSymbol =
+        normalizeSymbol(symbol);
 
-    state.currentSymbol = String(symbol).trim().toUpperCase();
+    if (!normalizedSymbol) {
+        return;
+    }
 
-    refreshLiveMarket(state.currentSymbol);
+    state.currentSymbol =
+        normalizedSymbol;
 
-    state.livePollTimer = setInterval(() => {
-        refreshLiveMarket(state.currentSymbol);
-    }, 15000);
+    /*
+     * Immediate refresh.
+     */
+    refreshLiveMarket(
+        normalizedSymbol
+    );
+
+    /*
+     * Then every 15 seconds.
+     */
+    state.livePollTimer =
+        setInterval(() => {
+            /*
+             * Never poll while a previous
+             * request is still running.
+             */
+            if (
+                state.isLiveRequestInFlight
+            ) {
+                return;
+            }
+
+            if (
+                !state.currentSymbol
+            ) {
+                return;
+            }
+
+            refreshLiveMarket(
+                state.currentSymbol
+            );
+        }, 15000);
 }
 
-async function refreshLiveMarket(symbol) {
-    if (!symbol) return;
+async function refreshLiveMarket(
+    symbol
+) {
+    const normalizedSymbol =
+        normalizeSymbol(symbol);
+
+    if (!normalizedSymbol) {
+        return;
+    }
+
+    /*
+     * Prevent stale response from an
+     * older symbol from updating the UI.
+     */
+    const requestId =
+        ++state.liveRequestId;
+
+    state.isLiveRequestInFlight =
+        true;
 
     try {
-        const payload = await apiRequest(API.market(symbol));
-        const market = payload?.market || payload?.data || payload;
+        const payload =
+            await apiRequest(
+                API.market(
+                    normalizedSymbol
+                )
+            );
 
-        updateLiveMarket(market);
+        /*
+         * If another market request
+         * started after this one,
+         * discard this response.
+         */
+        if (
+            requestId !==
+            state.liveRequestId
+        ) {
+            return;
+        }
+
+        const market =
+            getMarketFromPayload(
+                payload
+            );
+
+        if (!market) {
+            console.warn(
+                "Market endpoint returned no recognizable market object:",
+                payload
+            );
+
+            setMarketLiveState(
+                false,
+                "Market data unavailable"
+            );
+
+            return;
+        }
+
+        updateLiveMarket(
+            market
+        );
     } catch (error) {
-        console.warn("Live market refresh failed:", error);
-        setText("#market-live-status", "Live feed unavailable");
+        /*
+         * Ignore stale requests.
+         */
+        if (
+            requestId !==
+            state.liveRequestId
+        ) {
+            return;
+        }
+
+        console.warn(
+            "Live market refresh failed:",
+            error
+        );
+
+        /*
+         * Keep the error visible enough
+         * for debugging instead of hiding
+         * everything behind a generic state.
+         */
+        if (error.status === 429) {
+            setMarketLiveState(
+                false,
+                "Market feed rate-limited"
+            );
+        } else if (
+            error.status >= 500
+        ) {
+            setMarketLiveState(
+                false,
+                "Backend market error"
+            );
+        } else if (
+            error.code ===
+            "NETWORK_ERROR"
+        ) {
+            setMarketLiveState(
+                false,
+                "Backend unreachable"
+            );
+        } else {
+            setMarketLiveState(
+                false,
+                "Live feed unavailable"
+            );
+        }
+    } finally {
+        if (
+            requestId ===
+            state.liveRequestId
+        ) {
+            state.isLiveRequestInFlight =
+                false;
+        }
     }
 }
 
-function updateLiveMarket(market) {
-    if (!market || typeof market !== "object") return;
-
-    const price = firstDefined(
-        market.price,
-        market.current_price_usd,
-        market.price_usd,
-        market.current_price
+function setMarketLiveState(
+    isLive,
+    message
+) {
+    setText(
+        "#market-live-status",
+        message || (
+            isLive
+                ? "Live • Backend feed"
+                : "Live feed unavailable"
+        )
     );
 
-    const change24 = firstDefined(
-        market.price_change_24h_pct,
-        market.change_24h_pct,
-        market.price_change_24h,
-        market.change_24h
-    );
+    const liveDot =
+        $("#market-live-dot");
 
-    const change7d = firstDefined(
-        market.price_change_7d_pct,
-        market.change_7d_pct,
-        market.price_change_7d,
-        market.change_7d
-    );
+    if (liveDot) {
+        liveDot.classList.toggle(
+            "active",
+            Boolean(isLive)
+        );
+    }
+}
 
-    const high24 = firstDefined(
-        market.high_24h,
-        market.high_24h_usd,
-        market.highPrice,
-        market.high
-    );
+function updateLiveMarket(
+    market
+) {
+    if (
+        !isPlainObject(market)
+    ) {
+        setMarketLiveState(
+            false,
+            "Market data unavailable"
+        );
 
-    const low24 = firstDefined(
-        market.low_24h,
-        market.low_24h_usd,
-        market.lowPrice,
-        market.low
-    );
-
-    const volume = firstDefined(
-        market.volume_24h,
-        market.volume_24h_usd,
-        market.total_volume_usd,
-        market.volume
-    );
-
-    const marketCap = firstDefined(market.market_cap, market.market_cap_usd);
-    const source = firstDefined(market.source, "Backend market feed");
-    const timestamp = firstDefined(market.timestamp, market.updated_at);
-
-    setText("#report-price", formatUsd(price));
-    setText("#report-change", formatPercent(change24));
-    setText("#report-volume", formatUsd(volume));
-
-    if (marketCap !== null) {
-        setText("#report-market-cap", formatUsd(marketCap));
+        return;
     }
 
-    setText("#report-change-7d", formatPercent(change7d));
-    setText("#report-high", formatUsd(high24));
-    setText("#report-low", formatUsd(low24));
+    const price =
+        firstDefined(
+            market.price,
+            market.current_price_usd,
+            market.price_usd,
+            market.current_price
+        );
 
-    setText("#market-live-status", "Live • Backend feed");
+    const change24 =
+        firstDefined(
+            market.price_change_24h_pct,
+            market.change_24h_pct,
+            market.price_change_24h,
+            market.change_24h
+        );
+
+    const change7d =
+        firstDefined(
+            market.price_change_7d_pct,
+            market.change_7d_pct,
+            market.price_change_7d,
+            market.change_7d
+        );
+
+    const high24 =
+        firstDefined(
+            market.high_24h,
+            market.high_24h_usd,
+            market.highPrice,
+            market.high
+        );
+
+    const low24 =
+        firstDefined(
+            market.low_24h,
+            market.low_24h_usd,
+            market.lowPrice,
+            market.low
+        );
+
+    const volume =
+        firstDefined(
+            market.volume_24h,
+            market.volume_24h_usd,
+            market.total_volume_usd,
+            market.quoteVolume,
+            market.volume
+        );
+
+    const marketCap =
+        firstDefined(
+            market.market_cap,
+            market.market_cap_usd
+        );
+
+    const source =
+        normalizeSource(
+            firstDefined(
+                market.source,
+                market.provider,
+                market.data_source
+            )
+        );
+
+    const timestamp =
+        firstDefined(
+            market.timestamp,
+            market.updated_at,
+            market.fetched_at,
+            market.last_updated
+        );
+
+    /*
+     * Always update the fields.
+     *
+     * This prevents old values from
+     * remaining on screen when the new
+     * response explicitly lacks them.
+     */
+    setText(
+        "#report-price",
+        formatUsd(price)
+    );
+
+    setText(
+        "#report-change",
+        formatPercent(change24)
+    );
+
+    setText(
+        "#report-volume",
+        formatUsd(volume)
+    );
+
+    setText(
+        "#report-market-cap",
+        formatUsd(marketCap)
+    );
+
+    setText(
+        "#report-change-7d",
+        formatPercent(change7d)
+    );
+
+    setText(
+        "#report-high",
+        formatUsd(high24)
+    );
+
+    setText(
+        "#report-low",
+        formatUsd(low24)
+    );
+
+    /*
+     * IMPORTANT:
+     * Only say LIVE after the backend
+     * successfully returned usable market
+     * data.
+     */
+    setMarketLiveState(
+        true,
+        "Live • Backend feed"
+    );
+
     setText(
         "#market-updated",
-        timestamp ? formatRelativeTime(timestamp) : "Updated now"
+        timestamp
+            ? formatRelativeTime(
+                timestamp
+            )
+            : "Updated now"
     );
-    setText("#data-source", source);
-    setText("#market-source", source);
 
-    const changeElement = $("#report-change");
+    setText(
+        "#data-source",
+        source
+    );
+
+    setText(
+        "#market-source",
+        source
+    );
+
+    const changeElement =
+        $("#report-change");
 
     if (changeElement) {
-        changeElement.classList.remove("positive", "negative");
+        changeElement.classList.remove(
+            "positive",
+            "negative"
+        );
 
-        const numericChange = Number(change24);
-        if (Number.isFinite(numericChange)) {
-            changeElement.classList.add(numericChange >= 0 ? "positive" : "negative");
+        const numericChange =
+            Number(change24);
+
+        if (
+            Number.isFinite(
+                numericChange
+            )
+        ) {
+            changeElement.classList.add(
+                numericChange >= 0
+                    ? "positive"
+                    : "negative"
+            );
         }
-    }
-
-    const liveDot = $("#market-live-dot");
-    if (liveDot) {
-        liveDot.classList.add("active");
     }
 }
 
@@ -1110,22 +2382,85 @@ function updateLiveMarket(market) {
 function clearReportView() {
     state.latestReport = null;
 
-    setText("#report-token", "No analysis yet");
-    setText("#report-outlook", "—");
-    setText("#report-risk-score", "—");
-    setText("#report-risk-label", "—");
-    setText("#report-risk-confidence", "—");
-    setText("#report-price", "—");
-    setText("#report-change", "—");
-    setText("#report-volume", "—");
-    setText("#report-market-cap", "—");
-    setText("#report-change-7d", "—");
-    setText("#report-high", "—");
-    setText("#report-low", "—");
-    setText("#market-live-status", "—");
-    setText("#market-updated", "—");
-    setText("#data-source", "—");
-    setText("#market-source", "—");
+    setText(
+        "#report-token",
+        "No analysis yet"
+    );
+
+    setText(
+        "#report-outlook",
+        "—"
+    );
+
+    setText(
+        "#report-risk-score",
+        "—"
+    );
+
+    setText(
+        "#report-risk-label",
+        "—"
+    );
+
+    setText(
+        "#report-risk-confidence",
+        "—"
+    );
+
+    setText(
+        "#report-price",
+        "—"
+    );
+
+    setText(
+        "#report-change",
+        "—"
+    );
+
+    setText(
+        "#report-volume",
+        "—"
+    );
+
+    setText(
+        "#report-market-cap",
+        "—"
+    );
+
+    setText(
+        "#report-change-7d",
+        "—"
+    );
+
+    setText(
+        "#report-high",
+        "—"
+    );
+
+    setText(
+        "#report-low",
+        "—"
+    );
+
+    setText(
+        "#market-live-status",
+        "—"
+    );
+
+    setText(
+        "#market-updated",
+        "—"
+    );
+
+    setText(
+        "#data-source",
+        "—"
+    );
+
+    setText(
+        "#market-source",
+        "—"
+    );
 
     const pillarNames = [
         "volatility",
@@ -1137,42 +2472,129 @@ function clearReportView() {
         "composite"
     ];
 
-    pillarNames.forEach((name) => {
-        setText(`#pillar-${name}-value`, "—");
-        setText(`#pillar-${name}-detail`, "—");
+    pillarNames.forEach(
+        (name) => {
+            setText(
+                `#pillar-${name}-value`,
+                "—"
+            );
 
-        const bar = $(`#pillar-${name}-bar`);
-        if (bar) {
-            bar.style.width = "0%";
-            bar.removeAttribute("aria-valuenow");
+            setText(
+                `#pillar-${name}-detail`,
+                "—"
+            );
+
+            const bar =
+                $(`#pillar-${name}-bar`);
+
+            if (bar) {
+                bar.style.width =
+                    "0%";
+
+                bar.removeAttribute(
+                    "aria-valuenow"
+                );
+
+                bar.classList.remove(
+                    "risk-low",
+                    "risk-moderate",
+                    "risk-high",
+                    "risk-critical"
+                );
+            }
+
+            const value =
+                $(`#pillar-${name}-value`);
+
+            if (value) {
+                value.classList.remove(
+                    "risk-low",
+                    "risk-moderate",
+                    "risk-high",
+                    "risk-critical"
+                );
+            }
         }
-    });
+    );
 
-    const drivers = $("#risk-drivers");
+    const drivers =
+        $("#risk-drivers");
+
     if (drivers) {
         drivers.replaceChildren();
     }
 
-    setText("#stress-beta", "—");
-    setText("#stress-drawdown", "—");
-    setText("#stress-resilience", "—");
-    setText("#stress-confidence", "—");
-    setText("#stress-verdict", "—");
-    setText("#ai-stress-interpretation", "—");
+    setText(
+        "#stress-beta",
+        "—"
+    );
 
-    setText("#executive-summary", "—");
-    setText("#ai-market-structure", "—");
-    setText("#ai-liquidity", "—");
-    setText("#ai-contract-risk", "—");
-    setText("#ai-evidence-status", "—");
+    setText(
+        "#stress-drawdown",
+        "—"
+    );
 
-    const forensic = $("#forensic-cards");
+    setText(
+        "#stress-resilience",
+        "—"
+    );
+
+    setText(
+        "#stress-confidence",
+        "—"
+    );
+
+    setText(
+        "#stress-verdict",
+        "—"
+    );
+
+    setText(
+        "#ai-stress-interpretation",
+        "—"
+    );
+
+    setText(
+        "#executive-summary",
+        "—"
+    );
+
+    setText(
+        "#ai-market-structure",
+        "—"
+    );
+
+    setText(
+        "#ai-liquidity",
+        "—"
+    );
+
+    setText(
+        "#ai-contract-risk",
+        "—"
+    );
+
+    setText(
+        "#ai-evidence-status",
+        "—"
+    );
+
+    const forensic =
+        $("#forensic-cards");
+
     if (forensic) {
         forensic.replaceChildren();
     }
 
-    setText("#data-confidence", "—");
-    setText("#data-freshness", "—");
+    setText(
+        "#data-confidence",
+        "—"
+    );
+
+    setText(
+        "#data-freshness",
+        "—"
+    );
 
     renderMissingSignals([]);
 
@@ -1184,40 +2606,67 @@ function clearReportView() {
    FORM HANDLER
    ============================================================ */
 
-async function handleAnalysisSubmit(event) {
+async function handleAnalysisSubmit(
+    event
+) {
     event.preventDefault();
 
-    const input = $("#token-symbol");
+    const input =
+        $("#token-symbol");
+
     if (!input) return;
 
-    const symbol = input.value.trim().toUpperCase();
+    const symbol =
+        input.value
+            .trim()
+            .toUpperCase();
 
     if (!symbol) {
-        showAnalysisError("Enter a token symbol.");
+        showAnalysisError(
+            "Enter a token symbol."
+        );
+
         input.focus();
         return;
     }
 
-    if (!/^[A-Z0-9]{2,15}$/.test(symbol)) {
-        showAnalysisError("Enter a valid token symbol.");
+    if (
+        !/^[A-Z0-9]{2,15}$/.test(
+            symbol
+        )
+    ) {
+        showAnalysisError(
+            "Enter a valid token symbol."
+        );
+
         input.focus();
         return;
     }
 
-    const button = $("#analyze-button");
+    const button =
+        $("#analyze-button");
 
     if (button) {
         button.disabled = true;
-        button.dataset.originalText = button.textContent;
-        button.textContent = "Analyzing…";
+
+        button.dataset.originalText =
+            button.textContent;
+
+        button.textContent =
+            "Analyzing…";
     }
 
     try {
-        await runAnalysis(symbol);
+        await runAnalysis(
+            symbol
+        );
     } finally {
         if (button) {
             button.disabled = false;
-            button.textContent = button.dataset.originalText || "Analyze";
+
+            button.textContent =
+                button.dataset.originalText ||
+                "Analyze";
         }
     }
 }
@@ -1230,7 +2679,8 @@ async function handleAnalysisSubmit(event) {
 async function initializeDashboard() {
     consumeQueryToken();
 
-    state.token = getTokenFromStorage();
+    state.token =
+        getTokenFromStorage();
 
     if (!state.token) {
         redirectToHome();
@@ -1241,13 +2691,21 @@ async function initializeDashboard() {
 }
 
 function initializeIndexPage() {
-    const googleLinks = $all('a[href="/api/auth/google"]');
+    const googleLinks =
+        $all(
+            'a[href="/api/auth/google"]'
+        );
 
-    googleLinks.forEach((link) => {
-        link.addEventListener("click", () => {
-            clearAnalysisError();
-        });
-    });
+    googleLinks.forEach(
+        (link) => {
+            link.addEventListener(
+                "click",
+                () => {
+                    clearAnalysisError();
+                }
+            );
+        }
+    );
 }
 
 
@@ -1256,40 +2714,113 @@ function initializeIndexPage() {
    ============================================================ */
 
 function normalizeSeverity(value) {
-    if (value === null || value === undefined || value === "") {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
         return "Unavailable";
     }
 
-    const text = String(value).trim().toLowerCase();
+    const text =
+        String(value)
+            .trim()
+            .toLowerCase();
 
-    if (text.includes("critical")) return "Critical";
-    if (text.includes("high") || text.includes("elevated")) return "High";
-    if (text.includes("moderate") || text.includes("medium")) return "Moderate";
-    if (text.includes("low") || text.includes("minimal")) return "Low";
-    if (text.includes("unavailable")) return "Unavailable";
+    if (
+        text.includes("critical")
+    ) {
+        return "Critical";
+    }
+
+    if (
+        text.includes("high") ||
+        text.includes("elevated")
+    ) {
+        return "High";
+    }
+
+    if (
+        text.includes("moderate") ||
+        text.includes("medium")
+    ) {
+        return "Moderate";
+    }
+
+    if (
+        text.includes("low") ||
+        text.includes("minimal")
+    ) {
+        return "Low";
+    }
+
+    if (
+        text.includes("unavailable")
+    ) {
+        return "Unavailable";
+    }
 
     return String(value);
 }
 
-function severityClass(severity) {
-    const normalized = normalizeSeverity(severity).toLowerCase();
+function severityClass(
+    severity
+) {
+    const normalized =
+        normalizeSeverity(
+            severity
+        ).toLowerCase();
 
-    if (normalized === "critical") return "risk-critical";
-    if (normalized === "high") return "risk-high";
-    if (normalized === "moderate") return "risk-moderate";
-    if (normalized === "low") return "risk-low";
+    if (
+        normalized ===
+        "critical"
+    ) {
+        return "risk-critical";
+    }
+
+    if (
+        normalized === "high"
+    ) {
+        return "risk-high";
+    }
+
+    if (
+        normalized === "moderate"
+    ) {
+        return "risk-moderate";
+    }
+
+    if (
+        normalized === "low"
+    ) {
+        return "risk-low";
+    }
 
     return "";
 }
 
-function applyRiskClass(element, severity) {
+function applyRiskClass(
+    element,
+    severity
+) {
     if (!element) return;
 
-    element.classList.remove("risk-low", "risk-moderate", "risk-high", "risk-critical");
+    element.classList.remove(
+        "risk-low",
+        "risk-moderate",
+        "risk-high",
+        "risk-critical"
+    );
 
-    const className = severityClass(severity);
+    const className =
+        severityClass(
+            severity
+        );
+
     if (className) {
-        element.classList.add(className);
+        element.classList.add(
+            className
+        );
     }
 }
 
@@ -1298,19 +2829,39 @@ function applyRiskClass(element, severity) {
    RISK SCORE BAR
    ============================================================ */
 
-function updateScoreBar(bar, score) {
+function updateScoreBar(
+    bar,
+    score
+) {
     if (!bar) return;
 
-    const numericScore = clampScore(score);
+    const numericScore =
+        clampScore(score);
 
-    if (numericScore === null) {
-        bar.style.width = "0%";
-        bar.removeAttribute("aria-valuenow");
+    if (
+        numericScore === null
+    ) {
+        bar.style.width =
+            "0%";
+
+        bar.removeAttribute(
+            "aria-valuenow"
+        );
+
         return;
     }
 
-    bar.style.width = `${numericScore}%`;
-    bar.setAttribute("aria-valuenow", String(Math.round(numericScore)));
+    bar.style.width =
+        `${numericScore}%`;
+
+    bar.setAttribute(
+        "aria-valuenow",
+        String(
+            Math.round(
+                numericScore
+            )
+        )
+    );
 }
 
 
@@ -1319,83 +2870,188 @@ function updateScoreBar(bar, score) {
    ============================================================ */
 
 function renderMarket(report) {
-    const market = getMarket(report);
-    const asset = report?.asset || {};
+    const market =
+        getMarket(report);
 
-    const price = firstDefined(
-        market.price,
-        market.current_price_usd,
-        market.price_usd,
-        market.current_price
+    const asset =
+        isPlainObject(
+            report?.asset
+        )
+            ? report.asset
+            : {};
+
+    const price =
+        firstDefined(
+            market.price,
+            market.current_price_usd,
+            market.price_usd,
+            market.current_price
+        );
+
+    const change24 =
+        firstDefined(
+            market.price_change_24h_pct,
+            market.change_24h_pct,
+            market.price_change_24h,
+            market.change_24h
+        );
+
+    const change7d =
+        firstDefined(
+            market.price_change_7d_pct,
+            market.change_7d_pct,
+            market.price_change_7d,
+            market.change_7d
+        );
+
+    const high24 =
+        firstDefined(
+            market.high_24h,
+            market.high_24h_usd,
+            market.highPrice,
+            market.high
+        );
+
+    const low24 =
+        firstDefined(
+            market.low_24h,
+            market.low_24h_usd,
+            market.lowPrice,
+            market.low
+        );
+
+    const volume =
+        firstDefined(
+            market.volume_24h,
+            market.volume_24h_usd,
+            market.quoteVolume,
+            market.volume
+        );
+
+    const marketCap =
+        firstDefined(
+            market.market_cap,
+            market.market_cap_usd
+        );
+
+    const source =
+        normalizeSource(
+            firstDefined(
+                market.source,
+                market.provider,
+                market.data_source
+            )
+        );
+
+    const timestamp =
+        firstDefined(
+            market.timestamp,
+            market.updated_at,
+            market.fetched_at,
+            market.last_updated
+        );
+
+    setText(
+        "#report-token",
+        firstDefined(
+            asset.symbol,
+            report?.token_symbol,
+            report?.symbol
+        )
     );
 
-    const change24 = firstDefined(
-        market.price_change_24h_pct,
-        market.change_24h_pct,
-        market.price_change_24h,
-        market.change_24h
+    setText(
+        "#report-price",
+        formatUsd(price)
     );
 
-    const change7d = firstDefined(
-        market.price_change_7d_pct,
-        market.change_7d_pct,
-        market.price_change_7d,
-        market.change_7d
+    setText(
+        "#report-change",
+        formatPercent(change24)
     );
 
-    const high24 = firstDefined(
-        market.high_24h,
-        market.high_24h_usd,
-        market.highPrice,
-        market.high
+    setText(
+        "#report-volume",
+        formatUsd(volume)
     );
 
-    const low24 = firstDefined(
-        market.low_24h,
-        market.low_24h_usd,
-        market.lowPrice,
-        market.low
+    setText(
+        "#report-market-cap",
+        formatUsd(marketCap)
     );
 
-    const volume = firstDefined(
-        market.volume_24h,
-        market.volume_24h_usd,
-        market.quoteVolume,
-        market.volume
+    setText(
+        "#report-change-7d",
+        formatPercent(change7d)
     );
 
-    const marketCap = firstDefined(market.market_cap, market.market_cap_usd);
-    const source = firstDefined(market.source, "Backend market feed");
-    const timestamp = firstDefined(market.timestamp, market.updated_at);
+    setText(
+        "#report-high",
+        formatUsd(high24)
+    );
 
-    setText("#report-token", firstDefined(asset.symbol, report.token_symbol));
-    setText("#report-price", formatUsd(price));
-    setText("#report-change", formatPercent(change24));
-    setText("#report-volume", formatUsd(volume));
-    setText("#report-market-cap", formatUsd(marketCap));
+    setText(
+        "#report-low",
+        formatUsd(low24)
+    );
 
-    setText("#report-change-7d", formatPercent(change7d));
-    setText("#report-high", formatUsd(high24));
-    setText("#report-low", formatUsd(low24));
+    /*
+     * IMPORTANT:
+     * Report market data is NOT proof that
+     * the live endpoint just succeeded.
+     *
+     * Therefore we do not mark this "Live"
+     * here. refreshLiveMarket() owns live
+     * status.
+     */
+    setText(
+        "#market-live-status",
+        "Report market snapshot"
+    );
 
-    const changeElement = $("#report-change");
-
-    if (changeElement) {
-        changeElement.classList.remove("positive", "negative");
-
-        const numericChange = Number(change24);
-        if (Number.isFinite(numericChange)) {
-            changeElement.classList.add(numericChange >= 0 ? "positive" : "negative");
-        }
-    }
-
-    setText("#market-live-status", "Live • Backend feed");
     setText(
         "#market-updated",
-        timestamp ? formatRelativeTime(timestamp) : "Updated now"
+        timestamp
+            ? formatRelativeTime(
+                timestamp
+            )
+            : "Report timestamp unavailable"
     );
-    setText("#data-source", firstDefined(source, "Backend market feed"));
-    setText("#market-source", firstDefined(source, "Backend market feed"));
+
+    setText(
+        "#data-source",
+        source
+    );
+
+    setText(
+        "#market-source",
+        source
+    );
+
+    const changeElement =
+        $("#report-change");
+
+    if (changeElement) {
+        changeElement.classList.remove(
+            "positive",
+            "negative"
+        );
+
+        const numericChange =
+            Number(change24);
+
+        if (
+            Number.isFinite(
+                numericChange
+            )
+        ) {
+            changeElement.classList.add(
+                numericChange >= 0
+                    ? "positive"
+                    : "negative"
+            );
+        }
+    }
 }
 
 
@@ -1403,44 +3059,172 @@ function renderMarket(report) {
    MAIN RISK PROFILE
    ============================================================ */
 
-function renderRiskProfile(report) {
-    const risk = getRiskProfile(report);
+function renderRiskProfile(
+    report
+) {
+    const risk =
+        getRiskProfile(report);
 
-    const compositeScore = firstDefined(risk.composite_score, report.risk_score);
-    const rawLabel = firstDefined(risk.label, report.risk_label);
-    const label = normalizeSeverity(rawLabel);
-    const confidence = firstDefined(risk.confidence, report.risk_confidence);
+    const compositeScore =
+        firstDefined(
+            risk.composite_score,
+            risk.score,
+            report.risk_score
+        );
+
+    const rawLabel =
+        firstDefined(
+            risk.label,
+            risk.severity,
+            report.risk_label,
+            report.risk_severity
+        );
+
+    const label =
+        normalizeSeverity(
+            rawLabel
+        );
+
+    const confidence =
+        firstDefined(
+            risk.confidence,
+            report.risk_confidence
+        );
 
     setText(
         "#report-risk-score",
-        compositeScore !== null ? `${formatScore(compositeScore)}/100` : "—"
+        compositeScore !== null
+            ? `${formatScore(
+                compositeScore
+            )}/100`
+            : "—"
     );
 
-    setText("#report-risk-label", label);
+    setText(
+        "#report-risk-label",
+        label
+    );
 
-    setText("#report-outlook", firstDefined(report.outlook, report.risk_label, risk.label));
+    setText(
+        "#report-outlook",
+        firstDefined(
+            report.outlook,
+            report.trend,
+            report.risk_label,
+            risk.label
+        )
+    );
 
-    setText("#report-risk-confidence", formatConfidence(confidence));
+    setText(
+        "#report-risk-confidence",
+        formatConfidence(
+            confidence
+        )
+    );
 
-    applyRiskClass($("#report-risk-score"), rawLabel);
-    applyRiskClass($("#report-risk-label"), rawLabel);
-    applyRiskClass($("#report-outlook"), report.outlook || rawLabel);
+    applyRiskClass(
+        $("#report-risk-score"),
+        rawLabel
+    );
 
-    renderPillar("volatility", getPillar(report, "volatility"));
-    renderPillar("liquidity", getPillar(report, "liquidity"));
+    applyRiskClass(
+        $("#report-risk-label"),
+        rawLabel
+    );
 
-    const marketSensitivity = getPillar(report, "market_sensitivity");
-    renderPillar("market-sensitivity", marketSensitivity);
+    applyRiskClass(
+        $("#report-outlook"),
+        firstDefined(
+            report.outlook,
+            rawLabel
+        )
+    );
 
-    const structural = getPillar(report, "structural");
-    renderPillar("structural", structural);
+    /*
+     * Always render all pillars.
+     *
+     * Missing pillars are explicitly
+     * cleared instead of leaving old
+     * values on screen.
+     */
+    renderPillar(
+        "volatility",
+        getPillar(
+            report,
+            "volatility"
+        )
+    );
 
-    renderPillar("composite", {
-        score: compositeScore,
-        label: rawLabel,
-        confidence: confidence,
-        detail: "Combined evidence-based risk score."
-    });
+    renderPillar(
+        "liquidity",
+        getPillar(
+            report,
+            "liquidity"
+        )
+    );
+
+    const marketSensitivity =
+        firstDefined(
+            getPillars(report)
+                .market_sensitivity,
+            getPillars(report)
+                .marketSensitivity,
+            getPillars(report)
+                ["market-sensitivity"]
+        );
+
+    renderPillar(
+        "market-sensitivity",
+        marketSensitivity || {}
+    );
+
+    renderPillar(
+        "structural",
+        firstDefined(
+            getPillar(
+                report,
+                "structural"
+            ),
+            getPillar(
+                report,
+                "contract"
+            )
+        )
+    );
+
+    renderPillar(
+        "composite",
+        {
+            score:
+                compositeScore,
+            label:
+                rawLabel,
+            confidence:
+                confidence,
+            detail:
+                "Combined evidence-based risk score."
+        }
+    );
+
+    /*
+     * If your HTML has a separate
+     * contract pillar, render it too.
+     */
+    const contract =
+        getPillar(
+            report,
+            "contract"
+        );
+
+    if (
+        Object.keys(contract)
+            .length
+    ) {
+        renderPillar(
+            "contract",
+            contract
+        );
+    }
 }
 
 
@@ -1448,33 +3232,114 @@ function renderRiskProfile(report) {
    RISK PILLARS
    ============================================================ */
 
-function renderPillar(name, pillar) {
-    if (!pillar || typeof pillar !== "object") return;
+function renderPillar(
+    name,
+    pillar
+) {
+    const safePillar =
+        isPlainObject(pillar)
+            ? pillar
+            : {};
 
-    const score = pillar.score;
-    const label = normalizeSeverity(pillar.label);
+    const score =
+        firstDefined(
+            safePillar.score,
+            safePillar.risk_score,
+            safePillar.value
+        );
 
-    const valueElement = $(`#pillar-${name}-value`);
-    const barElement = $(`#pillar-${name}-bar`);
-    const detailElement = $(`#pillar-${name}-detail`);
+    const label =
+        firstDefined(
+            safePillar.label,
+            safePillar.severity
+        );
 
-    if (valueElement) {
-        if (score === null || score === undefined || score === "") {
-            valueElement.textContent = "N/A";
-        } else {
-            valueElement.textContent = `${formatScore(score)}/100`;
+    const valueElement =
+        $(`#pillar-${name}-value`);
+
+    const barElement =
+        $(`#pillar-${name}-bar`);
+
+    const detailElement =
+        $(`#pillar-${name}-detail`);
+
+    /*
+     * CRITICAL FIX:
+     * Clear every pillar first.
+     *
+     * Without this, if report #1 has
+     * liquidity and report #2 doesn't,
+     * report #1's liquidity score remains
+     * visible.
+     */
+    if (
+        score === null ||
+        score === undefined ||
+        score === ""
+    ) {
+        if (valueElement) {
+            valueElement.textContent =
+                "N/A";
+
+            applyRiskClass(
+                valueElement,
+                null
+            );
         }
 
-        applyRiskClass(valueElement, pillar.label);
+        if (barElement) {
+            updateScoreBar(
+                barElement,
+                null
+            );
+
+            applyRiskClass(
+                barElement,
+                null
+            );
+        }
+
+        if (detailElement) {
+            detailElement.textContent =
+                buildPillarDetail(
+                    name,
+                    safePillar
+                );
+        }
+
+        return;
+    }
+
+    if (valueElement) {
+        valueElement.textContent =
+            `${formatScore(
+                score
+            )}/100`;
+
+        applyRiskClass(
+            valueElement,
+            label
+        );
     }
 
     if (barElement) {
-        updateScoreBar(barElement, score);
-        applyRiskClass(barElement, pillar.label);
+        updateScoreBar(
+            barElement,
+            score
+        );
+
+        applyRiskClass(
+            barElement,
+            label
+        );
     }
 
     if (detailElement) {
-        detailElement.textContent = buildPillarDetail(name, pillar);
+        detailElement.textContent =
+            buildPillarDetail(
+                name,
+                safePillar
+            );
     }
 }
 
@@ -1483,57 +3348,124 @@ function renderPillar(name, pillar) {
    PILLAR DETAIL
    ============================================================ */
 
-function buildPillarDetail(name, pillar) {
-    if (!pillar || typeof pillar !== "object") {
-        return firstDefined(
-            name && generatePillarFallbackDetail(name, null),
+function buildPillarDetail(
+    name,
+    pillar
+) {
+    if (
+        !isPlainObject(pillar)
+    ) {
+        return (
+            generatePillarFallbackDetail(
+                name,
+                null
+            ) ||
             "Signal unavailable."
         );
     }
 
-    if (pillar.detail !== null && pillar.detail !== undefined && pillar.detail !== "") {
-        return String(pillar.detail);
+    const detail =
+        firstDefined(
+            pillar.detail,
+            pillar.description,
+            pillar.reason,
+            pillar.interpretation
+        );
+
+    if (detail !== null) {
+        return String(detail);
     }
 
-    if (pillar.score === null || pillar.score === undefined) {
+    const score =
+        firstDefined(
+            pillar.score,
+            pillar.risk_score,
+            pillar.value
+        );
+
+    if (
+        score === null ||
+        score === undefined
+    ) {
         return firstDefined(
             pillar.label,
-            generatePillarFallbackDetail(name, null),
+            pillar.severity,
+            generatePillarFallbackDetail(
+                name,
+                null
+            ),
             "Signal unavailable."
         );
     }
 
-    return generatePillarFallbackDetail(name, pillar.score);
+    return generatePillarFallbackDetail(
+        name,
+        score
+    );
 }
 
-function generatePillarFallbackDetail(name, score) {
+function generatePillarFallbackDetail(
+    name,
+    score
+) {
     const descriptions = {
-        volatility: "Volatility risk contribution.",
-        liquidity: "Liquidity and exit-risk contribution.",
-        "market-sensitivity": "Market sensitivity contribution.",
-        market_sensitivity: "Market sensitivity contribution.",
-        structural: "Structural risk contribution.",
-        contract: "Structural risk contribution.",
-        composite: "Combined evidence-based risk score."
+        volatility:
+            "Volatility risk contribution.",
+
+        liquidity:
+            "Liquidity and exit-risk contribution.",
+
+        "market-sensitivity":
+            "Market sensitivity contribution.",
+
+        market_sensitivity:
+            "Market sensitivity contribution.",
+
+        structural:
+            "Structural risk contribution.",
+
+        contract:
+            "Contract/security risk contribution.",
+
+        composite:
+            "Combined evidence-based risk score."
     };
 
     const missingDescriptions = {
         liquidity:
             "Liquidity signal unavailable — no volume or market-cap data to estimate exit risk.",
+
         "market-sensitivity":
             "Market sensitivity signal unavailable — no BTC beta could be calculated.",
+
         market_sensitivity:
             "Market sensitivity signal unavailable — no BTC beta could be calculated.",
-        volatility: "Volatility signal unavailable — insufficient price history.",
-        structural: "Structural signal unavailable — no contract/security data.",
-        contract: "Structural signal unavailable — no contract/security data."
+
+        volatility:
+            "Volatility signal unavailable — insufficient price history.",
+
+        structural:
+            "Structural signal unavailable — no contract/security data.",
+
+        contract:
+            "Contract/security signal unavailable — no contract/security data."
     };
 
-    if (score === null || score === undefined) {
-        return missingDescriptions[name] || descriptions[name] || "Signal unavailable.";
+    if (
+        score === null ||
+        score === undefined
+    ) {
+        return (
+            missingDescriptions[name] ||
+            descriptions[name] ||
+            "Signal unavailable."
+        );
     }
 
-    return descriptions[name] || "Risk contribution.";
+    return (
+        descriptions[name] ||
+        "Risk contribution."
+    );
 }
 
 
@@ -1541,44 +3473,126 @@ function generatePillarFallbackDetail(name, score) {
    RISK DRIVERS
    ============================================================ */
 
-function renderRiskDrivers(report) {
-    const container = $("#risk-drivers");
+function renderRiskDrivers(
+    report
+) {
+    const container =
+        $("#risk-drivers");
+
     if (!container) return;
 
     container.replaceChildren();
 
-    const drivers = Array.isArray(report?.risk_drivers) ? report.risk_drivers : [];
+    const drivers =
+        Array.isArray(
+            report?.risk_drivers
+        )
+            ? report.risk_drivers
+            : [];
 
     if (!drivers.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty-state";
-        empty.textContent = "No material risk drivers were returned.";
-        container.appendChild(empty);
+        const empty =
+            document.createElement(
+                "div"
+            );
+
+        empty.className =
+            "empty-state";
+
+        empty.textContent =
+            "No material risk drivers were returned.";
+
+        container.appendChild(
+            empty
+        );
+
         return;
     }
 
-    drivers.forEach((driver, index) => {
-        const card = document.createElement("article");
-        card.className = "risk-driver-card";
+    drivers.forEach(
+        (driver, index) => {
+            const safeDriver =
+                isPlainObject(
+                    driver
+                )
+                    ? driver
+                    : {};
 
-        const heading = document.createElement("h4");
-        const badge = document.createElement("span");
-        const body = document.createElement("p");
+            const card =
+                document.createElement(
+                    "article"
+                );
 
-        heading.textContent = firstDefined(driver?.title, `Risk driver ${index + 1}`);
+            card.className =
+                "risk-driver-card";
 
-        badge.textContent = normalizeSeverity(driver?.severity);
-        badge.className = "risk-badge";
-        applyRiskClass(badge, driver?.severity);
+            const heading =
+                document.createElement(
+                    "h4"
+                );
 
-        body.textContent = firstDefined(driver?.detail, "No additional detail was provided.");
+            const badge =
+                document.createElement(
+                    "span"
+                );
 
-        card.appendChild(heading);
-        card.appendChild(badge);
-        card.appendChild(body);
+            const body =
+                document.createElement(
+                    "p"
+                );
 
-        container.appendChild(card);
-    });
+            heading.textContent =
+                firstDefined(
+                    safeDriver.title,
+                    safeDriver.name,
+                    `Risk driver ${
+                        index + 1
+                    }`
+                );
+
+            badge.textContent =
+                normalizeSeverity(
+                    firstDefined(
+                        safeDriver.severity,
+                        safeDriver.label
+                    )
+                );
+
+            badge.className =
+                "risk-badge";
+
+            applyRiskClass(
+                badge,
+                firstDefined(
+                    safeDriver.severity,
+                    safeDriver.label
+                )
+            );
+
+            body.textContent =
+                firstDefined(
+                    safeDriver.detail,
+                    safeDriver.description,
+                    "No additional detail was provided."
+                );
+
+            card.appendChild(
+                heading
+            );
+
+            card.appendChild(
+                badge
+            );
+
+            card.appendChild(
+                body
+            );
+
+            container.appendChild(
+                card
+            );
+        }
+    );
 }
 
 
@@ -1586,69 +3600,122 @@ function renderRiskDrivers(report) {
    STRESS TEST
    ============================================================ */
 
-function getExpectedDrawdown(stress) {
-    const stressObj = stress || {};
+function getExpectedDrawdown(
+    stress
+) {
+    const stressObj =
+        isPlainObject(stress)
+            ? stress
+            : {};
 
-    const expected = firstDefined(
-        stressObj.expected_drawdown_pct,
-        stressObj.drawdown_pct,
-        stressObj.max_drawdown_pct,
-        stressObj.expected_downside_pct
-    );
+    const expected =
+        firstDefined(
+            stressObj.expected_drawdown_pct,
+            stressObj.drawdown_pct,
+            stressObj.max_drawdown_pct,
+            stressObj.expected_downside_pct
+        );
 
-    if (expected !== null) {
+    if (
+        expected !== null
+    ) {
         return expected;
     }
 
-    const base = stressObj.base_scenario || {};
+    const base =
+        stressObj.base_scenario;
 
-    if (typeof base === "object" && base !== null) {
-        const move = firstDefined(
-            base.estimated_asset_move_pct,
-            base.asset_move_pct,
-            base.drawdown_pct
-        );
+    if (
+        isPlainObject(base)
+    ) {
+        const move =
+            firstDefined(
+                base.estimated_asset_move_pct,
+                base.asset_move_pct,
+                base.drawdown_pct
+            );
 
-        const numericMove = Number(move);
+        const numericMove =
+            Number(move);
 
-        if (Number.isFinite(numericMove)) {
-            return Math.abs(numericMove);
+        if (
+            Number.isFinite(
+                numericMove
+            )
+        ) {
+            return Math.abs(
+                numericMove
+            );
         }
     }
 
     return null;
 }
 
-function getResilienceLabel(stress) {
-    const stressObj = stress || {};
+function getResilienceLabel(
+    stress
+) {
+    const stressObj =
+        isPlainObject(stress)
+            ? stress
+            : {};
 
-    const label = firstDefined(
-        stressObj.resilience_label,
-        stressObj.resilience,
-        stressObj.resilience_status
-    );
+    const label =
+        firstDefined(
+            stressObj.resilience_label,
+            stressObj.resilience,
+            stressObj.resilience_status
+        );
 
     if (label !== null) {
         return label;
     }
 
-    const base = stressObj.base_scenario || {};
+    const base =
+        stressObj.base_scenario;
 
-    const rawScore = firstDefined(base.resilience_score, stressObj.resilience_score);
-    const score = Number(rawScore);
+    const rawScore =
+        firstDefined(
+            isPlainObject(base)
+                ? base.resilience_score
+                : null,
 
-    if (Number.isFinite(score)) {
-        if (score >= 65) return "Resilient";
-        if (score >= 40) return "Moderate";
+            stressObj.resilience_score
+        );
+
+    const score =
+        Number(rawScore);
+
+    if (
+        Number.isFinite(score)
+    ) {
+        if (score >= 65) {
+            return "Resilient";
+        }
+
+        if (score >= 40) {
+            return "Moderate";
+        }
+
         return "Fragile";
     }
 
     return null;
 }
 
-function getStressConfidence(report, stress) {
-    const stressObj = stress || {};
-    const reportObj = report || {};
+function getStressConfidence(
+    report,
+    stress
+) {
+    const stressObj =
+        isPlainObject(stress)
+            ? stress
+            : {};
+
+    const reportObj =
+        isPlainObject(report)
+            ? report
+            : {};
 
     return firstDefined(
         stressObj.confidence,
@@ -1658,35 +3725,55 @@ function getStressConfidence(report, stress) {
     );
 }
 
-function renderStressTest(report) {
-    const stress = getStress(report);
+function renderStressTest(
+    report
+) {
+    const stress =
+        getStress(report);
 
-    /*
-     * NOTE: previously this called setText("#stress-beta", ...)
-     * TWICE — once with just stress.beta, then immediately
-     * overwritten by the fuller fallback chain below. The dead
-     * first call has been removed.
-     */
+    const beta =
+        firstDefined(
+            stress.beta,
+            stress.beta_to_btc,
+            report?.quantitative?.beta?.beta,
+            report?.quantitative?.beta
+        );
+
     setText(
         "#stress-beta",
         formatNumber(
-            firstDefined(
-                stress.beta,
-                stress.beta_to_btc,
-                report?.quantitative?.beta?.beta,
-                report?.quantitative?.beta
-            ),
+            beta,
             3
         )
     );
 
-    setText("#stress-drawdown", formatPercent(getExpectedDrawdown(stress)));
+    setText(
+        "#stress-drawdown",
+        formatPercent(
+            getExpectedDrawdown(
+                stress
+            )
+        )
+    );
 
-    setText("#stress-resilience", getResilienceLabel(stress));
+    const resilience =
+        getResilienceLabel(
+            stress
+        );
+
+    setText(
+        "#stress-resilience",
+        resilience
+    );
 
     setText(
         "#stress-confidence",
-        formatConfidence(getStressConfidence(report, stress))
+        formatConfidence(
+            getStressConfidence(
+                report,
+                stress
+            )
+        )
     );
 
     setText(
@@ -1699,9 +3786,19 @@ function renderStressTest(report) {
         )
     );
 
-    applyRiskClass($("#stress-resilience"), stress.resilience_label);
+    applyRiskClass(
+        $("#stress-resilience"),
+        firstDefined(
+            stress.resilience_label,
+            resilience
+        )
+    );
 
-    setText("#ai-stress-interpretation", getAI(report).stress_interpretation);
+    setText(
+        "#ai-stress-interpretation",
+        getAI(report)
+            .stress_interpretation
+    );
 }
 
 
@@ -1710,13 +3807,22 @@ function renderStressTest(report) {
    ============================================================ */
 
 function renderAI(report) {
-    const ai = getAI(report);
-    const security = getSecurity(report);
-    const quality = getDataQuality(report);
+    const ai =
+        getAI(report);
+
+    const security =
+        getSecurity(report);
+
+    const quality =
+        getDataQuality(report);
 
     setText(
         "#executive-summary",
-        firstDefined(ai.executive_summary, "No executive summary was returned.")
+        firstDefined(
+            ai.executive_summary,
+            ai.summary,
+            "No executive summary was returned."
+        )
     );
 
     setText(
@@ -1729,45 +3835,115 @@ function renderAI(report) {
         )
     );
 
-    setText("#ai-liquidity", firstDefined(ai.watch_next, "No monitoring guidance returned."));
+    setText(
+        "#ai-liquidity",
+        firstDefined(
+            ai.watch_next,
+            "No monitoring guidance returned."
+        )
+    );
 
-    const securityFlags = Array.isArray(security.red_flags) ? security.red_flags : [];
+    const securityFlags =
+        Array.isArray(
+            security.red_flags
+        )
+            ? security.red_flags
+            : [];
 
-    let securityText = firstDefined(security.status, "Unavailable");
+    let securityText =
+        firstDefined(
+            security.status,
+            security.label,
+            "Unavailable"
+        );
 
-    if (securityFlags.length) {
-        securityText = securityFlags.map((flag) => String(flag)).join(" • ");
+    if (
+        securityFlags.length
+    ) {
+        securityText =
+            securityFlags
+                .map(
+                    (flag) =>
+                        String(flag)
+                )
+                .join(" • ");
     }
 
-    setText("#ai-contract-risk", securityText);
-    applyRiskClass($("#ai-contract-risk"), security.status);
+    setText(
+        "#ai-contract-risk",
+        securityText
+    );
 
-    const missingSignals = Array.isArray(quality.missing_signals)
-        ? quality.missing_signals
-        : [];
+    applyRiskClass(
+        $("#ai-contract-risk"),
+        security.status
+    );
 
-    const hasExecutiveSummary = Boolean(ai.executive_summary);
+    const missingSignals =
+        Array.isArray(
+            quality.missing_signals
+        )
+            ? quality.missing_signals
+            : [];
+
+    const hasExecutiveSummary =
+        Boolean(
+            ai.executive_summary
+        );
 
     let evidenceStatus;
 
     if (!hasExecutiveSummary) {
-        evidenceStatus = "Unavailable";
-    } else if (missingSignals.length === 0) {
-        evidenceStatus = "Complete backend report";
+        evidenceStatus =
+            "Unavailable";
+    } else if (
+        missingSignals.length === 0
+    ) {
+        evidenceStatus =
+            "Complete backend report";
     } else {
-        evidenceStatus = "Some signals unavailable";
+        evidenceStatus =
+            "Some signals unavailable";
     }
 
-    setText("#ai-evidence-status", evidenceStatus);
+    setText(
+        "#ai-evidence-status",
+        evidenceStatus
+    );
 
-    setText("#ai-risk-regime", ai.risk_regime);
-    setText("#ai-primary-risk-driver", ai.primary_risk_driver);
-    setText("#ai-what-changed", ai.what_changed);
-    setText("#ai-what-matters-now", ai.what_matters_now);
-    setText("#ai-watch-next", ai.watch_next);
-    setText("#ai-stress-interpretation", ai.stress_interpretation);
+    setText(
+        "#ai-risk-regime",
+        ai.risk_regime
+    );
 
-    renderForensicCards(report);
+    setText(
+        "#ai-primary-risk-driver",
+        ai.primary_risk_driver
+    );
+
+    setText(
+        "#ai-what-changed",
+        ai.what_changed
+    );
+
+    setText(
+        "#ai-what-matters-now",
+        ai.what_matters_now
+    );
+
+    setText(
+        "#ai-watch-next",
+        ai.watch_next
+    );
+
+    setText(
+        "#ai-stress-interpretation",
+        ai.stress_interpretation
+    );
+
+    renderForensicCards(
+        report
+    );
 }
 
 
@@ -1775,153 +3951,360 @@ function renderAI(report) {
    FORENSIC / INTELLIGENCE CARDS
    ============================================================ */
 
-function renderForensicCards(report) {
-    const container = $("#forensic-cards");
+function renderForensicCards(
+    report
+) {
+    const container =
+        $("#forensic-cards");
+
     if (!container) return;
 
     container.replaceChildren();
 
-    const ai = getAI(report);
+    const ai =
+        getAI(report);
 
     const cards = [
         {
-            title: "Primary risk driver",
-            value: firstDefined(ai.primary_risk_driver, "Not identified.")
+            title:
+                "Primary risk driver",
+
+            value:
+                firstDefined(
+                    ai.primary_risk_driver,
+                    "Not identified."
+                )
         },
+
         {
-            title: "What changed",
-            value: firstDefined(ai.what_changed, "No material change reported.")
+            title:
+                "What changed",
+
+            value:
+                firstDefined(
+                    ai.what_changed,
+                    "No material change reported."
+                )
         },
+
         {
-            title: "What matters now",
-            value: firstDefined(ai.what_matters_now, "No immediate interpretation available.")
+            title:
+                "What matters now",
+
+            value:
+                firstDefined(
+                    ai.what_matters_now,
+                    "No immediate interpretation available."
+                )
         },
+
         {
-            title: "Watch next",
-            value: firstDefined(ai.watch_next, "No monitoring signal returned.")
+            title:
+                "Watch next",
+
+            value:
+                firstDefined(
+                    ai.watch_next,
+                    "No monitoring signal returned."
+                )
         },
+
         {
-            title: "Stress interpretation",
-            value: firstDefined(ai.stress_interpretation, "No stress interpretation returned.")
+            title:
+                "Stress interpretation",
+
+            value:
+                firstDefined(
+                    ai.stress_interpretation,
+                    "No stress interpretation returned."
+                )
         }
     ];
 
-    cards.forEach((item) => {
-        const card = document.createElement("article");
-        card.className = "forensic-card";
+    cards.forEach(
+        (item) => {
+            const card =
+                document.createElement(
+                    "article"
+                );
 
-        const heading = document.createElement("h4");
-        const text = document.createElement("p");
+            card.className =
+                "forensic-card";
 
-        heading.textContent = item.title;
-        text.textContent = String(item.value);
+            const heading =
+                document.createElement(
+                    "h4"
+                );
 
-        card.appendChild(heading);
-        card.appendChild(text);
+            const text =
+                document.createElement(
+                    "p"
+                );
 
-        container.appendChild(card);
-    });
+            heading.textContent =
+                item.title;
+
+            text.textContent =
+                String(item.value);
+
+            card.appendChild(
+                heading
+            );
+
+            card.appendChild(
+                text
+            );
+
+            container.appendChild(
+                card
+            );
+        }
+    );
 }
+
+
 /* ============================================================
-   DATA QUALITY — Confidence & Missing Signals Renderer
+   DATA QUALITY
    ============================================================ */
 
-function renderDataQuality(report) {
-    const quality = getDataQuality(report);
-    const reportObj = report || {};
+function renderDataQuality(
+    report
+) {
+    const quality =
+        getDataQuality(report);
 
-    const confidence = firstDefined(
-        quality.confidence,
-        reportObj.risk_confidence,
-        reportObj.ai?.confidence,
-        reportObj.risk_profile?.confidence
+    const reportObj =
+        report || {};
+
+    const confidence =
+        firstDefined(
+            quality.confidence,
+            reportObj.risk_confidence,
+            reportObj.ai?.confidence,
+            reportObj.risk_profile?.confidence
+        );
+
+    setText(
+        "#data-confidence",
+        formatConfidence(
+            confidence
+        )
     );
 
-    setText("#data-confidence", formatConfidence(confidence));
+    const reportMarket =
+        getMarket(reportObj);
+
+    const source =
+        normalizeSource(
+            firstDefined(
+                reportMarket.source,
+                reportMarket.provider,
+                quality.source
+            )
+        );
 
     setText(
         "#market-source",
-        firstDefined(reportObj?.market?.source, quality.source, "Backend market feed")
+        source
     );
 
-    const timestamp = reportObj?.market?.timestamp;
+    /*
+     * Support all common timestamp names.
+     */
+    const timestamp =
+        firstDefined(
+            reportMarket.timestamp,
+            reportMarket.updated_at,
+            reportMarket.fetched_at,
+            reportMarket.last_updated,
 
-    setText("#data-freshness", timestamp ? formatRelativeTime(timestamp) : "Unknown");
+            quality.timestamp,
+            quality.updated_at,
+            quality.fetched_at,
 
-    renderMissingSignals(firstDefined(quality.missing_signals, quality.missing, []));
+            reportObj.generated_at,
+            reportObj.created_at,
+            reportObj.updated_at
+        );
+
+    setText(
+        "#data-freshness",
+        timestamp
+            ? formatRelativeTime(
+                timestamp
+            )
+            : "Unknown"
+    );
+
+    const missing =
+        firstDefined(
+            quality.missing_signals,
+            quality.missing,
+            []
+        );
+
+    renderMissingSignals(
+        missing
+    );
 }
 
 
 /* ============================================================
-   MISSING SIGNALS — Data Confidence Module
+   MISSING SIGNALS
    ============================================================ */
 
-function renderMissingSignals(missing) {
-    const container = $("#missing-signals");
+function renderMissingSignals(
+    missing
+) {
+    const container =
+        $("#missing-signals");
+
     if (!container) return;
 
     container.replaceChildren();
 
     let signals = [];
 
-    if (Array.isArray(missing)) {
-        signals = missing.filter(
-            (signal) => signal !== null && signal !== undefined && String(signal).trim() !== ""
-        );
-    } else if (typeof missing === "string" && missing.trim()) {
-        signals = [missing];
+    if (
+        Array.isArray(missing)
+    ) {
+        signals =
+            missing.filter(
+                (signal) =>
+                    signal !== null &&
+                    signal !== undefined &&
+                    String(signal)
+                        .trim() !== ""
+            );
+    } else if (
+        typeof missing ===
+        "string"
+    ) {
+        if (
+            missing.trim()
+        ) {
+            signals = [
+                missing
+            ];
+        }
     }
 
     if (!signals.length) {
-        const item = document.createElement("span");
-        item.className = "data-ok";
-        item.textContent = "All primary risk vectors verified.";
-        container.appendChild(item);
+        const item =
+            document.createElement(
+                "span"
+            );
+
+        item.className =
+            "data-ok";
+
+        item.textContent =
+            "All primary risk vectors verified.";
+
+        container.appendChild(
+            item
+        );
+
         return;
     }
 
-    signals.forEach((signal) => {
-        const item = document.createElement("span");
-        item.className = "missing-signal";
-        item.textContent = String(signal);
-        container.appendChild(item);
-    });
+    signals.forEach(
+        (signal) => {
+            const item =
+                document.createElement(
+                    "span"
+                );
+
+            item.className =
+                "missing-signal";
+
+            item.textContent =
+                String(signal);
+
+            container.appendChild(
+                item
+            );
+        }
+    );
 }
 
 
 /* ============================================================
-   COMPLETE REPORT RENDERER — Main DOM Rendering Pipeline
+   COMPLETE REPORT RENDERER
    ============================================================ */
 
-function renderReport(report) {
-    if (!report || typeof report !== "object") {
+function renderReport(
+    report
+) {
+    if (
+        !isRiskReport(report)
+    ) {
         clearReportView();
         return;
     }
 
-    console.log("Rendering CryptoRisk report:", report);
-
-    state.latestReport = report;
-
-    state.currentSymbol = firstDefined(
-        report?.asset?.symbol,
-        report?.token_symbol,
-        state.currentSymbol
+    console.log(
+        "Rendering CryptoRisk report:",
+        report
     );
 
-    renderMarket(report);
-    renderRiskProfile(report);
-    renderRiskDrivers(report);
-    renderStressTest(report);
-    renderAI(report);
-    renderDataQuality(report);
+    state.latestReport =
+        report;
+
+    state.currentSymbol =
+        normalizeSymbol(
+            firstDefined(
+                report?.asset?.symbol,
+                report?.token_symbol,
+                report?.symbol,
+                state.currentSymbol
+            )
+        );
+
+    renderMarket(
+        report
+    );
+
+    renderRiskProfile(
+        report
+    );
+
+    renderRiskDrivers(
+        report
+    );
+
+    renderStressTest(
+        report
+    );
+
+    renderAI(
+        report
+    );
+
+    renderDataQuality(
+        report
+    );
 
     updateCurrentReportDeleteButton();
 
-    if (report.generated_at) {
-        const generated = document.querySelector("[data-report-generated]");
-        if (generated) {
-            generated.textContent = formatDate(report.generated_at);
+    const generated =
+        firstDefined(
+            report.generated_at,
+            report.created_at,
+            report.updated_at
+        );
+
+    if (generated) {
+        const element =
+            document.querySelector(
+                "[data-report-generated]"
+            );
+
+        if (element) {
+            element.textContent =
+                formatDate(
+                    generated
+                );
         }
     }
 }
@@ -1932,10 +4315,13 @@ function renderReport(report) {
    ============================================================ */
 
 function updateCurrentReportDeleteButton() {
-    const button = $("#delete-current-report");
+    const button =
+        $("#delete-current-report");
+
     if (!button) return;
 
-    button.disabled = !state.currentReportId;
+    button.disabled =
+        !state.currentReportId;
 }
 
 
@@ -1943,94 +4329,267 @@ function updateCurrentReportDeleteButton() {
    HISTORY TABLE
    ============================================================ */
 
-function renderHistory(history) {
-    const tbody = $("#history-tbody");
+function renderHistory(
+    history
+) {
+    const tbody =
+        $("#history-tbody");
+
     if (!tbody) return;
 
     tbody.replaceChildren();
 
-    const records = Array.isArray(history) ? history : [];
+    const records =
+        Array.isArray(history)
+            ? history
+            : [];
 
-    setText("#history-count", String(records.length));
+    setText(
+        "#history-count",
+        String(records.length)
+    );
 
     if (!records.length) {
-        const row = document.createElement("tr");
-        const cell = document.createElement("td");
+        const row =
+            document.createElement(
+                "tr"
+            );
+
+        const cell =
+            document.createElement(
+                "td"
+            );
 
         cell.colSpan = 6;
-        cell.className = "empty-history";
-        cell.textContent = "No analyses yet.";
+        cell.className =
+            "empty-history";
 
-        row.appendChild(cell);
-        tbody.appendChild(row);
+        cell.textContent =
+            "No analyses yet.";
+
+        row.appendChild(
+            cell
+        );
+
+        tbody.appendChild(
+            row
+        );
+
         return;
     }
 
-    records.forEach((record) => {
-        const row = document.createElement("tr");
-        row.dataset.reportId = String(record.id);
+    records.forEach(
+        (record) => {
+            const safeRecord =
+                isPlainObject(record)
+                    ? record
+                    : {};
 
-        const assetCell = createHistoryCell(
-            firstDefined(record.token_symbol, record.asset?.symbol, record.symbol, "—")
-        );
+            const id =
+                firstDefined(
+                    safeRecord.id,
+                    safeRecord.analysis_id
+                );
 
-        const riskCell = document.createElement("td");
+            const row =
+                document.createElement(
+                    "tr"
+                );
 
-        const riskValue = firstDefined(record.risk_label, record.risk_severity, record.label);
-        const risk = normalizeSeverity(riskValue);
+            row.dataset.reportId =
+                String(
+                    id ?? ""
+                );
 
-        const riskBadge = document.createElement("span");
-        riskBadge.className = "risk-badge";
-        riskBadge.textContent = risk;
-        applyRiskClass(riskBadge, risk);
+            const assetCell =
+                createHistoryCell(
+                    firstDefined(
+                        safeRecord.token_symbol,
+                        safeRecord.asset?.symbol,
+                        safeRecord.symbol,
+                        "—"
+                    )
+                );
 
-        riskCell.appendChild(riskBadge);
+            const riskCell =
+                document.createElement(
+                    "td"
+                );
 
-        const outlookCell = createHistoryCell(firstDefined(record.outlook, record.trend, "—"));
+            const riskValue =
+                firstDefined(
+                    safeRecord.risk_label,
+                    safeRecord.risk_severity,
+                    safeRecord.label,
+                    safeRecord.severity
+                );
 
-        const score = firstDefined(record.risk_score, record.composite_score);
-        const scoreCell = createHistoryCell(
-            score !== null ? `${formatScore(score)}/100` : "—"
-        );
+            const risk =
+                normalizeSeverity(
+                    riskValue
+                );
 
-        const dateValue = firstDefined(record.created_at, record.timestamp, record.generated_at);
-        const dateCell = createHistoryCell(dateValue ? formatDate(dateValue) : "—");
+            const riskBadge =
+                document.createElement(
+                    "span"
+                );
 
-        const actionCell = document.createElement("td");
+            riskBadge.className =
+                "risk-badge";
 
-        const viewButton = document.createElement("button");
-        viewButton.type = "button";
-        viewButton.className = "history-view";
-        viewButton.textContent = "View";
-        viewButton.dataset.action = "view-history";
-        viewButton.dataset.id = String(record.id);
+            riskBadge.textContent =
+                risk;
 
-        const deleteButton = document.createElement("button");
-        deleteButton.type = "button";
-        deleteButton.className = "history-delete";
-        deleteButton.textContent = "Delete";
-        deleteButton.dataset.action = "delete-history";
-        deleteButton.dataset.id = String(record.id);
+            applyRiskClass(
+                riskBadge,
+                risk
+            );
 
-        actionCell.appendChild(viewButton);
-        actionCell.appendChild(deleteButton);
+            riskCell.appendChild(
+                riskBadge
+            );
 
-        row.appendChild(assetCell);
-        row.appendChild(riskCell);
-        row.appendChild(outlookCell);
-        row.appendChild(scoreCell);
-        row.appendChild(dateCell);
-        row.appendChild(actionCell);
+            const outlookCell =
+                createHistoryCell(
+                    firstDefined(
+                        safeRecord.outlook,
+                        safeRecord.trend,
+                        "—"
+                    )
+                );
 
-        tbody.appendChild(row);
-    });
+            const score =
+                firstDefined(
+                    safeRecord.risk_score,
+                    safeRecord.composite_score,
+                    safeRecord.risk_profile
+                        ?.composite_score
+                );
+
+            const scoreCell =
+                createHistoryCell(
+                    score !== null
+                        ? `${formatScore(
+                            score
+                        )}/100`
+                        : "—"
+                );
+
+            const dateValue =
+                firstDefined(
+                    safeRecord.created_at,
+                    safeRecord.timestamp,
+                    safeRecord.generated_at,
+                    safeRecord.updated_at
+                );
+
+            const dateCell =
+                createHistoryCell(
+                    dateValue
+                        ? formatDate(
+                            dateValue
+                        )
+                        : "—"
+                );
+
+            const actionCell =
+                document.createElement(
+                    "td"
+                );
+
+            const viewButton =
+                document.createElement(
+                    "button"
+                );
+
+            viewButton.type =
+                "button";
+
+            viewButton.className =
+                "history-view";
+
+            viewButton.textContent =
+                "View";
+
+            viewButton.dataset.action =
+                "view-history";
+
+            viewButton.dataset.id =
+                String(id ?? "");
+
+            const deleteButton =
+                document.createElement(
+                    "button"
+                );
+
+            deleteButton.type =
+                "button";
+
+            deleteButton.className =
+                "history-delete";
+
+            deleteButton.textContent =
+                "Delete";
+
+            deleteButton.dataset.action =
+                "delete-history";
+
+            deleteButton.dataset.id =
+                String(id ?? "");
+
+            actionCell.appendChild(
+                viewButton
+            );
+
+            actionCell.appendChild(
+                deleteButton
+            );
+
+            row.appendChild(
+                assetCell
+            );
+
+            row.appendChild(
+                riskCell
+            );
+
+            row.appendChild(
+                outlookCell
+            );
+
+            row.appendChild(
+                scoreCell
+            );
+
+            row.appendChild(
+                dateCell
+            );
+
+            row.appendChild(
+                actionCell
+            );
+
+            tbody.appendChild(
+                row
+            );
+        }
+    );
 }
 
-function createHistoryCell(value) {
-    const cell = document.createElement("td");
+function createHistoryCell(
+    value
+) {
+    const cell =
+        document.createElement(
+            "td"
+        );
 
     cell.textContent =
-        value === null || value === undefined || value === "" ? "—" : String(value);
+        value === null ||
+        value === undefined ||
+        value === ""
+            ? "—"
+            : String(value);
 
     return cell;
 }
@@ -2040,24 +4599,39 @@ function createHistoryCell(value) {
    HISTORY EVENT DELEGATION
    ============================================================ */
 
-function handleHistoryClick(event) {
-    const target = event.target.closest("[data-action]");
+function handleHistoryClick(
+    event
+) {
+    const target =
+        event.target.closest(
+            "[data-action]"
+        );
+
     if (!target) return;
 
-    const action = target.dataset.action;
-    const id = target.dataset.id;
+    const action =
+        target.dataset.action;
+
+    const id =
+        target.dataset.id;
 
     if (!id) return;
 
     event.preventDefault();
     event.stopPropagation();
 
-    if (action === "view-history") {
+    if (
+        action ===
+        "view-history"
+    ) {
         loadHistoryReport(id);
         return;
     }
 
-    if (action === "delete-history") {
+    if (
+        action ===
+        "delete-history"
+    ) {
         deleteReport(id);
     }
 }
@@ -2067,41 +4641,110 @@ function handleHistoryClick(event) {
    LOGIN / SIGNUP
    ============================================================ */
 
-async function handleAuthForm(event) {
-    const form = event.currentTarget;
+async function handleAuthForm(
+    event
+) {
+    const form =
+        event.currentTarget;
+
     event.preventDefault();
 
-    const action = form.dataset.auth;
+    const action =
+        form.dataset.auth;
 
-    if (action !== "login" && action !== "signup") return;
-
-    const email = form.querySelector("[name='email']")?.value?.trim();
-    const password = form.querySelector("[name='password']")?.value;
-    const username = form.querySelector("[name='username']")?.value?.trim();
-
-    if (!email || !password) {
-        showAnalysisError("Email and password are required.");
+    if (
+        action !== "login" &&
+        action !== "signup"
+    ) {
         return;
     }
 
-    const endpoint = action === "signup" ? "/api/auth/signup" : "/api/auth/login";
+    const email =
+        form.querySelector(
+            "[name='email']"
+        )?.value?.trim();
+
+    const password =
+        form.querySelector(
+            "[name='password']"
+        )?.value;
+
+    const username =
+        form.querySelector(
+            "[name='username']"
+        )?.value?.trim();
+
+    if (!email || !password) {
+        showAnalysisError(
+            "Email and password are required."
+        );
+
+        return;
+    }
+
+    if (
+        action === "signup" &&
+        !username
+    ) {
+        showAnalysisError(
+            "Username is required."
+        );
+
+        return;
+    }
+
+    const endpoint =
+        action === "signup"
+            ? "/api/auth/signup"
+            : "/api/auth/login";
 
     const body =
-        action === "signup" ? { username, email, password } : { email, password };
+        action === "signup"
+            ? {
+                username,
+                email,
+                password
+            }
+            : {
+                email,
+                password
+            };
 
     try {
-        const payload = await apiRequest(endpoint, { method: "POST", body });
+        const payload =
+            await apiRequest(
+                endpoint,
+                {
+                    method: "POST",
+                    body
+                }
+            );
 
-        const token = firstDefined(payload.token, payload.access_token);
+        const token =
+            firstDefined(
+                payload.token,
+                payload.access_token,
+                payload.data?.token,
+                payload.data?.access_token
+            );
 
         if (!token) {
-            throw new Error("Authentication succeeded but no session token was returned.");
+            throw new Error(
+                "Authentication succeeded but no session token was returned."
+            );
         }
 
-        saveToken(token);
-        window.location.href = "/dashboard";
+        saveToken(
+            token
+        );
+
+        window.location.href =
+            "/dashboard";
     } catch (error) {
-        showAnalysisError(error.message || "Authentication failed.");
+        showAnalysisError(
+            error.message ||
+            "Authentication failed."
+        );
     }
 }
 
@@ -2111,27 +4754,47 @@ async function handleAuthForm(event) {
    ============================================================ */
 
 function setupKeyboardShortcuts() {
-    document.addEventListener("keydown", (event) => {
-        if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) {
-            return;
+    document.addEventListener(
+        "keydown",
+        (event) => {
+            if (
+                event.key !== "/" ||
+                event.ctrlKey ||
+                event.metaKey ||
+                event.altKey
+            ) {
+                return;
+            }
+
+            const active =
+                document.activeElement;
+
+            const isTyping =
+                active &&
+                (
+                    active.tagName ===
+                        "INPUT" ||
+                    active.tagName ===
+                        "TEXTAREA" ||
+                    active.isContentEditable
+                );
+
+            if (isTyping) {
+                return;
+            }
+
+            const input =
+                $("#token-symbol");
+
+            if (!input) {
+                return;
+            }
+
+            event.preventDefault();
+
+            input.focus();
         }
-
-        const active = document.activeElement;
-
-        const isTyping =
-            active &&
-            (active.tagName === "INPUT" ||
-                active.tagName === "TEXTAREA" ||
-                active.isContentEditable);
-
-        if (isTyping) return;
-
-        const input = $("#token-symbol");
-        if (!input) return;
-
-        event.preventDefault();
-        input.focus();
-    });
+    );
 }
 
 
@@ -2140,16 +4803,26 @@ function setupKeyboardShortcuts() {
    ============================================================ */
 
 function setupVisibilityHandling() {
-    document.addEventListener("visibilitychange", () => {
-        if (document.hidden) {
-            stopLivePolling();
-            return;
-        }
+    document.addEventListener(
+        "visibilitychange",
+        () => {
+            if (
+                document.hidden
+            ) {
+                stopLivePolling();
+                return;
+            }
 
-        if (state.currentSymbol && state.token) {
-            startLivePolling(state.currentSymbol);
+            if (
+                state.currentSymbol &&
+                state.token
+            ) {
+                startLivePolling(
+                    state.currentSymbol
+                );
+            }
         }
-    });
+    );
 }
 
 
@@ -2157,9 +4830,26 @@ function setupVisibilityHandling() {
    BEFORE UNLOAD
    ============================================================ */
 
-window.addEventListener("beforeunload", () => {
-    stopLivePolling();
-});
+window.addEventListener(
+    "beforeunload",
+    () => {
+        stopLivePolling();
+
+        if (
+            typeof CursorPhysics !==
+            "undefined"
+        ) {
+            CursorPhysics.destroy();
+        }
+
+        if (
+            typeof MoneyMeteor !==
+            "undefined"
+        ) {
+            MoneyMeteor.destroy();
+        }
+    }
+);
 
 
 /* ============================================================
@@ -2170,162 +4860,496 @@ const AnalysisBeam = {
     container: null,
     canvas: null,
     ctx: null,
+
     particles: [],
+
     progress: 0,
     targetProgress: 0,
+
     isAnimating: false,
 
-    create() {
-        this.remove();
+    particleAnimationId: null,
+    removeTimer: null,
 
-        this.container = document.createElement('div');
-        this.container.className = 'analysis-beam-container';
+    create() {
+        /*
+         * Cancel any previous removal timer.
+         */
+        if (this.removeTimer) {
+            clearTimeout(
+                this.removeTimer
+            );
+
+            this.removeTimer = null;
+        }
+
+        /*
+         * Remove existing beam synchronously.
+         * This prevents an old setTimeout from
+         * deleting a newly-created beam.
+         */
+        this.remove(true);
+
+        this.progress = 0;
+        this.targetProgress = 0;
+        this.isAnimating = false;
+
+        this.container =
+            document.createElement(
+                "div"
+            );
+
+        this.container.className =
+            "analysis-beam-container";
+
         this.container.innerHTML = `
             <div class="analysis-beam-overlay"></div>
+
             <div class="analysis-beam-content">
                 <div class="beam-percentage-display">0%</div>
+
                 <div class="beam-progress-track">
                     <div class="beam-progress-fill"></div>
                     <div class="beam-currency-stream"></div>
                 </div>
-                <div class="beam-status-text">Initializing Analysis...</div>
+
+                <div class="beam-status-text">
+                    Initializing Analysis...
+                </div>
+
                 <div class="beam-particles-canvas"></div>
             </div>
         `;
 
-        document.body.appendChild(this.container);
+        document.body.appendChild(
+            this.container
+        );
 
-        this.canvas = document.createElement('canvas');
-        this.canvas.className = 'beam-particle-canvas';
-        this.container.querySelector('.beam-particles-canvas').appendChild(this.canvas);
-        this.ctx = this.canvas.getContext('2d');
+        this.canvas =
+            document.createElement(
+                "canvas"
+            );
+
+        this.canvas.className =
+            "beam-particle-canvas";
+
+        const particleContainer =
+            this.container.querySelector(
+                ".beam-particles-canvas"
+            );
+
+        if (particleContainer) {
+            particleContainer.appendChild(
+                this.canvas
+            );
+        }
+
+        this.ctx =
+            this.canvas.getContext(
+                "2d"
+            );
 
         this.resizeCanvas();
+
         this.initParticles();
+
         this.initCurrencySymbols();
 
-        requestAnimationFrame(() => this.container.classList.add('active'));
+        requestAnimationFrame(
+            () => {
+                if (
+                    this.container
+                ) {
+                    this.container.classList.add(
+                        "active"
+                    );
+                }
+            }
+        );
 
         this.startParticleLoop();
     },
 
     startParticleLoop() {
+        if (
+            this.particleAnimationId
+        ) {
+            cancelAnimationFrame(
+                this.particleAnimationId
+            );
+        }
+
         const loop = () => {
-            if (!this.container) return;
+            if (
+                !this.container
+            ) {
+                this.particleAnimationId =
+                    null;
+
+                return;
+            }
+
             this.renderParticles();
-            requestAnimationFrame(loop);
+
+            this.particleAnimationId =
+                requestAnimationFrame(
+                    loop
+                );
         };
+
         loop();
     },
 
-    /*
-     * FIX: called every frame from startParticleLoop() but was
-     * never defined in the original file ("renderParticles is
-     * not a function" the instant the beam appeared).
-     */
     renderParticles() {
-        if (!this.ctx || !this.canvas) return;
+        if (
+            !this.ctx ||
+            !this.canvas
+        ) {
+            return;
+        }
 
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.clearRect(
+            0,
+            0,
+            this.canvas.width,
+            this.canvas.height
+        );
 
-        this.particles.forEach((p) => {
-            p.x += p.vx;
-            p.y += p.vy;
-            p.life -= 0.006;
+        this.particles.forEach(
+            (particle) => {
+                particle.x +=
+                    particle.vx;
 
-            if (p.life <= 0 || p.y < -10 || p.y > this.canvas.height + 10) {
-                p.x = Math.random() * this.canvas.width;
-                p.y = this.canvas.height + 10;
-                p.vx = (Math.random() - 0.5) * 2;
-                p.vy = (Math.random() - 0.5) * 2 - 1;
-                p.life = Math.random() * 0.5 + 0.5;
+                particle.y +=
+                    particle.vy;
+
+                particle.life -=
+                    0.006;
+
+                if (
+                    particle.life <=
+                        0 ||
+                    particle.y <
+                        -10 ||
+                    particle.y >
+                        this.canvas.height +
+                            10
+                ) {
+                    particle.x =
+                        Math.random() *
+                        this.canvas.width;
+
+                    particle.y =
+                        this.canvas.height +
+                        10;
+
+                    particle.vx =
+                        (
+                            Math.random() -
+                            0.5
+                        ) * 2;
+
+                    particle.vy =
+                        (
+                            Math.random() -
+                            0.5
+                        ) * 2 -
+                        1;
+
+                    particle.life =
+                        Math.random() *
+                            0.5 +
+                        0.5;
+                }
+
+                this.ctx.beginPath();
+
+                this.ctx.arc(
+                    particle.x,
+                    particle.y,
+                    particle.size,
+                    0,
+                    Math.PI * 2
+                );
+
+                this.ctx.fillStyle =
+                    particle.color;
+
+                this.ctx.globalAlpha =
+                    Math.max(
+                        0,
+                        particle.alpha *
+                            particle.life
+                    );
+
+                this.ctx.fill();
+
+                this.ctx.globalAlpha =
+                    1;
             }
-
-            this.ctx.beginPath();
-            this.ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-            this.ctx.fillStyle = p.color;
-            this.ctx.globalAlpha = Math.max(0, p.alpha * p.life);
-            this.ctx.fill();
-            this.ctx.globalAlpha = 1;
-        });
+        );
     },
 
     resizeCanvas() {
-        if (!this.canvas) return;
-        const rect = this.container.getBoundingClientRect();
-        this.canvas.width = rect.width;
-        this.canvas.height = rect.height;
+        if (
+            !this.canvas ||
+            !this.container
+        ) {
+            return;
+        }
+
+        const rect =
+            this.container.getBoundingClientRect();
+
+        this.canvas.width =
+            Math.max(
+                1,
+                Math.floor(
+                    rect.width
+                )
+            );
+
+        this.canvas.height =
+            Math.max(
+                1,
+                Math.floor(
+                    rect.height
+                )
+            );
     },
 
     initParticles() {
         this.particles = [];
-        for (let i = 0; i < 50; i++) {
+
+        for (
+            let i = 0;
+            i < 50;
+            i++
+        ) {
             this.particles.push({
-                x: Math.random() * (this.canvas?.width || 800),
-                y: Math.random() * (this.canvas?.height || 200),
-                vx: (Math.random() - 0.5) * 2,
-                vy: (Math.random() - 0.5) * 2 - 1,
-                size: Math.random() * 3 + 1,
-                alpha: Math.random() * 0.5 + 0.2,
-                color: ['#ffd700', '#ff6b2b', '#39ff14', '#7c3aed'][Math.floor(Math.random() * 4)],
-                life: Math.random()
+                x:
+                    Math.random() *
+                    (this.canvas?.width ||
+                        800),
+
+                y:
+                    Math.random() *
+                    (this.canvas?.height ||
+                        200),
+
+                vx:
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 2,
+
+                vy:
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 2 -
+                    1,
+
+                size:
+                    Math.random() *
+                        3 +
+                    1,
+
+                alpha:
+                    Math.random() *
+                        0.5 +
+                    0.2,
+
+                color:
+                    [
+                        "#ffd700",
+                        "#ff6b2b",
+                        "#39ff14",
+                        "#7c3aed"
+                    ][
+                        Math.floor(
+                            Math.random() *
+                                4
+                        )
+                    ],
+
+                life:
+                    Math.random()
             });
         }
     },
 
     initCurrencySymbols() {
-        const stream = this.container?.querySelector('.beam-currency-stream');
-        if (!stream) return;
+        const stream =
+            this.container?.querySelector(
+                ".beam-currency-stream"
+            );
 
-        const symbols = ['$', '💰', '$', '₿', '$', '💰', '$', '₿', '$', '💰', '$', '₿', '$', '💰'];
+        if (!stream) {
+            return;
+        }
 
-        symbols.forEach((symbol, index) => {
-            const el = document.createElement('span');
-            el.className = 'beam-currency-symbol';
-            el.textContent = symbol;
-            el.style.animationDelay = `${index * 0.12}s`;
-            stream.appendChild(el);
-        });
+        const symbols = [
+            "$",
+            "💰",
+            "$",
+            "₿",
+            "$",
+            "💰",
+            "$",
+            "₿",
+            "$",
+            "💰",
+            "$",
+            "₿",
+            "$",
+            "💰"
+        ];
+
+        symbols.forEach(
+            (symbol, index) => {
+                const element =
+                    document.createElement(
+                        "span"
+                    );
+
+                element.className =
+                    "beam-currency-symbol";
+
+                element.textContent =
+                    symbol;
+
+                element.style.animationDelay =
+                    `${index * 0.12}s`;
+
+                stream.appendChild(
+                    element
+                );
+            }
+        );
     },
 
     setProgress(percent) {
-        this.targetProgress = Math.min(100, Math.max(0, percent));
-        if (!this.isAnimating) this.animateProgress();
+        this.targetProgress =
+            Math.min(
+                100,
+                Math.max(
+                    0,
+                    Number(percent) ||
+                        0
+                )
+            );
+
+        if (
+            !this.isAnimating
+        ) {
+            this.animateProgress();
+        }
     },
 
     animateProgress() {
-        this.isAnimating = true;
+        this.isAnimating =
+            true;
 
         const update = () => {
-            const diff = this.targetProgress - this.progress;
+            const diff =
+                this.targetProgress -
+                this.progress;
 
-            if (Math.abs(diff) < 0.5) {
-                this.progress = this.targetProgress;
+            if (
+                Math.abs(diff) <
+                0.5
+            ) {
+                this.progress =
+                    this.targetProgress;
             } else {
-                this.progress += diff * 0.1;
+                this.progress +=
+                    diff * 0.1;
             }
 
-            const fill = this.container?.querySelector('.beam-progress-fill');
-            if (fill) fill.style.width = `${this.progress}%`;
+            const fill =
+                this.container?.querySelector(
+                    ".beam-progress-fill"
+                );
 
-            const percentEl = this.container?.querySelector('.beam-percentage-display');
-            if (percentEl) percentEl.textContent = `${Math.round(this.progress)}%`;
+            if (fill) {
+                fill.style.width =
+                    `${this.progress}%`;
+            }
 
-            const statusEl = this.container?.querySelector('.beam-status-text');
+            const percentEl =
+                this.container?.querySelector(
+                    ".beam-percentage-display"
+                );
+
+            if (percentEl) {
+                percentEl.textContent =
+                    `${Math.round(
+                        this.progress
+                    )}%`;
+            }
+
+            const statusEl =
+                this.container?.querySelector(
+                    ".beam-status-text"
+                );
+
             if (statusEl) {
-                if (this.progress < 15) statusEl.textContent = 'Connecting to Market Data...';
-                else if (this.progress < 30) statusEl.textContent = 'Fetching Price History...';
-                else if (this.progress < 50) statusEl.textContent = 'Running Quantitative Engine...';
-                else if (this.progress < 70) statusEl.textContent = 'Building Risk Profile...';
-                else if (this.progress < 85) statusEl.textContent = 'Running Stress Tests...';
-                else if (this.progress < 95) statusEl.textContent = 'Generating AI Insights...';
-                else statusEl.textContent = 'Finalizing Report...';
+                if (
+                    this.progress <
+                    15
+                ) {
+                    statusEl.textContent =
+                        "Connecting to Market Data...";
+                } else if (
+                    this.progress <
+                    30
+                ) {
+                    statusEl.textContent =
+                        "Fetching Price History...";
+                } else if (
+                    this.progress <
+                    50
+                ) {
+                    statusEl.textContent =
+                        "Running Quantitative Engine...";
+                } else if (
+                    this.progress <
+                    70
+                ) {
+                    statusEl.textContent =
+                        "Building Risk Profile...";
+                } else if (
+                    this.progress <
+                    85
+                ) {
+                    statusEl.textContent =
+                        "Running Stress Tests...";
+                } else if (
+                    this.progress <
+                    95
+                ) {
+                    statusEl.textContent =
+                        "Generating AI Insights...";
+                } else {
+                    statusEl.textContent =
+                        "Finalizing Report...";
+                }
             }
 
-            if (this.progress < this.targetProgress || Math.abs(diff) > 0.5) {
-                requestAnimationFrame(update);
+            if (
+                this.progress <
+                    this.targetProgress ||
+                Math.abs(diff) >
+                    0.5
+            ) {
+                requestAnimationFrame(
+                    update
+                );
             } else {
-                this.isAnimating = false;
+                this.isAnimating =
+                    false;
+
                 this.triggerWealthBurst();
             }
         };
@@ -2333,357 +5357,1210 @@ const AnalysisBeam = {
         update();
     },
 
-    /*
-     * FIX: called once the beam reaches its target, but was never
-     * defined in the original file — same "not a function" crash
-     * as renderParticles above. Gives the particle pool an upward
-     * burst so the finish reads as a payoff moment.
-     */
     triggerWealthBurst() {
-        if (!this.particles || !this.particles.length) return;
+        if (
+            !this.particles?.length
+        ) {
+            return;
+        }
 
-        this.particles.forEach((p) => {
-            p.vx = (Math.random() - 0.5) * 6;
-            p.vy = -(Math.random() * 6 + 2);
-            p.life = 1;
-            p.alpha = Math.random() * 0.5 + 0.5;
-        });
+        this.particles.forEach(
+            (particle) => {
+                particle.vx =
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 6;
+
+                particle.vy =
+                    -(
+                        Math.random() *
+                            6 +
+                        2
+                    );
+
+                particle.life = 1;
+
+                particle.alpha =
+                    Math.random() *
+                        0.5 +
+                    0.5;
+            }
+        );
     },
 
-    remove() {
-        if (this.container) {
-            this.container.classList.remove('active');
-            setTimeout(() => {
-                if (this.container?.parentNode) this.container.parentNode.removeChild(this.container);
-                this.container = null;
-            }, 500);
+    remove(immediate = false) {
+        if (
+            this.removeTimer
+        ) {
+            clearTimeout(
+                this.removeTimer
+            );
+
+            this.removeTimer = null;
         }
+
+        if (
+            this.particleAnimationId
+        ) {
+            cancelAnimationFrame(
+                this.particleAnimationId
+            );
+
+            this.particleAnimationId =
+                null;
+        }
+
+        const oldContainer =
+            this.container;
+
+        if (!oldContainer) {
+            return;
+        }
+
+        if (immediate) {
+            if (
+                oldContainer.parentNode
+            ) {
+                oldContainer.parentNode.removeChild(
+                    oldContainer
+                );
+            }
+
+            if (
+                this.container ===
+                oldContainer
+            ) {
+                this.container =
+                    null;
+
+                this.canvas =
+                    null;
+
+                this.ctx =
+                    null;
+            }
+
+            return;
+        }
+
+        oldContainer.classList.remove(
+            "active"
+        );
+
+        this.removeTimer =
+            setTimeout(() => {
+                if (
+                    oldContainer.parentNode
+                ) {
+                    oldContainer.parentNode.removeChild(
+                        oldContainer
+                    );
+                }
+
+                if (
+                    this.container ===
+                    oldContainer
+                ) {
+                    this.container =
+                        null;
+
+                    this.canvas =
+                        null;
+
+                    this.ctx =
+                        null;
+                }
+
+                this.removeTimer =
+                    null;
+            }, 500);
     }
 };
 
 
 /* ============================================================
-   MONEY METEOR — Burning Bitcoin + Fiery Dollar Bill Particle System
-   ============================================================
-
-   FIX: the original file declared `const MoneyMeteor = {...}` a
-   SECOND time later on, and that second copy had its methods
-   pasted in as bare statements outside any object body (plus a
-   dangling `spawnMeteor()` fragment with mismatched property
-   names). That's an immediate SyntaxError. This is the single,
-   consolidated, working version, using the short property names
-   (sSize, isB, cCore, rot, rotSpd, len) since those are what
-   drawTrail/drawCore/updM/animate actually read.
+   MONEY METEOR
    ============================================================ */
 
 const MoneyMeteor = {
-    canvas: null, ctx: null,
-    meteors: [], particles: [],
-    bitcoinSymbols: [], dollarBillSymbols: [],
-    animationId: null, isRunning: false,
-    lastSpawn: 0, spawnInterval: 800,
-    W: 0, H: 0,
+    canvas: null,
+    ctx: null,
+
+    meteors: [],
+    particles: [],
+    bitcoinSymbols: [],
+    dollarBillSymbols: [],
+
+    animationId: null,
+    isRunning: false,
+
+    lastSpawn: 0,
+    spawnInterval: 800,
+
+    W: 0,
+    H: 0,
+
+    resizeHandler: null,
 
     init() {
-        this.canvas = document.getElementById('meteor-canvas');
-        if (!this.canvas) return;
-        this.ctx = this.canvas.getContext('2d');
+        this.canvas =
+            document.getElementById(
+                "meteor-canvas"
+            );
+
+        if (!this.canvas) {
+            return;
+        }
+
+        this.ctx =
+            this.canvas.getContext(
+                "2d"
+            );
+
         this.resize();
-        window.addEventListener('resize', () => this.resize());
+
+        this.resizeHandler =
+            () => this.resize();
+
+        window.addEventListener(
+            "resize",
+            this.resizeHandler
+        );
+
         this.isRunning = true;
+
         this.animate();
     },
 
     resize() {
-        this.W = window.innerWidth;
-        this.H = window.innerHeight;
-        this.canvas.width = this.W;
-        this.canvas.height = this.H;
+        if (!this.canvas) {
+            return;
+        }
+
+        this.W =
+            window.innerWidth;
+
+        this.H =
+            window.innerHeight;
+
+        this.canvas.width =
+            this.W;
+
+        this.canvas.height =
+            this.H;
     },
 
     spawnMeteor() {
-        const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.6;
-        const speed = 6 + Math.random() * 10;
-        const sx = Math.random() * this.W;
-        const sy = -40 - Math.random() * 100;
-        const isB = Math.random() < 0.5;
-        const sym = isB ? String.fromCharCode(0x0243) : '$';
-        const sSize = isB ? 28 + Math.random() * 12 : 22 + Math.random() * 8;
-        const cCore = isB ? '#fffbe6' : '#ff4500';
+        const angle =
+            -Math.PI / 2 +
+            (
+                Math.random() -
+                0.5
+            ) * 0.6;
+
+        const speed =
+            6 +
+            Math.random() * 10;
+
+        const startX =
+            Math.random() *
+            this.W;
+
+        const startY =
+            -40 -
+            Math.random() *
+                100;
+
+        const isBitcoin =
+            Math.random() < 0.5;
+
+        /*
+         * FIX:
+         * Correct Bitcoin Unicode code point.
+         */
+        const symbol =
+            isBitcoin
+                ? "₿"
+                : "$";
+
+        const symbolSize =
+            isBitcoin
+                ? 28 +
+                  Math.random() *
+                      12
+                : 22 +
+                  Math.random() *
+                      8;
+
+        const coreColor =
+            isBitcoin
+                ? "#fffbe6"
+                : "#ff4500";
 
         this.meteors.push({
-            x: sx, y: sy,
-            vx: Math.cos(angle) * speed,
-            vy: Math.sin(angle) * speed,
-            life: 1.0,
-            decay: 0.005 + Math.random() * 0.008,
-            len: 120 + Math.random() * 200,
-            isB, sym, sSize,
-            colorMain: isB ? '#ffd700' : '#ff6b2b',
-            cCore, tail: [],
-            rot: Math.random() * Math.PI * 2,
-            rotSpd: (Math.random() - 0.5) * 0.1
+            x: startX,
+            y: startY,
+
+            vx:
+                Math.cos(angle) *
+                speed,
+
+            vy:
+                Math.sin(angle) *
+                speed,
+
+            life: 1,
+
+            decay:
+                0.005 +
+                Math.random() *
+                    0.008,
+
+            len:
+                120 +
+                Math.random() *
+                    200,
+
+            isB: isBitcoin,
+            sym: symbol,
+            sSize: symbolSize,
+
+            colorMain:
+                isBitcoin
+                    ? "#ffd700"
+                    : "#ff6b2b",
+
+            cCore: coreColor,
+
+            tail: [],
+
+            rot:
+                Math.random() *
+                Math.PI *
+                2,
+
+            rotSpd:
+                (
+                    Math.random() -
+                    0.5
+                ) * 0.1
         });
     },
 
-    updM(m) {
-        m.x += m.vx; m.y += m.vy;
-        m.rot += m.rotSpd;
-        m.life -= m.decay;
+    updM(meteor) {
+        meteor.x += meteor.vx;
+        meteor.y += meteor.vy;
 
-        const tLen = Math.floor(m.len * (0.3 + Math.random() * 0.4));
-        m.tail.unshift({ x: m.x, y: m.y, life: 1 });
-        if (m.tail.length > tLen) m.tail.pop();
-        m.tail.forEach((p) => (p.life -= 0.025 + Math.random() * 0.02));
+        meteor.rot +=
+            meteor.rotSpd;
 
-        if (m.life <= 0) return;
+        meteor.life -=
+            meteor.decay;
 
-        if (Math.random() < 0.35) {
+        const tailLength =
+            Math.floor(
+                meteor.len *
+                (
+                    0.3 +
+                    Math.random() *
+                        0.4
+                )
+            );
+
+        meteor.tail.unshift({
+            x: meteor.x,
+            y: meteor.y,
+            life: 1
+        });
+
+        if (
+            meteor.tail.length >
+            tailLength
+        ) {
+            meteor.tail.pop();
+        }
+
+        meteor.tail.forEach(
+            (point) => {
+                point.life -=
+                    0.025 +
+                    Math.random() *
+                        0.02;
+            }
+        );
+
+        if (
+            meteor.life <= 0
+        ) {
+            return;
+        }
+
+        if (
+            Math.random() <
+            0.35
+        ) {
             this.particles.push({
-                x: m.x + (Math.random() - 0.5) * 10,
-                y: m.y + (Math.random() - 0.5) * 10,
-                vx: (Math.random() - 0.5) * 2,
-                vy: (Math.random() - 0.5) * 2 - 0.5,
+                x:
+                    meteor.x +
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 10,
+
+                y:
+                    meteor.y +
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 10,
+
+                vx:
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 2,
+
+                vy:
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 2 -
+                    0.5,
+
                 life: 1,
-                decay: 0.02 + Math.random() * 0.03,
-                size: 1.5 + Math.random() * 2.5,
-                isB: m.isB
+
+                decay:
+                    0.02 +
+                    Math.random() *
+                        0.03,
+
+                size:
+                    1.5 +
+                    Math.random() *
+                        2.5,
+
+                isB:
+                    meteor.isB
             });
         }
 
-        if (Math.random() < 0.15) {
+        if (
+            Math.random() <
+            0.15
+        ) {
             this.bitcoinSymbols.push({
-                x: m.x + (Math.random() - 0.5) * m.len * 0.5,
-                y: m.y + (Math.random() - 0.5) * m.len * 0.5,
-                vx: (Math.random() - 0.5) * 0.3,
-                vy: -0.3 - Math.random() * 0.6,
+                x:
+                    meteor.x +
+                    (
+                        Math.random() -
+                        0.5
+                    ) *
+                        meteor.len *
+                        0.5,
+
+                y:
+                    meteor.y +
+                    (
+                        Math.random() -
+                        0.5
+                    ) *
+                        meteor.len *
+                        0.5,
+
+                vx:
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 0.3,
+
+                vy:
+                    -0.3 -
+                    Math.random() *
+                        0.6,
+
                 life: 1,
-                decay: 0.015 + Math.random() * 0.015,
-                size: 8 + Math.random() * 6,
-                rot: Math.random() * Math.PI * 2,
-                rotSpd: (Math.random() - 0.5) * 0.1
+
+                decay:
+                    0.015 +
+                    Math.random() *
+                        0.015,
+
+                size:
+                    8 +
+                    Math.random() *
+                        6,
+
+                rot:
+                    Math.random() *
+                    Math.PI *
+                    2,
+
+                rotSpd:
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 0.1
             });
         }
 
-        if (Math.random() < 0.12) {
+        if (
+            Math.random() <
+            0.12
+        ) {
             this.dollarBillSymbols.push({
-                x: m.x + (Math.random() - 0.5) * m.len * 0.3,
-                y: m.y + (Math.random() - 0.5) * m.len * 0.3,
-                vx: (Math.random() - 0.5) * 0.4,
-                vy: -0.4 - Math.random() * 0.8,
+                x:
+                    meteor.x +
+                    (
+                        Math.random() -
+                        0.5
+                    ) *
+                        meteor.len *
+                        0.3,
+
+                y:
+                    meteor.y +
+                    (
+                        Math.random() -
+                        0.5
+                    ) *
+                        meteor.len *
+                        0.3,
+
+                vx:
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 0.4,
+
+                vy:
+                    -0.4 -
+                    Math.random() *
+                        0.8,
+
                 life: 1,
-                decay: 0.012 + Math.random() * 0.012,
-                size: 7 + Math.random() * 5,
-                rot: Math.random() * Math.PI * 2,
-                rotSpd: (Math.random() - 0.5) * 0.12
+
+                decay:
+                    0.012 +
+                    Math.random() *
+                        0.012,
+
+                size:
+                    7 +
+                    Math.random() *
+                        5,
+
+                rot:
+                    Math.random() *
+                    Math.PI *
+                    2,
+
+                rotSpd:
+                    (
+                        Math.random() -
+                        0.5
+                    ) * 0.12
             });
         }
     },
 
-    drawTrail(m) {
-        const ctx = this.ctx, tail = m.tail;
+    drawTrail(meteor) {
+        const ctx =
+            this.ctx;
 
-        for (let i = 1; i < tail.length; i++) {
-            const p = tail[i];
-            const a = p.life * m.life * 0.8;
-            if (a <= 0) continue;
+        const tail =
+            meteor.tail;
 
-            const w = (i / tail.length) * (m.isB ? 6 : 4) * m.life;
-            const g = ctx.createLinearGradient(tail[i - 1].x, tail[i - 1].y, p.x, p.y);
+        if (!ctx || !tail) {
+            return;
+        }
 
-            if (m.isB) {
-                g.addColorStop(0, `rgba(255,255,200,${a})`);
-                g.addColorStop(0.4, `rgba(255,180,50,${a * 0.9})`);
-                g.addColorStop(0.7, `rgba(255,100,20,${a * 0.6})`);
-                g.addColorStop(1, `rgba(255,50,0,${a * 0.1})`);
+        for (
+            let i = 1;
+            i < tail.length;
+            i++
+        ) {
+            const point =
+                tail[i];
+
+            const alpha =
+                point.life *
+                meteor.life *
+                0.8;
+
+            if (
+                alpha <= 0
+            ) {
+                continue;
+            }
+
+            const width =
+                (
+                    i /
+                    tail.length
+                ) *
+                (
+                    meteor.isB
+                        ? 6
+                        : 4
+                ) *
+                meteor.life;
+
+            const gradient =
+                ctx.createLinearGradient(
+                    tail[i - 1].x,
+                    tail[i - 1].y,
+                    point.x,
+                    point.y
+                );
+
+            if (
+                meteor.isB
+            ) {
+                gradient.addColorStop(
+                    0,
+                    `rgba(255,255,200,${alpha})`
+                );
+
+                gradient.addColorStop(
+                    0.4,
+                    `rgba(255,180,50,${alpha * 0.9})`
+                );
+
+                gradient.addColorStop(
+                    0.7,
+                    `rgba(255,100,20,${alpha * 0.6})`
+                );
+
+                gradient.addColorStop(
+                    1,
+                    `rgba(255,50,0,${alpha * 0.1})`
+                );
             } else {
-                g.addColorStop(0, `rgba(255,220,100,${a})`);
-                g.addColorStop(0.4, `rgba(255,120,20,${a * 0.9})`);
-                g.addColorStop(0.7, `rgba(200,30,0,${a * 0.6})`);
-                g.addColorStop(1, `rgba(100,0,0,${a * 0.05})`);
+                gradient.addColorStop(
+                    0,
+                    `rgba(255,220,100,${alpha})`
+                );
+
+                gradient.addColorStop(
+                    0.4,
+                    `rgba(255,120,20,${alpha * 0.9})`
+                );
+
+                gradient.addColorStop(
+                    0.7,
+                    `rgba(200,30,0,${alpha * 0.6})`
+                );
+
+                gradient.addColorStop(
+                    1,
+                    `rgba(100,0,0,${alpha * 0.05})`
+                );
             }
 
             ctx.beginPath();
-            ctx.arc(p.x, p.y, w, 0, Math.PI * 2);
-            ctx.fillStyle = g;
+
+            ctx.arc(
+                point.x,
+                point.y,
+                width,
+                0,
+                Math.PI * 2
+            );
+
+            ctx.fillStyle =
+                gradient;
+
             ctx.fill();
         }
     },
 
-    drawCore(m) {
-        const ctx = this.ctx, s = m.sSize;
+    drawCore(meteor) {
+        const ctx =
+            this.ctx;
+
+        if (!ctx) {
+            return;
+        }
+
+        const size =
+            meteor.sSize;
 
         ctx.save();
-        ctx.translate(m.x, m.y);
-        ctx.rotate(m.rot);
 
-        const gr = s * 1.8;
-        const glow = ctx.createRadialGradient(0, 0, s * 0.2, 0, 0, gr);
+        ctx.translate(
+            meteor.x,
+            meteor.y
+        );
 
-        if (m.isB) {
-            glow.addColorStop(0, 'rgba(255,255,220,0.9)');
-            glow.addColorStop(0.3, 'rgba(255,200,80,0.6)');
-            glow.addColorStop(0.7, 'rgba(255,120,20,0.2)');
-            glow.addColorStop(1, 'rgba(255,60,0,0)');
+        ctx.rotate(
+            meteor.rot
+        );
+
+        const glowRadius =
+            size * 1.8;
+
+        const glow =
+            ctx.createRadialGradient(
+                0,
+                0,
+                size * 0.2,
+                0,
+                0,
+                glowRadius
+            );
+
+        if (
+            meteor.isB
+        ) {
+            glow.addColorStop(
+                0,
+                "rgba(255,255,220,0.9)"
+            );
+
+            glow.addColorStop(
+                0.3,
+                "rgba(255,200,80,0.6)"
+            );
+
+            glow.addColorStop(
+                0.7,
+                "rgba(255,120,20,0.2)"
+            );
+
+            glow.addColorStop(
+                1,
+                "rgba(255,60,0,0)"
+            );
         } else {
-            glow.addColorStop(0, 'rgba(255,200,100,0.9)');
-            glow.addColorStop(0.3, 'rgba(255,100,20,0.6)');
-            glow.addColorStop(0.7, 'rgba(200,30,0,0.25)');
-            glow.addColorStop(1, 'rgba(80,0,0,0)');
+            glow.addColorStop(
+                0,
+                "rgba(255,200,100,0.9)"
+            );
+
+            glow.addColorStop(
+                0.3,
+                "rgba(255,100,20,0.6)"
+            );
+
+            glow.addColorStop(
+                0.7,
+                "rgba(200,30,0,0.25)"
+            );
+
+            glow.addColorStop(
+                1,
+                "rgba(80,0,0,0)"
+            );
         }
 
         ctx.beginPath();
-        ctx.arc(0, 0, gr, 0, Math.PI * 2);
-        ctx.fillStyle = glow;
+
+        ctx.arc(
+            0,
+            0,
+            glowRadius,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fillStyle =
+            glow;
+
         ctx.fill();
 
-        ctx.font = s + 'px JetBrains Mono, Fira Code, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.shadowColor = m.isB ? '#ffd700' : '#ff4500';
-        ctx.shadowBlur = 25;
-        ctx.fillStyle = m.cCore;
-        ctx.fillText(m.sym, 0, 0);
+        ctx.font =
+            `${size}px JetBrains Mono, Fira Code, monospace`;
+
+        ctx.textAlign =
+            "center";
+
+        ctx.textBaseline =
+            "middle";
+
+        ctx.shadowColor =
+            meteor.isB
+                ? "#ffd700"
+                : "#ff4500";
+
+        ctx.shadowBlur =
+            25;
+
+        ctx.fillStyle =
+            meteor.cCore;
+
+        ctx.fillText(
+            meteor.sym,
+            0,
+            0
+        );
+
         ctx.shadowBlur = 0;
 
-        ctx.font = (s * 0.85) + 'px JetBrains Mono, Fira Code, monospace';
-        ctx.fillStyle = '#fff';
-        ctx.fillText(m.sym, 0, 0);
+        ctx.font =
+            `${size * 0.85}px JetBrains Mono, Fira Code, monospace`;
+
+        ctx.fillStyle =
+            "#fff";
+
+        ctx.fillText(
+            meteor.sym,
+            0,
+            0
+        );
 
         ctx.restore();
     },
 
     updParticles() {
-        const ctx = this.ctx;
+        const ctx =
+            this.ctx;
 
-        for (let i = this.particles.length - 1; i >= 0; i--) {
-            const p = this.particles[i];
-            p.x += p.vx; p.y += p.vy;
-            p.vy -= 0.02;
-            p.life -= p.decay;
+        if (!ctx) return;
 
-            if (p.life <= 0) { this.particles.splice(i, 1); continue; }
+        for (
+            let i =
+                this.particles.length -
+                1;
+            i >= 0;
+            i--
+        ) {
+            const particle =
+                this.particles[i];
 
-            const hue = p.isB ? 45 + Math.random() * 20 : 20 + Math.random() * 20;
-            const lit = p.isB ? 50 + Math.random() * 30 : 40 + Math.random() * 30;
+            particle.x +=
+                particle.vx;
+
+            particle.y +=
+                particle.vy;
+
+            particle.vy -=
+                0.02;
+
+            particle.life -=
+                particle.decay;
+
+            if (
+                particle.life <=
+                0
+            ) {
+                this.particles.splice(
+                    i,
+                    1
+                );
+
+                continue;
+            }
+
+            const hue =
+                particle.isB
+                    ? 45 +
+                      Math.random() *
+                          20
+                    : 20 +
+                      Math.random() *
+                          20;
+
+            const lightness =
+                particle.isB
+                    ? 50 +
+                      Math.random() *
+                          30
+                    : 40 +
+                      Math.random() *
+                          30;
 
             ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-            ctx.fillStyle = `hsla(${hue},100%,${lit}%,${p.life * 0.8})`;
+
+            ctx.arc(
+                particle.x,
+                particle.y,
+                particle.size *
+                    particle.life,
+                0,
+                Math.PI * 2
+            );
+
+            ctx.fillStyle =
+                `hsla(${hue},100%,${lightness}%,${particle.life * 0.8})`;
+
             ctx.fill();
         }
     },
 
     updBtcSym() {
-        const ctx = this.ctx;
+        const ctx =
+            this.ctx;
 
-        for (let i = this.bitcoinSymbols.length - 1; i >= 0; i--) {
-            const b = this.bitcoinSymbols[i];
-            b.x += b.vx; b.y += b.vy;
-            b.vy -= 0.01;
-            b.rot += b.rotSpd;
-            b.life -= b.decay;
+        if (!ctx) return;
 
-            if (b.life <= 0) { this.bitcoinSymbols.splice(i, 1); continue; }
+        for (
+            let i =
+                this.bitcoinSymbols.length -
+                1;
+            i >= 0;
+            i--
+        ) {
+            const bitcoin =
+                this.bitcoinSymbols[i];
+
+            bitcoin.x +=
+                bitcoin.vx;
+
+            bitcoin.y +=
+                bitcoin.vy;
+
+            bitcoin.vy -=
+                0.01;
+
+            bitcoin.rot +=
+                bitcoin.rotSpd;
+
+            bitcoin.life -=
+                bitcoin.decay;
+
+            if (
+                bitcoin.life <=
+                0
+            ) {
+                this.bitcoinSymbols.splice(
+                    i,
+                    1
+                );
+
+                continue;
+            }
 
             ctx.save();
-            ctx.translate(b.x, b.y);
-            ctx.rotate(b.rot);
-            ctx.globalAlpha = b.life;
-            ctx.font = b.size + 'px JetBrains Mono, Fira Code, monospace';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.shadowColor = '#ffd700';
-            ctx.shadowBlur = 12;
-            ctx.fillStyle = '#ffd700';
-            ctx.fillText(String.fromCharCode(0x0243), 0, 0);
+
+            ctx.translate(
+                bitcoin.x,
+                bitcoin.y
+            );
+
+            ctx.rotate(
+                bitcoin.rot
+            );
+
+            ctx.globalAlpha =
+                bitcoin.life;
+
+            ctx.font =
+                `${bitcoin.size}px JetBrains Mono, Fira Code, monospace`;
+
+            ctx.textAlign =
+                "center";
+
+            ctx.textBaseline =
+                "middle";
+
+            ctx.shadowColor =
+                "#ffd700";
+
+            ctx.shadowBlur =
+                12;
+
+            ctx.fillStyle =
+                "#ffd700";
+
+            ctx.fillText(
+                "₿",
+                0,
+                0
+            );
+
             ctx.shadowBlur = 0;
             ctx.globalAlpha = 1;
+
             ctx.restore();
         }
     },
 
     updDollarSym() {
-        const ctx = this.ctx;
+        const ctx =
+            this.ctx;
 
-        for (let i = this.dollarBillSymbols.length - 1; i >= 0; i--) {
-            const d = this.dollarBillSymbols[i];
-            d.x += d.vx; d.y += d.vy;
-            d.vy -= 0.015;
-            d.rot += d.rotSpd;
-            d.life -= d.decay;
+        if (!ctx) return;
 
-            if (d.life <= 0) { this.dollarBillSymbols.splice(i, 1); continue; }
+        for (
+            let i =
+                this.dollarBillSymbols.length -
+                1;
+            i >= 0;
+            i--
+        ) {
+            const dollar =
+                this.dollarBillSymbols[i];
+
+            dollar.x +=
+                dollar.vx;
+
+            dollar.y +=
+                dollar.vy;
+
+            dollar.vy -=
+                0.015;
+
+            dollar.rot +=
+                dollar.rotSpd;
+
+            dollar.life -=
+                dollar.decay;
+
+            if (
+                dollar.life <=
+                0
+            ) {
+                this.dollarBillSymbols.splice(
+                    i,
+                    1
+                );
+
+                continue;
+            }
 
             ctx.save();
-            ctx.translate(d.x, d.y);
-            ctx.rotate(d.rot);
-            ctx.globalAlpha = d.life * 0.9;
-            ctx.font = d.size + 'px JetBrains Mono, Fira Code, monospace';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.shadowColor = '#ff4500';
-            ctx.shadowBlur = 10;
-            ctx.fillStyle = d.life > 0.5 ? '#ff4500' : '#ffd700';
-            ctx.fillText('$', 0, 0);
+
+            ctx.translate(
+                dollar.x,
+                dollar.y
+            );
+
+            ctx.rotate(
+                dollar.rot
+            );
+
+            ctx.globalAlpha =
+                dollar.life * 0.9;
+
+            ctx.font =
+                `${dollar.size}px JetBrains Mono, Fira Code, monospace`;
+
+            ctx.textAlign =
+                "center";
+
+            ctx.textBaseline =
+                "middle";
+
+            ctx.shadowColor =
+                "#ff4500";
+
+            ctx.shadowBlur =
+                10;
+
+            ctx.fillStyle =
+                dollar.life > 0.5
+                    ? "#ff4500"
+                    : "#ffd700";
+
+            ctx.fillText(
+                "$",
+                0,
+                0
+            );
+
             ctx.shadowBlur = 0;
             ctx.globalAlpha = 1;
+
             ctx.restore();
         }
     },
 
     drawBgGlow() {
-        const ctx = this.ctx;
+        const ctx =
+            this.ctx;
+
         if (!ctx) return;
 
-        const g1 = ctx.createRadialGradient(this.W / 2, this.H * 0.7, 0, this.W / 2, this.H * 0.7, this.W * 0.7);
-        g1.addColorStop(0, 'rgba(255,100,20,0.04)');
-        g1.addColorStop(0.5, 'rgba(255,60,0,0.02)');
-        g1.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = g1;
-        ctx.fillRect(0, 0, this.W, this.H);
+        const gradientOne =
+            ctx.createRadialGradient(
+                this.W / 2,
+                this.H * 0.7,
+                0,
+                this.W / 2,
+                this.H * 0.7,
+                this.W * 0.7
+            );
 
-        const g2 = ctx.createRadialGradient(this.W * 0.2, this.H * 0.3, 0, this.W * 0.2, this.H * 0.3, this.W * 0.4);
-        g2.addColorStop(0, 'rgba(255,215,0,0.03)');
-        g2.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = g2;
-        ctx.fillRect(0, 0, this.W, this.H);
+        gradientOne.addColorStop(
+            0,
+            "rgba(255,100,20,0.04)"
+        );
+
+        gradientOne.addColorStop(
+            0.5,
+            "rgba(255,60,0,0.02)"
+        );
+
+        gradientOne.addColorStop(
+            1,
+            "rgba(0,0,0,0)"
+        );
+
+        ctx.fillStyle =
+            gradientOne;
+
+        ctx.fillRect(
+            0,
+            0,
+            this.W,
+            this.H
+        );
+
+        const gradientTwo =
+            ctx.createRadialGradient(
+                this.W * 0.2,
+                this.H * 0.3,
+                0,
+                this.W * 0.2,
+                this.H * 0.3,
+                this.W * 0.4
+            );
+
+        gradientTwo.addColorStop(
+            0,
+            "rgba(255,215,0,0.03)"
+        );
+
+        gradientTwo.addColorStop(
+            1,
+            "rgba(0,0,0,0)"
+        );
+
+        ctx.fillStyle =
+            gradientTwo;
+
+        ctx.fillRect(
+            0,
+            0,
+            this.W,
+            this.H
+        );
     },
 
     animate() {
-        if (!this.isRunning) return;
-
-        const ctx = this.ctx;
-        if (!ctx) return;
-
-        ctx.clearRect(0, 0, this.W, this.H);
-        this.drawBgGlow();
-
-        const now = performance.now();
-        if (now - this.lastSpawn > this.spawnInterval) {
-            this.spawnMeteor();
-            this.lastSpawn = now;
-            this.spawnInterval = 600 + Math.random() * 600;
+        if (
+            !this.isRunning
+        ) {
+            return;
         }
 
-        for (let i = this.meteors.length - 1; i >= 0; i--) {
-            const m = this.meteors[i];
-            this.updM(m);
+        const ctx =
+            this.ctx;
 
-            if (m.life <= 0 || m.y > this.H + 50 || m.x < -100 || m.x > this.W + 100) {
-                this.meteors.splice(i, 1);
+        if (!ctx) {
+            return;
+        }
+
+        ctx.clearRect(
+            0,
+            0,
+            this.W,
+            this.H
+        );
+
+        this.drawBgGlow();
+
+        const now =
+            performance.now();
+
+        if (
+            now -
+                this.lastSpawn >
+            this.spawnInterval
+        ) {
+            this.spawnMeteor();
+
+            this.lastSpawn =
+                now;
+
+            this.spawnInterval =
+                600 +
+                Math.random() *
+                    600;
+        }
+
+        for (
+            let i =
+                this.meteors.length -
+                1;
+            i >= 0;
+            i--
+        ) {
+            const meteor =
+                this.meteors[i];
+
+            this.updM(
+                meteor
+            );
+
+            if (
+                meteor.life <=
+                    0 ||
+                meteor.y >
+                    this.H + 50 ||
+                meteor.x <
+                    -100 ||
+                meteor.x >
+                    this.W + 100
+            ) {
+                this.meteors.splice(
+                    i,
+                    1
+                );
+
                 continue;
             }
 
-            this.drawTrail(m);
-            this.drawCore(m);
+            this.drawTrail(
+                meteor
+            );
+
+            this.drawCore(
+                meteor
+            );
         }
 
         this.updBtcSym();
         this.updDollarSym();
         this.updParticles();
 
-        this.animationId = requestAnimationFrame(() => this.animate());
+        this.animationId =
+            requestAnimationFrame(
+                () => this.animate()
+            );
+    },
+
+    destroy() {
+        this.isRunning = false;
+
+        if (
+            this.animationId
+        ) {
+            cancelAnimationFrame(
+                this.animationId
+            );
+
+            this.animationId =
+                null;
+        }
+
+        if (
+            this.resizeHandler
+        ) {
+            window.removeEventListener(
+                "resize",
+                this.resizeHandler
+            );
+
+            this.resizeHandler =
+                null;
+        }
+
+        this.meteors = [];
+        this.particles = [];
+        this.bitcoinSymbols = [];
+        this.dollarBillSymbols = [];
     }
 };
 
@@ -2692,64 +6569,121 @@ const MoneyMeteor = {
    FINAL DOM INITIALIZATION
    ============================================================ */
 
-document.addEventListener("DOMContentLoaded", () => {
-    CursorPhysics.init();
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+        CursorPhysics.init();
 
-    if (document.getElementById("meteor-canvas")) {
-        MoneyMeteor.init();
+        if (
+            document.getElementById(
+                "meteor-canvas"
+            )
+        ) {
+            MoneyMeteor.init();
+        }
+
+        const analysisForm =
+            $("#analysis-form");
+
+        if (analysisForm) {
+            analysisForm.addEventListener(
+                "submit",
+                handleAnalysisSubmit
+            );
+        }
+
+        const logoutButtons =
+            $all(
+                "[data-action='logout'], #logout-button"
+            );
+
+        logoutButtons.forEach(
+            (button) => {
+                button.addEventListener(
+                    "click",
+                    (event) => {
+                        event.preventDefault();
+
+                        logout();
+                    }
+                );
+            }
+        );
+
+        const deleteButton =
+            $("#delete-current-report");
+
+        if (deleteButton) {
+            deleteButton.addEventListener(
+                "click",
+                async () => {
+                    await deleteCurrentReport();
+                }
+            );
+        }
+
+        const historyBody =
+            $("#history-tbody");
+
+        if (historyBody) {
+            historyBody.addEventListener(
+                "click",
+                handleHistoryClick
+            );
+        }
+
+        $all(
+            "form[data-auth]"
+        ).forEach(
+            (form) => {
+                form.addEventListener(
+                    "submit",
+                    handleAuthForm
+                );
+            }
+        );
+
+        setupKeyboardShortcuts();
+
+        setupVisibilityHandling();
+
+        if (
+            document.querySelector(
+                "#analysis-form"
+            )
+        ) {
+            initializeDashboard();
+        } else {
+            initializeIndexPage();
+        }
     }
-
-    const analysisForm = $("#analysis-form");
-    if (analysisForm) {
-        analysisForm.addEventListener("submit", handleAnalysisSubmit);
-    }
-
-    const logoutButtons = $all("[data-action='logout'], #logout-button");
-    logoutButtons.forEach((button) => {
-        button.addEventListener("click", (event) => {
-            event.preventDefault();
-            logout();
-        });
-    });
-
-    const deleteButton = $("#delete-current-report");
-    if (deleteButton) {
-        deleteButton.addEventListener("click", async () => {
-            await deleteCurrentReport();
-        });
-    }
-
-    const historyBody = $("#history-tbody");
-    if (historyBody) {
-        historyBody.addEventListener("click", handleHistoryClick);
-    }
-
-    $all("form[data-auth]").forEach((form) => {
-        form.addEventListener("submit", handleAuthForm);
-    });
-
-    setupKeyboardShortcuts();
-    setupVisibilityHandling();
-
-    if (document.querySelector("#analysis-form")) {
-        initializeDashboard();
-    } else {
-        initializeIndexPage();
-    }
-});
+);
 
 
 /* ============================================================
    GLOBAL ERROR SAFETY
    ============================================================ */
 
-window.addEventListener("error", (event) => {
-    console.error("Frontend error:", event.error || event.message);
-});
+window.addEventListener(
+    "error",
+    (event) => {
+        console.error(
+            "Frontend error:",
+            event.error ||
+                event.message
+        );
+    }
+);
 
-window.addEventListener("unhandledrejection", (event) => {
-    console.error("Unhandled promise rejection:", event.reason);
-});
+window.addEventListener(
+    "unhandledrejection",
+    (event) => {
+        console.error(
+            "Unhandled promise rejection:",
+            event.reason
+        );
+    }
+);
 
 
 /* ============================================================
