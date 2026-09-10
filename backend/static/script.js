@@ -1427,11 +1427,9 @@ function renderRiskProfile(report) {
 
     const marketSensitivity = getPillar(report, "market_sensitivity");
     renderPillar("market-sensitivity", marketSensitivity);
-    renderPillar("market_sensitivity", marketSensitivity);
 
     const structural = getPillar(report, "structural");
     renderPillar("structural", structural);
-    renderPillar("contract", structural);
 
     renderPillar("composite", {
         score: compositeScore,

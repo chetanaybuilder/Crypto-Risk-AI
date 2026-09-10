@@ -4165,7 +4165,7 @@ def build_risk_profile(
         },
     }
 
-    return {
+    risk_profile = {
         "composite_score": composite,
         "label": risk_label(
             composite
@@ -4173,6 +4173,8 @@ def build_risk_profile(
         "confidence": confidence,
         "pillars": pillars,
     }
+
+    return json_safe(risk_profile)
 
 
 # ============================================================
@@ -4494,7 +4496,7 @@ def fetch_token_security(
                 "No major contract red flags detected"
             )
 
-        return {
+        security_report = {
             "status": status,
             "confidence": confidence,
             "flags": flags,
@@ -4516,6 +4518,8 @@ def fetch_token_security(
                 "sell_tax": sell_tax,
             },
         }
+
+        return json_safe(security_report)
 
     except Exception as exc:
 
@@ -4710,7 +4714,7 @@ def calculate_stress_test(
     else:
         resilience_label = "Fragile"
 
-    return {
+    stress_report = {
         "benchmark": "BTC",
         "scenarios": scenarios,
         "base_scenario": ten_percent_case,
@@ -4755,9 +4759,9 @@ def calculate_stress_test(
         ),
     }
 
+    return json_safe(stress_report)
 
-# ============================================================
-# RISK DRIVERS
+
 # ============================================================
 
 def build_risk_drivers(
@@ -4917,25 +4921,25 @@ def build_evidence_pack(
 
         "market": {
             "price_usd": market.get(
-                "current_price_usd"
+                "price"
             ),
             "change_24h_pct": market.get(
-                "change_24h_pct"
+                "price_change_24h_pct"
             ),
             "change_7d_pct": market.get(
-                "change_7d_pct"
+                "price_change_7d_pct"
             ),
             "volume_24h_usd": market.get(
-                "volume_24h_usd"
+                "volume_24h"
             ),
             "market_cap_usd": market.get(
-                "market_cap_usd"
+                "market_cap"
             ),
             "high_24h_usd": market.get(
-                "high_24h_usd"
+                "high_24h"
             ),
             "low_24h_usd": market.get(
-                "low_24h_usd"
+                "low_24h"
             ),
             "source": market.get(
                 "source"
@@ -4979,7 +4983,7 @@ def build_evidence_pack(
         ),
     }
 
-    return evidence
+    return json_safe(evidence)
 
 
 # ============================================================
@@ -4997,10 +5001,9 @@ def build_gemini_prompt(
     """
 
     evidence_json = json.dumps(
-        evidence,
+        json_safe(evidence),
         ensure_ascii=False,
         indent=2,
-        default=str,
     )
 
     return f"""
@@ -5689,7 +5692,7 @@ def run_gemini_interpretation(
             " Gemini API is not configured."
         )
 
-        return fallback
+        return json_safe(fallback)
 
     prompt = build_gemini_prompt(
         symbol,
@@ -5750,7 +5753,7 @@ def run_gemini_interpretation(
                     "missing and were replaced with safe defaults."
                 )
 
-            return cleaned
+            return json_safe(cleaned)
 
         except FuturesTimeoutError:
 
@@ -5829,7 +5832,7 @@ def run_gemini_interpretation(
         )
     )
 
-    return fallback
+    return json_safe(fallback)
 
 
 # ============================================================
@@ -5959,10 +5962,17 @@ def build_structured_report(
             "missing_signals"
         ] = missing_signals
 
-    if dq.get(
-        "confidence"
-    ) is None:
-        dq["confidence"] = 50
+    # Final safety net: ensure confidence is always a valid number
+    # (the block above already handles this, but this guarantees it).
+    if not isinstance(
+        dq.get("confidence"),
+        (int, float),
+    ) or dq.get("confidence") is None:
+        dq["confidence"] = first_defined(
+            risk_profile.get("confidence"),
+            ai.get("confidence"),
+            50,
+        )
 
     dq["source"] = first_defined(
         market.get(
@@ -5971,7 +5981,7 @@ def build_structured_report(
         "Backend market feed",
     )
 
-    return {
+    report = {
         "schema_version": (
             REPORT_SCHEMA_VERSION
         ),
@@ -6052,6 +6062,11 @@ def build_structured_report(
             "scenario_model": True,
         },
     }
+
+    # Final safety pass — ensure no NaN/Inf/Decimal/datetime values
+    # leak into the JSON response. json.dumps raises ValueError on
+    # NaN/Inf, which would surface as a 500 error in production.
+    return json_safe(report)
 
 
 # ============================================================
@@ -8919,16 +8934,31 @@ def analyze():
             force_market_refresh=True,
         )
         
-        logger.info("DEBUG REPORT OUTPUT: %s", json.dumps(report, indent=2))
-        analysis_id = save_analysis(
-            g.current_user["id"],
-            symbol,
-            report,
-        )
+        try:
+            logger.info("DEBUG REPORT OUTPUT: %s", json.dumps(json_safe(report), indent=2, default=str))
+        except Exception:
+            pass  # logging must never break the response
 
-        history = get_user_history(
-            g.current_user["id"]
-        )
+        # Persist to DB — but never let persistence failure
+        # break the response. The report is the source of
+        # truth and must always reach the frontend.
+        try:
+            analysis_id = save_analysis(
+                g.current_user["id"],
+                symbol,
+                report,
+            )
+        except Exception as db_exc:
+            logger.warning("save_analysis failed: %s", db_exc)
+            analysis_id = None
+
+        try:
+            history = get_user_history(
+                g.current_user["id"]
+            )
+        except Exception as db_exc:
+            logger.warning("get_user_history failed: %s", db_exc)
+            history = []
 
         return jsonify({
             "success": True,
