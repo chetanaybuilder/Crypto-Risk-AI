@@ -288,7 +288,13 @@ app = Flask(
     static_folder="static",
     template_folder="templates",
 )
-CORS(app, resources={r"/api/": {"origins": ""}})
+
+# NOTE: CORS is configured once, correctly, in the "CORS" section
+# further below. A duplicate, malformed CORS() call used to live
+# here — it matched the literal path "/api/" (not the wildcard
+# "/api/*") and set origins to an empty string, so it never matched
+# any real request and was silently superseded by the real config
+# anyway. Removed to avoid confusion; behavior is unchanged.
 
 app.config["SECRET_KEY"] = SECRET_KEY
 
@@ -3857,31 +3863,24 @@ def build_risk_profile(
         quant
     )
 
+    # NOTE: the market dict produced anywhere in this pipeline
+    # (empty_market_data / fetch_coingecko_market / fetch_binance_market)
+    # only ever sets "volume_24h" and "market_cap" — there is no
+    # "_usd"-suffixed variant. A dead first-lookup for "volume_24h_usd"
+    # / "market_cap_usd" used to sit here; it always missed and fell
+    # through to the correct key below, so behavior is unchanged —
+    # this just removes the misleading dead branch.
     volume = optional_numeric(
         market.get(
-            "volume_24h_usd"
+            "volume_24h"
         )
     )
-
-    if volume is None:
-        volume = optional_numeric(
-            market.get(
-                "volume_24h"
-            )
-        )
 
     market_cap = optional_numeric(
         market.get(
-            "market_cap_usd"
+            "market_cap"
         )
     )
-
-    if market_cap is None:
-        market_cap = optional_numeric(
-            market.get(
-                "market_cap"
-            )
-        )
 
     volatility_score = score_volatility(
         volatility
@@ -6397,8 +6396,22 @@ def _safe_env_float(
             return 0.0
 
 
-DB_POOL_MIN_CONN = max(1, _safe_env_int("DB_POOL_MIN_CONN", 1))
-DB_POOL_MAX_CONN = max(DB_POOL_MIN_CONN, _safe_env_int("DB_POOL_MAX_CONN", 10))
+# FIX: the pool ceiling used to default to 10, which is too low for
+# this app's real concurrency. A single analysis job alone makes 5+
+# sequential DB round-trips (create job, several progress updates,
+# save_analysis, get_user_history), and that happens concurrently
+# with: threaded=True Flask request handling, ANALYSIS_EXECUTOR
+# workers running jobs in the background, and users polling
+# /api/analyze/status/<job_id> while a job is in flight. Under only
+# light concurrent usage the pool ran dry, get_db_connection()
+# exhausted its retries, and callers saw reports/history "sometimes
+# there, sometimes not" — this was the primary cause of that symptom.
+# Raise the default ceiling and make min/max independently tunable
+# via environment variables; set these to match your Postgres
+# provider's actual connection limit (check your plan — e.g. Neon/
+# Supabase free tiers commonly allow 20-60 concurrent connections).
+DB_POOL_MIN_CONN = max(1, _safe_env_int("DB_POOL_MIN_CONN", 2))
+DB_POOL_MAX_CONN = max(DB_POOL_MIN_CONN, _safe_env_int("DB_POOL_MAX_CONN", 20))
 DB_CONNECT_RETRIES = max(1, _safe_env_int("DB_CONNECT_RETRIES", 3))
 DB_CONNECT_RETRY_DELAY = max(0.2, _safe_env_float("DB_CONNECT_RETRY_DELAY", 0.75))
 
@@ -9620,3 +9633,6 @@ if __name__ == "__main__":
 # ============================================================
 # END OF PART 3
 # ============================================================
+
+
+
