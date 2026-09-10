@@ -549,39 +549,6 @@ TOKEN_MAP = {
     "SHIB": "shiba-inu",
 }
 
-# CoinPaprika coin IDs (verified against /v1/tickers/{id}).
-# Used by the market-data fallback. Only symbols present here are
-# eligible for the CoinPaprika fallback; unknowns fall through.
-COINPAPRIKA_IDS = {
-
-    "SHIB": "shiba-inu",}
-
-# CoinPaprika coin IDs (verified against /v1/tickers/{id}).
-# Used by the market-data fallback. Only symbols present here are
-# eligible for the CoinPaprika fallback; unknowns fall through.
-COINPAPRIKA_IDS = {
-    "BTC": "btc-bitcoin",
-    "ETH": "eth-ethereum",
-    "SOL": "sol-solana",
-    "BNB": "bnb-bnb",
-    "XRP": "xrp-xrp",
-    "ADA": "ada-cardano",
-    "DOGE": "doge-dogecoin",
-    "AVAX": "avax-avalanche",
-    "DOT": "dot-polkadot",
-    "MATIC": "matic-polygon",
-    "POL": "pol-polygon",
-    "LINK": "link-chainlink",
-    "LTC": "ltc-litecoin",
-    "BCH": "bch-bitcoin-cash",
-    "ATOM": "atom-cosmos",
-    "UNI": "uni-uniswap",
-    "XLM": "xlm-stellar",
-    "TRX": "trx-tron",
-    "SHIB": "shib-shiba-inu",
-}
-
-
 
 
 # Native blockchain assets (not ERC-20 tokens)
@@ -2032,123 +1999,6 @@ def fetch_binance_market(
 
 
 # ============================================================
-# MARKET DATA — COINPAPRIKA FALLBACK
-# ============================================================
-# Free, keyless REST API. Supplies price, 24h change, 7d change,
-# 24h volume and market cap for the coins in COINPAPRIKA_IDS.
-# Does NOT provide 24h high/low, so those stay None.
-# ============================================================
-
-def fetch_coinpaprika_market(
-    symbol: str,
-) -> dict:
-
-    symbol = normalize_symbol(symbol)
-
-    if not symbol:
-        return empty_market_data(symbol)
-
-    coin_id = COINPAPRIKA_IDS.get(symbol)
-
-    if not coin_id:
-        logger.info(
-            "CoinPaprika fallback unavailable for %s: no coin id",
-            symbol,
-        )
-        return empty_market_data(symbol)
-
-    response = http_get(
-        f"https://api.coinpaprika.com/v1/tickers/{quote(coin_id, safe='')}",
-        timeout=MARKET_TIMEOUT,
-    )
-
-    if response is None:
-        logger.info(
-            "CoinPaprika unavailable for %s",
-            symbol,
-        )
-        return empty_market_data(symbol)
-
-    try:
-
-        payload = response.json()
-
-        if not isinstance(payload, dict):
-            return empty_market_data(symbol)
-
-        quotes = payload.get("quotes", {})
-
-        if not isinstance(quotes, dict):
-            return empty_market_data(symbol)
-
-        usd = quotes.get("USD", {})
-
-        if not isinstance(usd, dict):
-            return empty_market_data(symbol)
-
-        price = optional_numeric(
-            usd.get("price")
-        )
-
-        change_24h = optional_numeric(
-            usd.get("percent_change_24h")
-        )
-
-        change_7d = optional_numeric(
-            usd.get("percent_change_7d")
-        )
-
-        volume = optional_numeric(
-            usd.get("volume_24h")
-        )
-
-        market_cap = optional_numeric(
-            usd.get("market_cap")
-        )
-
-        return json_safe({
-            "symbol": symbol,
-            "price": price,
-            "price_change_24h_pct": change_24h,
-            "price_change_7d_pct": change_7d,
-            "volume_24h": volume,
-            "market_cap": market_cap,
-            "high_24h": None,
-            "low_24h": None,
-            "source": "CoinPaprika",
-            "timestamp": utc_now_iso(),
-            "available": price is not None,
-        })
-
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-    ) as exc:
-
-        logger.warning(
-            "CoinPaprika market parsing failed for %s: %s",
-            symbol,
-            exc,
-        )
-
-        return empty_market_data(symbol)
-
-    except Exception as exc:
-
-        logger.warning(
-            "CoinPaprika market failed unexpectedly for %s: %s",
-            symbol,
-            exc,
-        )
-
-        return empty_market_data(symbol)
-
-
-
-
-# ============================================================
 # UNIFIED MARKET FETCH
 # ============================================================
 # MARKET DATA ORCHESTRATOR — Multi-Provider with Cache
@@ -2253,26 +2103,6 @@ def fetch_market_data(
                 dict,
             ):
                 market = fallback
-
-        if not market.get(
-            "available"
-        ):
-            logger.info(
-                "Using CoinPaprika fallback for %s",
-                symbol,
-            )
-
-            paprika = fetch_coinpaprika_market(
-                symbol
-            )
-
-            if isinstance(
-                paprika,
-                dict
-            ) and paprika.get(
-                "available"
-            ):
-                market = paprika
 
         if not market.get(
             "available"
