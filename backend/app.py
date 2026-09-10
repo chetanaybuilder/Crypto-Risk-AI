@@ -242,7 +242,7 @@ MARKET_CACHE_TTL = max(
     int(
         os.getenv(
             "MARKET_CACHE_TTL",
-            "15",
+            "60",
         )
     ),
 )
@@ -1834,6 +1834,61 @@ def http_get(
         return None
 
 
+def _http_get_market(
+    url: str,
+    params: Optional[dict] = None,
+    timeout: Optional[int] = None,
+):
+    """
+    HTTP GET for market data providers.
+
+    Unlike http_get(), this returns the HTTP status code and a
+    human-readable error reason alongside the response so callers
+    can apply provider cooldown/backoff logic.
+
+    Returns:
+        tuple: (response, status_code, error_reason)
+            response: requests.Response or None
+            status_code: int HTTP status code or None
+            error_reason: str failure reason or None on success
+    """
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            timeout=(
+                timeout
+                or MARKET_TIMEOUT
+            ),
+            headers={
+                "User-Agent": (
+                    "CryptoRisk-AI/3.0"
+                ),
+            },
+        )
+
+        if response.ok:
+            return response, response.status_code, None
+
+        # Non-2xx — return the response AND the status code so the
+        # caller can record the failure and fall through.
+        return response, response.status_code, (
+            f"HTTP {response.status_code}"
+        )
+
+    except requests.exceptions.Timeout:
+        return None, None, "timeout"
+
+    except requests.exceptions.ConnectionError:
+        return None, None, "connection_error"
+
+    except requests.RequestException as exc:
+        return None, None, str(exc)
+
+    except Exception as exc:
+        return None, None, str(exc)
+
+
 # ============================================================
 # COINGECKO RESOLUTION
 # ============================================================
@@ -1993,25 +2048,35 @@ def resolve_coin_id(
 def fetch_coingecko_market(
     symbol: str,
 ) -> dict:
+    """
+    Fetch current market snapshot from CoinGecko (/coins/markets).
 
-    symbol = normalize_symbol(
-        symbol
-    )
+    Uses the status-aware HTTP helper so 429/403/451/5xx responses
+    are recorded via the provider cooldown system and the caller
+    can fall through to the next provider.
+    """
 
-    coin_id = resolve_coin_id(
-        symbol
-    )
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return empty_market_data(symbol)
+
+    # Skip if currently on cooldown
+    if _provider_is_cooling("CoinGecko"):
+        return empty_market_data(symbol)
+
+    coin_id = resolve_coin_id(symbol)
 
     if not coin_id:
-        return empty_market_data(
-            symbol
-        )
+        return empty_market_data(symbol)
+
+    logger.info("[MARKET] %s trying CoinGecko", symbol)
 
     # IMPORTANT: The /simple/price endpoint does NOT return
     # high_24h / low_24h / 7d change. We use /coins/markets
     # which returns all of those in a single call so the
     # dashboard snapshot cards always populate.
-    response = http_get(
+    response, status_code, error_reason = _http_get_market(
         f"{COINGECKO_API_URL}/coins/markets",
         params={
             "vs_currency": "usd",
@@ -2026,102 +2091,87 @@ def fetch_coingecko_market(
     )
 
     if response is None:
-        return empty_market_data(
-            symbol
+        _mark_provider_failure(
+            "CoinGecko",
+            status_code,
+            error_reason or "no_response",
         )
+        logger.warning(
+            "[MARKET] CoinGecko failed: %s",
+            error_reason,
+        )
+        return empty_market_data(symbol)
+
+    if status_code is not None and status_code >= 400:
+        _mark_provider_failure(
+            "CoinGecko",
+            status_code,
+            error_reason or f"HTTP {status_code}",
+        )
+        logger.warning(
+            "[MARKET] CoinGecko failed: %s",
+            error_reason,
+        )
+        return empty_market_data(symbol)
 
     try:
 
         payload = response.json()
 
-        if not isinstance(
-            payload,
-            list,
-        ) or not payload:
-            return empty_market_data(
-                symbol
+        if not isinstance(payload, list) or not payload:
+            _mark_provider_failure(
+                "CoinGecko",
+                status_code,
+                "malformed_json",
             )
+            logger.warning("[MARKET] CoinGecko returned empty/malformed list")
+            return empty_market_data(symbol)
 
         coin = payload[0]
 
-        if not isinstance(
-            coin,
-            dict,
-        ):
-            return empty_market_data(
-                symbol
-            )
+        if not isinstance(coin, dict):
+            return empty_market_data(symbol)
 
-        price = optional_numeric(
-            coin.get("current_price")
-        )
-
-        volume = optional_numeric(
-            coin.get("total_volume")
-        )
-
-        market_cap = optional_numeric(
-            coin.get("market_cap")
-        )
-
+        price = optional_numeric(coin.get("current_price"))
+        volume = optional_numeric(coin.get("total_volume"))
+        market_cap = optional_numeric(coin.get("market_cap"))
         change_24h = optional_numeric(
-            coin.get(
-                "price_change_percentage_24h"
-            )
+            coin.get("price_change_percentage_24h")
         )
-
         change_7d = optional_numeric(
-            coin.get(
-                "price_change_percentage_7d_in_currency"
-            )
+            coin.get("price_change_percentage_7d_in_currency")
         )
+        high_24h = optional_numeric(coin.get("high_24h"))
+        low_24h = optional_numeric(coin.get("low_24h"))
 
-        high_24h = optional_numeric(
-            coin.get(
-                "high_24h"
-            )
-        )
+        # Got a 200 but no usable price — treat as a provider failure
+        if price is None:
+            logger.warning("[MARKET] CoinGecko returned no usable price")
+            return empty_market_data(symbol)
 
-        low_24h = optional_numeric(
-            coin.get(
-                "low_24h"
-            )
-        )
+        # Success — clear any cooldown
+        _clear_provider_success("CoinGecko")
 
-        last_updated = coin.get(
-            "last_updated"
-        )
-
+        last_updated = coin.get("last_updated")
         timestamp = utc_now_iso()
 
         if last_updated:
-
             try:
-
-                if isinstance(
-                    last_updated,
-                    (
-                        date,
-                        datetime,
-                    ),
-                ):
+                if isinstance(last_updated, (date, datetime)):
                     timestamp = last_updated.isoformat()
                 else:
                     timestamp = (
                         datetime.fromisoformat(
-                            str(last_updated).replace(
-                                "Z",
-                                "+00:00",
-                            ),
+                            str(last_updated).replace("Z", "+00:00"),
                         ).isoformat()
                     )
+            except Exception:
+                pass
 
-            except Exception as exc:
-
-                logger.debug(
-                    "Market timestamp parse failed: %s",
-                    exc,
-                )
+        logger.info(
+            "[MARKET] CoinGecko SUCCESS price=%.4f source=CoinGecko",
+            price,
+        )
 
         return json_safe({
             "symbol": symbol,
@@ -2134,35 +2184,16 @@ def fetch_coingecko_market(
             "low_24h": low_24h,
             "source": "CoinGecko",
             "timestamp": timestamp,
-            "available": price is not None,
+            "available": True,
         })
 
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-    ) as exc:
-
-        logger.warning(
-            "CoinGecko market parsing failed: %s",
-            exc,
-        )
-
-        return empty_market_data(
-            symbol
-        )
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.warning("[MARKET] CoinGecko parse failed: %s", exc)
+        return empty_market_data(symbol)
 
     except Exception as exc:
-
-        logger.warning(
-            "CoinGecko market failed unexpectedly: %s",
-            exc,
-        )
-
-        return empty_market_data(
-            symbol
-        )
+        logger.warning("[MARKET] CoinGecko failed unexpectedly: %s", exc)
+        return empty_market_data(symbol)
 
 
 # ============================================================
@@ -2172,66 +2203,71 @@ def fetch_coingecko_market(
 def fetch_binance_market(
     symbol: str,
 ) -> dict:
+    """
+    Fetch current market snapshot from Binance (24hr ticker).
 
-    symbol = normalize_symbol(
-        symbol
-    )
+    Binance returns 451 on Render's IP range, so this is used as
+    a later fallback, not the primary provider.
+    """
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return empty_market_data(symbol)
+
+    if _provider_is_cooling("Binance"):
+        return empty_market_data(symbol)
 
     pair = f"{symbol}USDT"
 
-    response = http_get(
+    logger.info("[MARKET] %s trying Binance", symbol)
+
+    response, status_code, error_reason = _http_get_market(
         f"{BINANCE_API_URL}/ticker/24hr",
-        params={
-            "symbol": pair,
-        },
+        params={"symbol": pair},
         timeout=MARKET_TIMEOUT,
     )
 
     if response is None:
-        return empty_market_data(
-            symbol
+        _mark_provider_failure(
+            "Binance",
+            status_code,
+            error_reason or "no_response",
         )
+        logger.warning("[MARKET] Binance failed: %s", error_reason)
+        return empty_market_data(symbol)
+
+    if status_code is not None and status_code >= 400:
+        _mark_provider_failure(
+            "Binance",
+            status_code,
+            error_reason or f"HTTP {status_code}",
+        )
+        logger.warning("[MARKET] Binance failed: %s", error_reason)
+        return empty_market_data(symbol)
 
     try:
 
         payload = response.json()
 
-        if not isinstance(
-            payload,
-            dict,
-        ):
-            return empty_market_data(
-                symbol
-            )
+        if not isinstance(payload, dict):
+            return empty_market_data(symbol)
 
-        price = optional_numeric(
-            payload.get(
-                "lastPrice"
-            )
-        )
+        price = optional_numeric(payload.get("lastPrice"))
+        change = optional_numeric(payload.get("priceChangePercent"))
+        volume = optional_numeric(payload.get("quoteVolume"))
+        high = optional_numeric(payload.get("highPrice"))
+        low = optional_numeric(payload.get("lowPrice"))
 
-        change = optional_numeric(
-            payload.get(
-                "priceChangePercent"
-            )
-        )
+        if price is None:
+            logger.warning("[MARKET] Binance returned no usable price")
+            return empty_market_data(symbol)
 
-        volume = optional_numeric(
-            payload.get(
-                "quoteVolume"
-            )
-        )
+        _clear_provider_success("Binance")
 
-        high = optional_numeric(
-            payload.get(
-                "highPrice"
-            )
-        )
-
-        low = optional_numeric(
-            payload.get(
-                "lowPrice"
-            )
+        logger.info(
+            "[MARKET] Binance SUCCESS price=%.4f source=Binance",
+            price,
         )
 
         return json_safe({
@@ -2245,35 +2281,371 @@ def fetch_binance_market(
             "low_24h": low,
             "source": "Binance",
             "timestamp": utc_now_iso(),
-            "available": price is not None,
+            "available": True,
         })
 
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-    ) as exc:
-
-        logger.warning(
-            "Binance market parsing failed: %s",
-            exc,
-        )
-
-        return empty_market_data(
-            symbol
-        )
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.warning("[MARKET] Binance parse failed: %s", exc)
+        return empty_market_data(symbol)
 
     except Exception as exc:
+        logger.warning("[MARKET] Binance failed unexpectedly: %s", exc)
+        return empty_market_data(symbol)
 
-        logger.warning(
-            "Binance market failed unexpectedly: %s",
-            exc,
+
+# ============================================================
+# COINCAP MARKET PROVIDER
+# ============================================================
+# CoinCap v2 API — keyless, returns price/volume/market cap.
+# No high/24h/low/24h, but reliable from Render.
+# Docs: https://docs.coincap.io
+# ============================================================
+
+def fetch_coincap_market(
+    symbol: str,
+) -> dict:
+    """
+    Fetch current market snapshot from CoinCap.
+
+    Returns price, 24h change, volume, market cap.
+    Does NOT return high_24h/low_24h — those stay null.
+    """
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return empty_market_data(symbol)
+
+    if _provider_is_cooling("CoinCap"):
+        return empty_market_data(symbol)
+
+    asset_id = COINCAP_ID_MAP.get(symbol)
+
+    if not asset_id:
+        logger.info("[MARKET] CoinCap: no mapping for %s", symbol)
+        return empty_market_data(symbol)
+
+    logger.info("[MARKET] %s trying CoinCap", symbol)
+
+    try:
+        response, status_code, error_reason = _http_get_market(
+            f"{COINCAP_API_URL}/assets/{asset_id}",
+            timeout=MARKET_TIMEOUT,
         )
 
-        return empty_market_data(
-            symbol
+        if response is None:
+            _mark_provider_failure(
+                "CoinCap",
+                status_code,
+                error_reason or "no_response",
+            )
+            logger.warning("[MARKET] CoinCap failed: %s", error_reason)
+            return empty_market_data(symbol)
+
+        if status_code is not None and status_code >= 400:
+            _mark_provider_failure(
+                "CoinCap",
+                status_code,
+                error_reason or f"HTTP {status_code}",
+            )
+            logger.warning("[MARKET] CoinCap failed: %s", error_reason)
+            return empty_market_data(symbol)
+
+        payload = response.json()
+
+        if not isinstance(payload, dict):
+            return empty_market_data(symbol)
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            logger.warning("[MARKET] CoinCap malformed response")
+            return empty_market_data(symbol)
+
+        price = optional_numeric(data.get("priceUsd"))
+        change = optional_numeric(data.get("changePercent24Hr"))
+        volume = optional_numeric(data.get("volumeUsd24Hr"))
+        market_cap = optional_numeric(data.get("marketCapUsd"))
+
+        if price is None:
+            logger.warning("[MARKET] CoinCap returned no usable price")
+            return empty_market_data(symbol)
+
+        _clear_provider_success("CoinCap")
+
+        logger.info(
+            "[MARKET] CoinCap SUCCESS price=%.4f source=CoinCap",
+            price,
         )
+
+        return json_safe({
+            "symbol": symbol,
+            "price": price,
+            "price_change_24h_pct": change,
+            "price_change_7d_pct": None,
+            "volume_24h": volume,
+            "market_cap": market_cap,
+            "high_24h": None,
+            "low_24h": None,
+            "source": "CoinCap",
+            "timestamp": utc_now_iso(),
+            "available": True,
+        })
+
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.warning("[MARKET] CoinCap parse failed: %s", exc)
+        return empty_market_data(symbol)
+
+    except Exception as exc:
+        logger.warning("[MARKET] CoinCap failed unexpectedly: %s", exc)
+        return empty_market_data(symbol)
+
+
+# ============================================================
+# KRAKEN MARKET PROVIDER
+# ============================================================
+# Kraken public Ticker API — no key required.
+# Returns last price, 24h high/low, 24h volume.
+# Reliable from Render.
+# Docs: https://docs.kraken.com/rest/#tag/Spot-Market-Data
+# ============================================================
+
+def fetch_kraken_market(
+    symbol: str,
+) -> dict:
+    """
+    Fetch current market snapshot from Kraken.
+
+    Returns last price, 24h high/low, 24h volume.
+    Does NOT return market cap or 24h percent change directly.
+    """
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return empty_market_data(symbol)
+
+    if _provider_is_cooling("Kraken"):
+        return empty_market_data(symbol)
+
+    pair = KRAKEN_PAIR_MAP.get(symbol)
+
+    if not pair:
+        logger.info("[MARKET] Kraken: no mapping for %s", symbol)
+        return empty_market_data(symbol)
+
+    logger.info("[MARKET] %s trying Kraken", symbol)
+
+    try:
+        response, status_code, error_reason = _http_get_market(
+            f"{KRAKEN_API_URL}/public/Ticker",
+            params={"pair": pair},
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if response is None:
+            _mark_provider_failure(
+                "Kraken",
+                status_code,
+                error_reason or "no_response",
+            )
+            logger.warning("[MARKET] Kraken failed: %s", error_reason)
+            return empty_market_data(symbol)
+
+        if status_code is not None and status_code >= 400:
+            _mark_provider_failure(
+                "Kraken",
+                status_code,
+                error_reason or f"HTTP {status_code}",
+            )
+            logger.warning("[MARKET] Kraken failed: %s", error_reason)
+            return empty_market_data(symbol)
+
+        payload = response.json()
+
+        if not isinstance(payload, dict):
+            return empty_market_data(symbol)
+
+        errors = payload.get("error", [])
+        if isinstance(errors, list) and errors:
+            _mark_provider_failure(
+                "Kraken",
+                status_code,
+                f"kraken_error: {errors[0]}",
+            )
+            logger.warning("[MARKET] Kraken error: %s", errors[0])
+            return empty_market_data(symbol)
+
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            return empty_market_data(symbol)
+
+        ticker = None
+        for key, value in result.items():
+            if isinstance(value, dict) and key == pair:
+                ticker = value
+                break
+
+        if ticker is None:
+            for key, value in result.items():
+                if isinstance(value, dict):
+                    ticker = value
+                    break
+
+        if not isinstance(ticker, dict):
+            logger.warning("[MARKET] Kraken: no ticker data")
+            return empty_market_data(symbol)
+
+        price_raw = ticker.get("c")
+        high_raw = ticker.get("h")
+        low_raw = ticker.get("l")
+        vol_raw = ticker.get("v")
+
+        price = optional_numeric(
+            price_raw[0] if isinstance(price_raw, list) else price_raw
+        )
+        high_24h = optional_numeric(
+            high_raw[1] if isinstance(high_raw, list) else high_raw
+        )
+        low_24h = optional_numeric(
+            low_raw[1] if isinstance(low_raw, list) else low_raw
+        )
+        volume = optional_numeric(
+            vol_raw[1] if isinstance(vol_raw, list) else vol_raw
+        )
+
+        if price is None:
+            logger.warning("[MARKET] Kraken returned no usable price")
+            return empty_market_data(symbol)
+
+        _clear_provider_success("Kraken")
+
+        logger.info(
+            "[MARKET] Kraken SUCCESS price=%.4f source=Kraken",
+            price,
+        )
+
+        return json_safe({
+            "symbol": symbol,
+            "price": price,
+            "price_change_24h_pct": None,
+            "price_change_7d_pct": None,
+            "volume_24h": volume,
+            "market_cap": None,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+            "source": "Kraken",
+            "timestamp": utc_now_iso(),
+            "available": True,
+        })
+
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.warning("[MARKET] Kraken parse failed: %s", exc)
+        return empty_market_data(symbol)
+
+    except Exception as exc:
+        logger.warning("[MARKET] Kraken failed unexpectedly: %s", exc)
+        return empty_market_data(symbol)
+
+
+# ============================================================
+# COINBASE MARKET PROVIDER
+# ============================================================
+# Coinbase Exchange public API — no key required.
+# Returns 24h stats: high/low/open/last/volume.
+# Reliable from Render.
+# Docs: https://docs.cloud.coinbase.com/exchange/reference
+# ============================================================
+
+def fetch_coinbase_market(
+    symbol: str,
+) -> dict:
+    """
+    Fetch current market snapshot from Coinbase Exchange.
+
+    Returns last price, 24h volume.
+    Does NOT return market cap, high/low, or 24h percent change.
+    """
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return empty_market_data(symbol)
+
+    if _provider_is_cooling("Coinbase"):
+        return empty_market_data(symbol)
+
+    pair = COINBASE_PAIR_MAP.get(symbol)
+
+    if not pair:
+        logger.info("[MARKET] Coinbase: no mapping for %s", symbol)
+        return empty_market_data(symbol)
+
+    logger.info("[MARKET] %s trying Coinbase", symbol)
+
+    try:
+        response, status_code, error_reason = _http_get_market(
+            f"{COINBASE_API_URL}/products/{pair}/ticker",
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if response is None:
+            _mark_provider_failure(
+                "Coinbase",
+                status_code,
+                error_reason or "no_response",
+            )
+            logger.warning("[MARKET] Coinbase failed: %s", error_reason)
+            return empty_market_data(symbol)
+
+        if status_code is not None and status_code >= 400:
+            _mark_provider_failure(
+                "Coinbase",
+                status_code,
+                error_reason or f"HTTP {status_code}",
+            )
+            logger.warning("[MARKET] Coinbase failed: %s", error_reason)
+            return empty_market_data(symbol)
+
+        payload = response.json()
+
+        if not isinstance(payload, dict):
+            return empty_market_data(symbol)
+
+        price = optional_numeric(payload.get("price"))
+        volume = optional_numeric(payload.get("volume"))
+
+        if price is None:
+            logger.warning("[MARKET] Coinbase returned no usable price")
+            return empty_market_data(symbol)
+
+        _clear_provider_success("Coinbase")
+
+        logger.info(
+            "[MARKET] Coinbase SUCCESS price=%.4f source=Coinbase",
+            price,
+        )
+
+        return json_safe({
+            "symbol": symbol,
+            "price": price,
+            "price_change_24h_pct": None,
+            "price_change_7d_pct": None,
+            "volume_24h": volume,
+            "market_cap": None,
+            "high_24h": None,
+            "low_24h": None,
+            "source": "Coinbase",
+            "timestamp": utc_now_iso(),
+            "available": True,
+        })
+
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.warning("[MARKET] Coinbase parse failed: %s", exc)
+        return empty_market_data(symbol)
+
+    except Exception as exc:
+        logger.warning("[MARKET] Coinbase failed unexpectedly: %s", exc)
+        return empty_market_data(symbol)
 
 
 # ============================================================
@@ -2281,166 +2653,165 @@ def fetch_binance_market(
 # ============================================================
 # MARKET DATA ORCHESTRATOR — Multi-Provider with Cache
 # ============================================================
-# Primary: CoinGecko (comprehensive market data)
-# Fallback: Binance (real-time ticker data)
-# Cache: 60-second TTL to respect rate limits
-#
-# Enriches raw market data with 7d change from price history
-# when the provider doesn't supply it directly.
+# Provider chain: CoinGecko → CoinCap → Binance → Kraken → Coinbase
+# Each provider is tried in order. 429/403/451/5xx → cooldown + next.
+# Cache: 60s TTL. Per-symbol lock prevents duplicate upstream calls.
 # ============================================================
+
+_MARKET_PROVIDERS = [
+    fetch_coingecko_market,
+    fetch_coincap_market,
+    fetch_binance_market,
+    fetch_kraken_market,
+    fetch_coinbase_market,
+]
+
 
 def fetch_market_data(
     symbol: str,
     force_refresh: bool = False,
 ) -> dict:
+    """Unified market fetcher with multi-provider fallback + cache."""
 
     try:
 
-        symbol = normalize_symbol(
-            symbol
-        )
+        symbol = normalize_symbol(symbol)
 
         if not symbol:
-            return empty_market_data(
-                symbol
-            )
+            return empty_market_data(symbol)
 
         now = time.time()
 
+        # Check cache first
         if not force_refresh:
-
             try:
-
                 with _cache_lock:
+                    cached = _market_cache.get(symbol)
 
-                    cached = _market_cache.get(
-                        symbol
-                    )
-
-                if isinstance(
-                    cached,
-                    dict,
-                ) and cached:
-
+                if isinstance(cached, dict) and cached:
                     cached_at = numeric(
-                        cached.get(
-                            "_cached_at",
-                            0,
-                        ),
+                        cached.get("_cached_at", 0),
                         default=0,
                     )
 
-                    if (
-                        now - cached_at
-                        < MARKET_CACHE_TTL
-                    ):
-
+                    if (now - cached_at) < MARKET_CACHE_TTL:
                         result = dict(cached)
+                        result.pop("_cached_at", None)
 
-                        result.pop(
-                            "_cached_at",
-                            None,
+                        logger.info(
+                            "[MARKET] %s cache HIT (source=%s, age=%.0fs)",
+                            symbol,
+                            result.get("source", "unknown"),
+                            now - cached_at,
                         )
 
                         return json_safe(result)
 
             except Exception as exc:
+                logger.debug("Market cache read failed: %s", exc)
 
-                logger.debug(
-                    "Market cache read failed: %s",
-                    exc,
+        # Per-symbol lock to prevent duplicate concurrent calls
+        lock = _get_symbol_fetch_lock(symbol)
+
+        with lock:
+            # Re-check cache after acquiring lock
+            if not force_refresh:
+                try:
+                    with _cache_lock:
+                        cached = _market_cache.get(symbol)
+
+                    if isinstance(cached, dict) and cached:
+                        cached_at = numeric(
+                            cached.get("_cached_at", 0),
+                            default=0,
+                        )
+
+                        if (now - cached_at) < MARKET_CACHE_TTL:
+                            result = dict(cached)
+                            result.pop("_cached_at", None)
+
+                            logger.info(
+                                "[MARKET] %s cache HIT after lock (source=%s)",
+                                symbol,
+                                result.get("source", "unknown"),
+                            )
+
+                            return json_safe(result)
+
+                except Exception:
+                    pass
+
+            logger.info("[MARKET] %s cache MISS — trying providers", symbol)
+
+            market = empty_market_data(symbol)
+
+            # Try each provider in order until one succeeds
+            for provider_fn in _MARKET_PROVIDERS:
+                provider_name = getattr(
+                    provider_fn, "__name__", "unknown"
                 )
 
-        market = fetch_coingecko_market(
-            symbol
-        )
+                try:
+                    candidate = provider_fn(symbol)
 
-        if not isinstance(
-            market,
-            dict,
-        ):
-            market = empty_market_data(
-                symbol
-            )
+                    if (
+                        isinstance(candidate, dict)
+                        and candidate.get("available")
+                    ):
+                        market = candidate
+                        logger.info(
+                            "[MARKET] %s SUCCESS from %s",
+                            symbol,
+                            candidate.get("source", provider_name),
+                        )
+                        break
 
-        if not market.get(
-            "available"
-        ):
+                except Exception as exc:
+                    logger.warning(
+                        "[MARKET] %s provider %s raised: %s",
+                        symbol,
+                        provider_name,
+                        exc,
+                    )
+
+            if not market.get("available"):
+                logger.warning("[MARKET] %s ALL PROVIDERS FAILED", symbol)
+
+            # Enrich with 7d change from history if needed
+            try:
+                market = enrich_market_7d(
+                    market,
+                    symbol,
+                    force_refresh=force_refresh,
+                )
+
+            except Exception as exc:
+                logger.debug("Market 7d enrichment failed: %s", exc)
+
+            if not isinstance(market, dict):
+                market = empty_market_data(symbol)
+
+            market = json_safe(market)
+
+            # Cache the result
+            try:
+                cache_value = dict(market)
+                cache_value["_cached_at"] = time.time()
+
+                with _cache_lock:
+                    _market_cache[symbol] = cache_value
+
+            except Exception as exc:
+                logger.debug("Market cache write failed: %s", exc)
 
             logger.info(
-                "Using Binance fallback for %s",
+                "[MARKET] %s returning source=%s available=%s",
                 symbol,
+                market.get("source", "unknown"),
+                market.get("available", False),
             )
 
-            fallback = fetch_binance_market(
-                symbol
-            )
-
-            if isinstance(
-                fallback,
-                dict,
-            ):
-                market = fallback
-
-        if not market.get(
-            "available"
-        ):
-
-            market = empty_market_data(
-                symbol
-            )
-
-        # Defer to the daily history series so the 7D CHANGE
-        # card is populated whenever history is available.
-        try:
-
-            market = enrich_market_7d(
-                market,
-                symbol,
-                force_refresh=force_refresh,
-            )
-
-        except Exception as exc:
-
-            logger.debug(
-                "Market 7d enrichment failed: %s",
-                exc,
-            )
-
-        if not isinstance(
-            market,
-            dict,
-        ):
-            market = empty_market_data(
-                symbol
-            )
-
-        market = json_safe(market)
-
-        try:
-
-            cache_value = dict(
-                market
-            )
-
-            cache_value[
-                "_cached_at"
-            ] = now
-
-            with _cache_lock:
-
-                _market_cache[
-                    symbol
-                ] = cache_value
-
-        except Exception as exc:
-
-            logger.debug(
-                "Market cache write failed: %s",
-                exc,
-            )
-
-        return market
+            return market
 
     except Exception as exc:
 
@@ -2450,13 +2821,10 @@ def fetch_market_data(
         )
 
         try:
-            return empty_market_data(
-                symbol
-            )
+            return empty_market_data(symbol)
         except Exception:
-            return empty_market_data(
-                ""
-            )
+            return empty_market_data("")
+            
 
 def _price_series_change(
     prices: list,
@@ -8967,11 +9335,22 @@ def market_api(
             force_refresh=force_refresh,
         )
 
+        if isinstance(market, dict) and market.get("available"):
+            return jsonify({
+                "success": True,
+                "symbol": symbol,
+                "market": market,
+            })
+
         return jsonify({
-            "success": True,
+            "success": False,
             "symbol": symbol,
             "market": market,
-        })
+            "error": {
+                "code": "MARKET_DATA_UNAVAILABLE",
+                "message": "All market providers failed",
+            },
+        }), 502
 
     except Exception as exc:
 
@@ -9046,7 +9425,7 @@ def analyze():
 
             contract_address=contract_address,
 
-            force_market_refresh=True,
+            force_market_refresh=False,
         )
         
         try:
