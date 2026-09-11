@@ -1566,6 +1566,13 @@ def http_get(
 
     try:
 
+        headers = {
+            "User-Agent": "CryptoRisk-AI/3.0",
+        }
+
+        if COINGECKO_API_KEY and "api.coingecko.com" in url:
+            headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
+
         response = requests.get(
             url,
             params=params,
@@ -1573,11 +1580,7 @@ def http_get(
                 timeout
                 or MARKET_TIMEOUT
             ),
-            headers={
-                "User-Agent": (
-                    "CryptoRisk-AI/3.0"
-                )
-            },
+            headers=headers,
         )
 
         response.raise_for_status()
@@ -1623,6 +1626,13 @@ def _http_get_market(
             error_reason: str failure reason or None on success
     """
     try:
+        headers = {
+            "User-Agent": "CryptoRisk-AI/3.0",
+        }
+
+        if COINGECKO_API_KEY and "api.coingecko.com" in url:
+            headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
+
         response = requests.get(
             url,
             params=params,
@@ -1630,11 +1640,7 @@ def _http_get_market(
                 timeout
                 or MARKET_TIMEOUT
             ),
-            headers={
-                "User-Agent": (
-                    "CryptoRisk-AI/3.0"
-                ),
-            },
+            headers=headers,
         )
 
         if response.ok:
@@ -2224,7 +2230,10 @@ def fetch_market_data(
                         default=0,
                     )
 
-                    if (now - cached_at) < MARKET_CACHE_TTL:
+                    if (
+                        cached.get("available")
+                        and (now - cached_at) < MARKET_CACHE_TTL
+                    ):
                         result = dict(cached)
                         result.pop("_cached_at", None)
 
@@ -2256,7 +2265,10 @@ def fetch_market_data(
                             default=0,
                         )
 
-                        if (now - cached_at) < MARKET_CACHE_TTL:
+                        if (
+                            cached.get("available")
+                            and (now - cached_at) < MARKET_CACHE_TTL
+                        ):
                             result = dict(cached)
                             result.pop("_cached_at", None)
 
@@ -2290,7 +2302,11 @@ def fetch_market_data(
                 )
 
             if not market.get("available"):
-                logger.warning("[MARKET] %s ALL PROVIDERS FAILED", symbol)
+                logger.warning(
+                    "[MARKET] %s CoinGecko unavailable: %s",
+                    symbol,
+                    market.get("unavailable_reason", "unknown"),
+                )
 
             # Enrich with 7d change from history if needed
             try:
@@ -2308,16 +2324,18 @@ def fetch_market_data(
 
             market = json_safe(market)
 
-            # Cache the result
-            try:
-                cache_value = dict(market)
-                cache_value["_cached_at"] = time.time()
+            # Cache only usable snapshots. A 429/error must never poison
+            # the cache and turn a temporary provider failure permanent.
+            if market.get("available"):
+                try:
+                    cache_value = dict(market)
+                    cache_value["_cached_at"] = time.time()
 
-                with _cache_lock:
-                    _market_cache[symbol] = cache_value
+                    with _cache_lock:
+                        _market_cache[symbol] = cache_value
 
-            except Exception as exc:
-                logger.debug("Market cache write failed: %s", exc)
+                except Exception as exc:
+                    logger.debug("Market cache write failed: %s", exc)
 
             logger.info(
                 "[MARKET] %s returning source=%s available=%s",
@@ -6087,7 +6105,7 @@ def run_analysis(
     symbol,
     chain_id=None,
     contract_address=None,
-    force_market_refresh=True,
+    force_market_refresh=False,
     progress_callback=None,
 ):
     """
@@ -7940,7 +7958,7 @@ def execute_analysis_job(
                 "contract_address"
             ),
 
-            force_market_refresh=True,
+            force_market_refresh=False,
 
             progress_callback=callback,
         )

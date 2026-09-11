@@ -39,6 +39,8 @@ services:
       # API keys (configure manually in Render dashboard)
       - key: GEMINI_API_KEY
         sync: false
+      - key: COINGECKO_API_KEY
+        sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
