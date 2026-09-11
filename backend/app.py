@@ -480,8 +480,11 @@ TOKEN_MAP = {
     "UNI": "uniswap",
     "XLM": "stellar",
     "TRX": "tron",
-        "SHIB": "shiba-inu",
+    "SHIB": "shiba-inu",
+    "TON": "the-open-network",
 }
+
+SUPPORTED_ASSETS = frozenset(TOKEN_MAP)
 
 
 # ============================================================
@@ -501,6 +504,7 @@ NATIVE_ASSETS = {
     "ATOM",
     "XLM",
     "TRX",
+    "TON",
 }
 
 
@@ -1581,6 +1585,10 @@ class MarketDataUnavailableError(RuntimeError):
     """Raised when CoinGecko cannot provide a usable market snapshot."""
 
 
+class UnsupportedAssetError(ValueError):
+    """Raised when a ticker has no verified CoinGecko asset ID."""
+
+
 # ============================================================
 # HTTP HELPER
 # ============================================================
@@ -1727,133 +1735,21 @@ def resolve_coin_id(
     if not symbol:
         return None
 
-    if symbol in TOKEN_MAP:
-        return TOKEN_MAP[symbol]
+    coin_id = TOKEN_MAP.get(symbol)
 
-    with _cache_lock:
-
-        cached = _coin_resolution_cache.get(
-            symbol
+    if not coin_id:
+        raise UnsupportedAssetError(
+            f"Unsupported asset '{symbol}'. Add a verified CoinGecko ID before using it."
         )
 
-    if cached:
-        return cached
-
-    response = http_get(
-        f"{COINGECKO_API_URL}/search",
-        params={
-            "query": symbol,
-        },
-        timeout=MARKET_TIMEOUT,
+    # Temporary verification log: remove after production IDs are confirmed.
+    logger.info(
+        "[COINGECKO_ID_DEBUG] symbol=%s resolved_id=%s",
+        symbol,
+        coin_id,
     )
 
-    if response is None:
-        return None
-
-    try:
-
-        payload = response.json()
-
-        if not isinstance(
-            payload,
-            dict,
-        ):
-            return None
-
-        coins = payload.get(
-            "coins",
-            [],
-        )
-
-        if not isinstance(
-            coins,
-            list,
-        ):
-            return None
-
-        if not coins:
-            return None
-
-        normalized_symbol = symbol.lower()
-
-        # Prefer exact symbol match.
-        for coin in coins:
-
-            if not isinstance(
-                coin,
-                dict,
-            ):
-                continue
-
-            coin_symbol = str(
-                coin.get(
-                    "symbol",
-                    "",
-                )
-            ).upper()
-
-            if (
-                coin_symbol
-                == normalized_symbol.upper()
-            ):
-
-                coin_id = coin.get(
-                    "id"
-                )
-
-                if coin_id:
-
-                    with _cache_lock:
-
-                        _coin_resolution_cache[
-                            symbol
-                        ] = coin_id
-
-                    return coin_id
-
-        # Otherwise use first valid result.
-        for coin in coins:
-
-            if not isinstance(
-                coin,
-                dict,
-            ):
-                continue
-
-            coin_id = coin.get(
-                "id"
-            )
-
-            if coin_id:
-
-                with _cache_lock:
-
-                    _coin_resolution_cache[
-                        symbol
-                    ] = coin_id
-
-                return coin_id
-
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-    ) as exc:
-
-        logger.warning(
-            "CoinGecko resolution parsing failed: %s",
-            exc,
-        )
-
-    except Exception as exc:
-
-        logger.warning(
-            "CoinGecko resolution failed unexpectedly: %s",
-            exc,
-        )
-
-    return None
+    return coin_id
 
 
 # ============================================================
@@ -2014,6 +1910,7 @@ def fetch_coingecko_market(
 
         return json_safe({
             "symbol": symbol,
+            "coin_id": coin_id,
             "price": price,
             "price_change_24h_pct": change_24h,
             "price_change_7d_pct": change_7d,
@@ -4318,6 +4215,16 @@ def build_risk_profile(
         security
     )
 
+    if security and security.get("not_applicable"):
+        structural_detail = "Not applicable."
+    elif security and security.get("available"):
+        structural_detail = security.get(
+            "status",
+            "Security assessment available.",
+        )
+    else:
+        structural_detail = "Contract security assessment unavailable."
+
     composite, confidence = (
         calculate_composite_risk(
             volatility_score,
@@ -4387,33 +4294,7 @@ def build_risk_profile(
             "weight": RISK_WEIGHTS[
                 "structural"
             ],
-            "detail": (
-                security.get(
-                    "status",
-                    "Security assessment available.",
-                )
-                if security
-                and security.get("status", "").lower()
-                    not in {
-                        "unavailable",
-                        "not available",
-                        "unknown",
-                    }
-                else
-                "Not applicable."
-                if security
-                and security.get("not_applicable")
-                else
-                "Contract security assessment "
-                "completed with no critical "
-                "flags — standard baseline "
-                "risk applied."
-                if security
-                else
-                "Contract security data unavailable "
-                "— default structural risk "
-                "score applied."
-            ),
+            "detail": structural_detail,
         },
     }
 
@@ -6410,6 +6291,8 @@ def run_analysis(
         raise ValueError(
             "Token symbol is required."
         )
+
+    resolve_coin_id(symbol)
 
     # --------------------------------------------------------
     # Stage 1 — Market
@@ -9098,6 +8981,8 @@ def market_api(
             raw_symbol
         )
 
+        resolve_coin_id(symbol)
+
         if not symbol:
 
             return jsonify({
@@ -9147,6 +9032,13 @@ def market_api(
                 ),
             },
         }), 502
+
+    except UnsupportedAssetError as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+            "code": "UNSUPPORTED_ASSET",
+        }), 400
 
     except Exception as exc:
 
