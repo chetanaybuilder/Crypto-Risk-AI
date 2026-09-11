@@ -66,7 +66,6 @@ from flask import (
 )
 
 from flask_bcrypt import Bcrypt
-from flask_cors import CORS
 
 from flask_jwt_extended import (
     JWTManager,
@@ -1779,6 +1778,7 @@ def empty_market_data(
         "high_24h": None,
         "low_24h": None,
         "source": "unavailable",
+        "unavailable_reason": "No market data provider returned a usable snapshot.",
         "timestamp": utc_now_iso(),
         "available": False,
     }
@@ -4222,10 +4222,10 @@ def score_liquidity(
     )
 
     if volume_24h is None or market_cap is None:
-        return 50.0
+        return None
 
     if market_cap <= 0:
-        return 50.0
+        return None
 
     turnover = (
         volume_24h / market_cap
@@ -4295,7 +4295,7 @@ def score_structural_risk(
     """
 
     if not security:
-        return 50.0
+        return None
 
     status = str(
         security.get(
@@ -4309,7 +4309,7 @@ def score_structural_risk(
         "not available",
         "unknown",
     }:
-        return 50.0
+        return None
 
     flags = security.get(
         "flags"

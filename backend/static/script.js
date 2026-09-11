@@ -273,6 +273,14 @@ function normalizeSource(source) {
     const normalized = text.toLowerCase();
 
     if (
+        normalized === "unavailable" ||
+        normalized === "unknown" ||
+        normalized === "n/a"
+    ) {
+        return "Unavailable";
+    }
+
+    if (
         normalized.includes("coingecko") ||
         normalized === "coin gecko"
     ) {
@@ -2204,6 +2212,20 @@ function updateLiveMarket(
         return;
     }
 
+    if (
+        market.available === false
+    ) {
+        setMarketLiveState(
+            false,
+            firstDefined(
+                market.unavailable_reason,
+                "Market data unavailable"
+            )
+        );
+
+        return;
+    }
+
     const price =
         firstDefined(
             market.price,
@@ -2211,6 +2233,15 @@ function updateLiveMarket(
             market.price_usd,
             market.current_price
         );
+
+    if (price === null) {
+        setMarketLiveState(
+            false,
+            "Market data unavailable"
+        );
+
+        return;
+    }
 
     const change24 =
         firstDefined(
@@ -2951,6 +2982,16 @@ function renderMarket(report) {
             market.last_updated
         );
 
+    const marketAvailable =
+        market.available !== false &&
+        price !== null;
+
+    const unavailableReason =
+        firstDefined(
+            market.unavailable_reason,
+            "Market data unavailable"
+        );
+
     setText(
         "#report-token",
         firstDefined(
@@ -3006,7 +3047,9 @@ function renderMarket(report) {
      */
     setText(
         "#market-live-status",
-        "Report market snapshot"
+        marketAvailable
+            ? "Report market snapshot"
+            : unavailableReason
     );
 
     setText(
