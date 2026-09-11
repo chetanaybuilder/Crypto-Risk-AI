@@ -2894,6 +2894,11 @@ def fetch_binance_history(
                 close_price
             )
 
+        logger.info(
+            "[HISTORY] Binance symbol=%s returned %d candles",
+            symbol,
+            len(result),
+        )
         return result
 
     except (
@@ -2908,6 +2913,10 @@ def fetch_binance_history(
             exc,
         )
 
+        logger.warning(
+            "[HISTORY] Binance symbol=%s returned 0 candles after parsing",
+            symbol,
+        )
         return []
 
     except Exception as exc:
@@ -2917,6 +2926,10 @@ def fetch_binance_history(
             exc,
         )
 
+        logger.warning(
+            "[HISTORY] Binance symbol=%s failed unexpectedly; returned 0 candles",
+            symbol,
+        )
         return []
 
 
@@ -3166,6 +3179,11 @@ def fetch_price_history(
                         cached_prices,
                         list,
                     ):
+                        logger.info(
+                            "[HISTORY] symbol=%s source=memory_cache candles=%d",
+                            symbol,
+                            len(cached_prices),
+                        )
                         return list(cached_prices)
 
         except Exception as exc:
@@ -3182,6 +3200,8 @@ def fetch_price_history(
             days,
         )
 
+        history_source = "Binance"
+
         if (
             not isinstance(
                 prices,
@@ -3193,12 +3213,20 @@ def fetch_price_history(
                 symbol,
                 days,
             )
+            history_source = "CoinGecko"
 
         if not isinstance(
             prices,
             list,
         ):
             prices = []
+
+        logger.info(
+            "[HISTORY] symbol=%s source=%s candles=%d",
+            symbol,
+            history_source,
+            len(prices),
+        )
 
         try:
 
@@ -3916,11 +3944,23 @@ def score_liquidity(
         market_cap
     )
 
-    if volume_24h is None or market_cap is None:
+    if volume_24h is None:
         return None
 
-    if market_cap <= 0:
-        return None
+    if market_cap is None or market_cap <= 0:
+        # Degraded but useful fallback when CoinGecko market cap is
+        # unavailable: score observable 24h quote volume directly.
+        if volume_24h >= 1_000_000_000:
+            return 20
+        if volume_24h >= 100_000_000:
+            return 35
+        if volume_24h >= 10_000_000:
+            return 50
+        if volume_24h >= 1_000_000:
+            return 65
+        if volume_24h >= 100_000:
+            return 80
+        return 90
 
     turnover = (
         volume_24h / market_cap
@@ -4287,7 +4327,12 @@ def build_risk_profile(
                 "volume-to-market-cap turnover."
                 if liquidity_score is not None
                 else
-                "Liquidity signal unavailable."
+                (
+                    "Liquidity signal unavailable: Binance volume was not returned."
+                    if volume is None
+                    else
+                    "Liquidity estimated from 24h volume only; market cap is unavailable."
+                )
             ),
         },
 
