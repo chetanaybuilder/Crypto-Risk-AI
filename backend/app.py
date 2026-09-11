@@ -3256,10 +3256,24 @@ def fetch_price_history(
                 exc,
             )
 
-        prices = fetch_coingecko_history(
+        # Binance supplies the historical candles used by volatility,
+        # beta, and 7d change without consuming CoinGecko quota.
+        prices = fetch_binance_history(
             symbol,
             days,
         )
+
+        if (
+            not isinstance(
+                prices,
+                list,
+            )
+            or len(prices) < 2
+        ):
+            prices = fetch_coingecko_history(
+                symbol,
+                days,
+            )
 
         if not isinstance(
             prices,

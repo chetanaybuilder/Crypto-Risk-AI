@@ -3228,7 +3228,7 @@ function renderRiskProfile(
     );
 
     renderPillar(
-        "structural",
+        "contract",
         firstDefined(
             getPillar(
                 report,
@@ -3259,21 +3259,6 @@ function renderRiskProfile(
      * If your HTML has a separate
      * contract pillar, render it too.
      */
-    const contract =
-        getPillar(
-            report,
-            "contract"
-        );
-
-    if (
-        Object.keys(contract)
-            .length
-    ) {
-        renderPillar(
-            "contract",
-            contract
-        );
-    }
 }
 
 
