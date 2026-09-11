@@ -21,7 +21,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: gunicorn --chdir backend app:app --bind 0.0.0.0:$PORT
+    startCommand: gunicorn --chdir backend app:app --bind 0.0.0.0:$PORT --timeout 60
     healthCheckPath: /api/health
     envVars:
       # Auto-generated secure secrets

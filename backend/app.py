@@ -187,13 +187,16 @@ GEMINI_MODEL = os.getenv(
     "gemini-2.5-flash",
 ).strip()
 
-GEMINI_TIMEOUT_MS = max(
-    5000,
-    int(
-        os.getenv(
-            "GEMINI_TIMEOUT_MS",
-            "30000",
-        )
+GEMINI_TIMEOUT_MS = min(
+    15000,
+    max(
+        5000,
+        int(
+            os.getenv(
+                "GEMINI_TIMEOUT_MS",
+                "12000",
+            )
+        ),
     ),
 )
 
@@ -208,7 +211,7 @@ GEMINI_MAX_RETRIES = min(
         int(
             os.getenv(
                 "GEMINI_MAX_RETRIES",
-                "1",
+                "0",
             )
         ),
     ),
