@@ -3906,6 +3906,10 @@ function renderAI(report) {
             "Unavailable"
         );
 
+    if (security.not_applicable) {
+        securityText = "Not applicable";
+    }
+
     if (
         securityFlags.length
     ) {
@@ -4152,9 +4156,23 @@ function renderDataQuality(
             )
         );
 
+    const sourceTimestamps =
+        isPlainObject(reportMarket.source_timestamps)
+            ? reportMarket.source_timestamps
+            : {};
+
+    const sourceFreshness = Object.entries(
+        sourceTimestamps
+    ).map(
+        ([name, value]) =>
+            `${name}: ${formatRelativeTime(value)}`
+    );
+
     setText(
         "#market-source",
-        source
+        sourceFreshness.length
+            ? `${source} (${sourceFreshness.join("; ")})`
+            : source
     );
 
     /*

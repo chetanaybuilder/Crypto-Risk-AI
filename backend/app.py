@@ -1965,17 +1965,28 @@ def fetch_coingecko_market(
             )
             return market
 
-        price = optional_numeric(coin.get("current_price"))
-        volume = optional_numeric(coin.get("total_volume"))
-        market_cap = optional_numeric(coin.get("market_cap"))
-        change_24h = optional_numeric(
-            coin.get("price_change_percentage_24h")
+        field_errors = {}
+        price = _read_market_number(
+            coin, "current_price", "CoinGecko", field_errors
         )
-        change_7d = optional_numeric(
-            coin.get("price_change_percentage_7d_in_currency")
+        volume = _read_market_number(
+            coin, "total_volume", "CoinGecko", field_errors
         )
-        high_24h = optional_numeric(coin.get("high_24h"))
-        low_24h = optional_numeric(coin.get("low_24h"))
+        market_cap = _read_market_number(
+            coin, "market_cap", "CoinGecko", field_errors
+        )
+        change_24h = _read_market_number(
+            coin, "price_change_percentage_24h", "CoinGecko", field_errors
+        )
+        change_7d = _read_market_number(
+            coin, "price_change_percentage_7d_in_currency", "CoinGecko", field_errors
+        )
+        high_24h = _read_market_number(
+            coin, "high_24h", "CoinGecko", field_errors
+        )
+        low_24h = _read_market_number(
+            coin, "low_24h", "CoinGecko", field_errors
+        )
 
         if price is None:
             market = empty_market_data(symbol)
@@ -2012,7 +2023,11 @@ def fetch_coingecko_market(
             "low_24h": low_24h,
             "source": "CoinGecko",
             "timestamp": timestamp,
+            "source_timestamps": {
+                "CoinGecko": timestamp,
+            },
             "available": True,
+            "field_errors": field_errors,
         })
 
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
@@ -2031,6 +2046,24 @@ def fetch_coingecko_market(
 # ============================================================
 # BINANCE LIVE MARKET PRICE
 # ============================================================
+
+def _read_market_number(
+    payload: dict,
+    key: str,
+    source: str,
+    field_errors: dict,
+):
+    """Read one numeric provider field without affecting other fields."""
+
+    try:
+        value = optional_numeric(payload.get(key))
+        if value is None:
+            field_errors[key] = f"{source} returned no usable {key}."
+        return value
+    except Exception as exc:
+        field_errors[key] = f"{source} {key} parsing failed: {exc}."
+        logger.exception("[MARKET] %s field %s failed", source, key)
+        return None
 
 def get_binance_price(
     symbol: str,
@@ -2070,45 +2103,49 @@ def get_binance_price(
                 continue
 
             payload = response.json()
-            price = optional_numeric(
-                payload.get("lastPrice")
-                if isinstance(payload, dict)
-                else None
+            if not isinstance(payload, dict):
+                errors.append("response was not an object")
+                continue
+
+            price_errors = {}
+            price = _read_market_number(
+                payload,
+                "lastPrice",
+                "Binance",
+                price_errors,
             )
 
             if price is None:
                 errors.append("no usable price")
                 continue
 
+            field_errors = {}
+            field_errors.update(price_errors)
             market = {
                 "symbol": symbol,
                 "price": price,
-                "price_change_24h_pct": optional_numeric(
-                    payload.get("priceChangePercent")
+                "price_change_24h_pct": _read_market_number(
+                    payload, "priceChangePercent", "Binance", field_errors
                 ),
                 "price_change_7d_pct": None,
-                "volume_24h": optional_numeric(
-                    payload.get("quoteVolume")
+                "volume_24h": _read_market_number(
+                    payload, "quoteVolume", "Binance", field_errors
                 ),
                 "market_cap": None,
-                "high_24h": optional_numeric(payload.get("highPrice")),
-                "low_24h": optional_numeric(payload.get("lowPrice")),
+                "high_24h": _read_market_number(
+                    payload, "highPrice", "Binance", field_errors
+                ),
+                "low_24h": _read_market_number(
+                    payload, "lowPrice", "Binance", field_errors
+                ),
                 "source": "Binance",
                 "timestamp": utc_now_iso(),
+                "source_timestamps": {
+                    "Binance": utc_now_iso(),
+                },
                 "available": True,
-                "field_errors": {},
+                "field_errors": field_errors,
             }
-
-            for field, label in (
-                ("price_change_24h_pct", "24h change"),
-                ("volume_24h", "24h volume"),
-                ("high_24h", "24h high"),
-                ("low_24h", "24h low"),
-            ):
-                if market[field] is None:
-                    market["field_errors"][field] = (
-                        f"Binance returned no usable {label}."
-                    )
 
             return json_safe(market)
 
@@ -2472,6 +2509,12 @@ def fetch_market_data(
                     if market_cap is not None:
                         market["market_cap"] = market_cap
                         market["market_cap_source"] = "CoinGecko"
+                        market.setdefault("source_timestamps", {})[
+                            "CoinGecko"
+                        ] = market_cap_snapshot.get(
+                            "timestamp",
+                            utc_now_iso(),
+                        )
                     else:
                         market.setdefault("field_errors", {})[
                             "market_cap"
@@ -2525,6 +2568,13 @@ def fetch_market_data(
                     market["stale_reason"] = (
                         "CoinGecko is temporarily rate-limited; serving the last known snapshot."
                     )
+
+            market.setdefault("source_timestamps", {})
+            if market.get("source") and market.get("timestamp"):
+                market["source_timestamps"].setdefault(
+                    market["source"],
+                    market["timestamp"],
+                )
 
             # Enrich with 7d change from history if needed
             if not market.get("stale"):
@@ -4009,6 +4059,9 @@ def score_structural_risk(
     if not security:
         return None
 
+    if security.get("not_applicable"):
+        return None
+
     status = str(
         security.get(
             "status",
@@ -4332,6 +4385,10 @@ def build_risk_profile(
                         "not available",
                         "unknown",
                     }
+                else
+                "Not applicable."
+                if security
+                and security.get("not_applicable")
                 else
                 "Contract security assessment "
                 "completed with no critical "
@@ -6082,6 +6139,8 @@ def build_structured_report(
         data_quality
     )
 
+    is_native_asset = symbol.upper() in NATIVE_ASSETS
+
     field_checks = {
         "Live price": market.get("price"),
         "24h volume": market.get("volume_24h"),
@@ -6090,12 +6149,14 @@ def build_structured_report(
         "24h low": market.get("low_24h"),
         "Price history": quant.get("history_observations"),
         "BTC benchmark history": quant.get("btc_history_observations"),
-        "Contract security": (
+    }
+
+    if not is_native_asset:
+        field_checks["Contract security"] = (
             True
             if isinstance(security, dict) and security.get("available")
             else None
-        ),
-    }
+        )
 
     available_fields = [
         name
@@ -6115,7 +6176,17 @@ def build_structured_report(
     )
     dq["available_fields"] = available_fields
     dq["field_errors"] = field_errors
+    dq["source_timestamps"] = dict(
+        market.get("source_timestamps")
+        if isinstance(market.get("source_timestamps"), dict)
+        else {}
+    )
     dq["missing_signals"] = missing_signals
+    dq["not_applicable"] = (
+        ["Contract security"]
+        if is_native_asset
+        else []
+    )
     dq["confidence"] = round(
         len(available_fields) / len(field_checks) * 100,
         1,
@@ -6445,7 +6516,19 @@ def run_analysis(
         "Evaluating available contract security data.",
     )
 
-    if (
+    if symbol.upper() in NATIVE_ASSETS:
+        security = {
+            "status": "Not applicable",
+            "confidence": None,
+            "flags": [],
+            "red_flags": [],
+            "source": "Asset classification",
+            "timestamp": utc_now_iso(),
+            "available": False,
+            "not_applicable": True,
+        }
+
+    elif (
         chain_id
         and contract_address
     ):
