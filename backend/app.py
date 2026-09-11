@@ -2715,93 +2715,87 @@ def fetch_binance_history(
         ),
     )
 
-    response = http_get(
-        f"{BINANCE_API_URL}/klines",
-        params={
-            "symbol": pair,
-            "interval": "1d",
-            "limit": limit,
-        },
-        timeout=MARKET_TIMEOUT,
-    )
+    # Try both Binance base URLs. api.binance.com may return 451
+    # (geo-block) for klines from certain IPs, while data-api.binance.vision
+    # remains accessible. This mirrors the fallback in get_binance_price().
+    for base_url in (BINANCE_API_URL, BINANCE_DATA_API_URL):
+        response = http_get(
+            f"{base_url}/klines",
+            params={
+                "symbol": pair,
+                "interval": "1d",
+                "limit": limit,
+            },
+            timeout=MARKET_TIMEOUT,
+        )
 
-    if response is None:
-        return []
+        if response is None:
+            continue
 
-    try:
+        try:
 
-        payload = response.json()
+            payload = response.json()
 
-        if not isinstance(
-            payload,
-            list,
-        ):
-            return []
+            if not isinstance(
+                payload,
+                list,
+            ):
+                continue
 
-        result = []
+            result = []
 
-        for candle in payload:
+            for candle in payload:
 
-            if (
-                not isinstance(
-                    candle,
-                    list,
+                if (
+                    not isinstance(
+                        candle,
+                        list,
+                    )
+                    or len(candle) < 5
+                ):
+                    continue
+
+                close_price = optional_numeric(
+                    candle[4]
                 )
-                or len(candle) < 5
-            ):
-                continue
 
-            close_price = optional_numeric(
-                candle[4]
+                if (
+                    close_price is None
+                    or close_price <= 0
+                ):
+                    continue
+
+                result.append(
+                    close_price
+                )
+
+            if result:
+                logger.info(
+                    "[HISTORY] Binance (%s) symbol=%s returned %d candles",
+                    base_url,
+                    symbol,
+                    len(result),
+                )
+                return result
+
+        except (
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+        ) as exc:
+
+            logger.warning(
+                "Binance history parsing failed for %s: %s",
+                base_url,
+                exc,
             )
 
-            if (
-                close_price is None
-                or close_price <= 0
-            ):
-                continue
-
-            result.append(
-                close_price
-            )
-
-        logger.info(
-            "[HISTORY] Binance symbol=%s returned %d candles",
-            symbol,
-            len(result),
-        )
-        return result
-
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-    ) as exc:
-
-        logger.warning(
-            "Binance history parsing failed: %s",
-            exc,
-        )
-
-        logger.warning(
-            "[HISTORY] Binance symbol=%s returned 0 candles after parsing",
-            symbol,
-        )
-        return []
-
-    except Exception as exc:
-
-        logger.warning(
-            "Binance history failed unexpectedly: %s",
-            exc,
-        )
-
-        logger.warning(
-            "[HISTORY] Binance symbol=%s failed unexpectedly; returned 0 candles",
-            symbol,
-        )
-        return []
+    logger.warning(
+        "[HISTORY] Binance symbol=%s returned 0 candles from all endpoints",
+        symbol,
+    )
+    return []
 
 
 # ============================================================
