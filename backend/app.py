@@ -224,6 +224,10 @@ GEMINI_MAX_RETRIES = min(
 MARKET_TIMEOUT = max(3, int(os.getenv("MARKET_TIMEOUT", "10")))
 HISTORY_CACHE_TTL = max(15, int(os.getenv("HISTORY_CACHE_TTL", "60")))
 MARKET_CACHE_TTL = max(5, int(os.getenv("MARKET_CACHE_TTL", "60")))
+MARKET_CAP_CACHE_TTL = max(
+    600,
+    int(os.getenv("MARKET_CAP_CACHE_TTL", "900")),
+)
 
 # ============================================================
 # JOB CONFIG
@@ -516,6 +520,7 @@ NATIVE_ASSETS = {
 # ============================================================
 
 _market_cache = {}
+_market_cap_cache = {}
 _history_cache = {}
 _coin_resolution_cache = {}
 
@@ -2180,8 +2185,6 @@ def fetch_coincap_market(
     Does NOT return high_24h/low_24h — those stay null.
     """
 
-    return empty_market_data(normalize_symbol(symbol))
-
     symbol = normalize_symbol(symbol)
 
     if not symbol:
@@ -2395,42 +2398,63 @@ def fetch_market_data(
             # Enrich the live Binance ticker with CoinGecko market cap,
             # without allowing a CoinGecko failure to discard live fields.
             if market.get("available") and market.get("source") == "Binance":
-                try:
-                    market_cap_snapshot = fetch_coingecko_market(symbol)
-                    market_cap = optional_numeric(
-                        market_cap_snapshot.get("market_cap")
-                        if isinstance(market_cap_snapshot, dict)
-                        else None
-                    )
+                market_cap_entry = None
 
-                    if market_cap is not None:
-                        market["market_cap"] = market_cap
-                        market["market_cap_source"] = "CoinGecko"
-                        market.setdefault("source_timestamps", {})[
-                            "CoinGecko"
-                        ] = market_cap_snapshot.get(
-                            "timestamp",
-                            utc_now_iso(),
+                with _cache_lock:
+                    cached_market_cap = _market_cap_cache.get(symbol)
+
+                if isinstance(cached_market_cap, dict):
+                    cached_cap_at = numeric(
+                        cached_market_cap.get("cached_at"),
+                        default=0,
+                    )
+                    if now - cached_cap_at < MARKET_CAP_CACHE_TTL:
+                        market_cap_entry = dict(cached_market_cap)
+
+                if market_cap_entry is None:
+                    try:
+                        market_cap_snapshot = fetch_coingecko_market(symbol)
+                        market_cap = optional_numeric(
+                            market_cap_snapshot.get("market_cap")
+                            if isinstance(market_cap_snapshot, dict)
+                            else None
                         )
-                    else:
+
+                        if market_cap is not None:
+                            market_cap_entry = {
+                                "value": market_cap,
+                                "timestamp": market_cap_snapshot.get(
+                                    "timestamp",
+                                    utc_now_iso(),
+                                ),
+                                "cached_at": time.time(),
+                            }
+                            with _cache_lock:
+                                _market_cap_cache[symbol] = market_cap_entry
+                        else:
+                            market.setdefault("field_errors", {})[
+                                "market_cap"
+                            ] = market_cap_snapshot.get(
+                                "unavailable_reason",
+                                "CoinGecko returned no usable market cap.",
+                            )
+                    except Exception as exc:
                         market.setdefault("field_errors", {})[
                             "market_cap"
-                        ] = market_cap_snapshot.get(
-                            "unavailable_reason",
-                            "CoinGecko returned no usable market cap.",
-                        )
-                        logger.warning(
-                            "[MARKET] %s market cap unavailable: %s",
+                        ] = f"CoinGecko market-cap lookup failed: {exc}."
+                        logger.exception(
+                            "[MARKET] %s market-cap enrichment failed",
                             symbol,
-                            market["field_errors"]["market_cap"],
                         )
-                except Exception as exc:
-                    market.setdefault("field_errors", {})[
-                        "market_cap"
-                    ] = f"CoinGecko market-cap lookup failed: {exc}."
-                    logger.exception(
-                        "[MARKET] %s market-cap enrichment failed",
-                        symbol,
+
+                if market_cap_entry is not None:
+                    market["market_cap"] = market_cap_entry["value"]
+                    market["market_cap_source"] = "CoinGecko"
+                    market.setdefault("source_timestamps", {})[
+                        "CoinGecko"
+                    ] = market_cap_entry.get(
+                        "timestamp",
+                        utc_now_iso(),
                     )
 
             if not market.get("available"):
@@ -2802,8 +2826,6 @@ def fetch_binance_history(
     symbol: str,
     days: int = SUPPORTED_HISTORY_DAYS,
 ) -> list:
-
-    return []
 
     symbol = normalize_symbol(
         symbol
@@ -6292,8 +6314,6 @@ def run_analysis(
             "Token symbol is required."
         )
 
-    resolve_coin_id(symbol)
-
     # --------------------------------------------------------
     # Stage 1 — Market
     # --------------------------------------------------------
@@ -8980,8 +9000,6 @@ def market_api(
         symbol = normalize_symbol(
             raw_symbol
         )
-
-        resolve_coin_id(symbol)
 
         if not symbol:
 
