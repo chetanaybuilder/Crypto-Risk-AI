@@ -398,6 +398,7 @@ COINGECKO_API_URL = (
 
 # Binance public spot ticker; no API key is required.
 BINANCE_API_URL = "https://api.binance.com/api/v3"
+BINANCE_DATA_API_URL = "https://data-api.binance.vision/api/v3"
 COINCAP_API_URL = ""
 COINCAP_ID_MAP = {}
 
@@ -2040,72 +2041,74 @@ def get_binance_price(
 
     pair = f"{symbol}USDT"
 
-    try:
-        response, status_code, error_reason = _http_get_market(
-            f"{BINANCE_API_URL}/ticker/price",
-            params={"symbol": pair},
-            timeout=MARKET_TIMEOUT,
-        )
+    errors = []
 
-        if response is None:
-            market = empty_market_data(symbol)
-            market["unavailable_reason"] = (
-                f"Binance request failed: {error_reason or 'no response'}."
+    for base_url in (
+        BINANCE_API_URL,
+        BINANCE_DATA_API_URL,
+    ):
+        try:
+            response, status_code, error_reason = _http_get_market(
+                f"{base_url}/ticker/price",
+                params={"symbol": pair},
+                timeout=MARKET_TIMEOUT,
             )
-            return market
 
-        if status_code == 404:
-            market = empty_market_data(symbol)
-            market["unavailable_reason"] = (
-                f"Binance does not list {pair}."
+            if response is None:
+                errors.append(error_reason or "no response")
+                continue
+
+            if status_code == 404:
+                errors.append(f"HTTP 404 from {base_url}")
+                continue
+
+            if status_code is not None and status_code >= 400:
+                errors.append(error_reason or f"HTTP {status_code}")
+                continue
+
+            payload = response.json()
+            price = optional_numeric(
+                payload.get("price")
+                if isinstance(payload, dict)
+                else None
             )
-            return market
 
-        if status_code is not None and status_code >= 400:
-            market = empty_market_data(symbol)
-            market["unavailable_reason"] = (
-                f"Binance returned {error_reason or f'HTTP {status_code}'}."
+            if price is None:
+                errors.append("no usable price")
+                continue
+
+            return json_safe({
+                "symbol": symbol,
+                "price": price,
+                "price_change_24h_pct": None,
+                "price_change_7d_pct": None,
+                "volume_24h": None,
+                "market_cap": None,
+                "high_24h": None,
+                "low_24h": None,
+                "source": "Binance",
+                "timestamp": utc_now_iso(),
+                "available": True,
+            })
+
+        except (ValueError, TypeError, AttributeError, KeyError) as exc:
+            errors.append(f"response parsing failed: {exc}")
+        except Exception as exc:
+            logger.exception(
+                "Binance price lookup failed for %s via %s: %s",
+                symbol,
+                base_url,
+                exc,
             )
-            return market
+            errors.append(str(exc))
 
-        payload = response.json()
-        price = optional_numeric(
-            payload.get("price")
-            if isinstance(payload, dict)
-            else None
-        )
+    market = empty_market_data(symbol)
+    market["unavailable_reason"] = (
+        f"Binance endpoints unavailable for {pair}: {'; '.join(errors)}."
+    )
+    logger.warning("[MARKET] %s Binance unavailable: %s", symbol, market["unavailable_reason"])
+    return market
 
-        if price is None:
-            market = empty_market_data(symbol)
-            market["unavailable_reason"] = (
-                "Binance returned no usable price."
-            )
-            return market
-
-        return json_safe({
-            "symbol": symbol,
-            "price": price,
-            "price_change_24h_pct": None,
-            "price_change_7d_pct": None,
-            "volume_24h": None,
-            "market_cap": None,
-            "high_24h": None,
-            "low_24h": None,
-            "source": "Binance",
-            "timestamp": utc_now_iso(),
-            "available": True,
-        })
-
-    except (ValueError, TypeError, AttributeError, KeyError) as exc:
-        market = empty_market_data(symbol)
-        market["unavailable_reason"] = f"Binance response parsing failed: {exc}."
-        return market
-
-    except Exception as exc:
-        logger.exception("Binance price lookup failed for %s: %s", symbol, exc)
-        market = empty_market_data(symbol)
-        market["unavailable_reason"] = f"Binance request failed unexpectedly: {exc}."
-        return market
 
 
 # ============================================================
