@@ -396,9 +396,8 @@ COINGECKO_API_URL = (
     "https://api.coingecko.com/api/v3"
 )
 
-# Retained only to keep obsolete compatibility helpers inert. The
-# unified market and history fetchers never call these helpers.
-BINANCE_API_URL = ""
+# Binance public spot ticker; no API key is required.
+BINANCE_API_URL = "https://api.binance.com/api/v3"
 COINCAP_API_URL = ""
 COINCAP_ID_MAP = {}
 
@@ -2026,7 +2025,91 @@ def fetch_coingecko_market(
 
 
 # ============================================================
-# SINGLE-SOURCE MARKET FETCH
+# BINANCE LIVE MARKET PRICE
+# ============================================================
+
+def get_binance_price(
+    symbol: str,
+) -> dict:
+    """Fetch a live USDT spot price from Binance without CoinGecko cooldowns."""
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return empty_market_data(symbol)
+
+    pair = f"{symbol}USDT"
+
+    try:
+        response, status_code, error_reason = _http_get_market(
+            f"{BINANCE_API_URL}/ticker/price",
+            params={"symbol": pair},
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if response is None:
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                f"Binance request failed: {error_reason or 'no response'}."
+            )
+            return market
+
+        if status_code == 404:
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                f"Binance does not list {pair}."
+            )
+            return market
+
+        if status_code is not None and status_code >= 400:
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                f"Binance returned {error_reason or f'HTTP {status_code}'}."
+            )
+            return market
+
+        payload = response.json()
+        price = optional_numeric(
+            payload.get("price")
+            if isinstance(payload, dict)
+            else None
+        )
+
+        if price is None:
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                "Binance returned no usable price."
+            )
+            return market
+
+        return json_safe({
+            "symbol": symbol,
+            "price": price,
+            "price_change_24h_pct": None,
+            "price_change_7d_pct": None,
+            "volume_24h": None,
+            "market_cap": None,
+            "high_24h": None,
+            "low_24h": None,
+            "source": "Binance",
+            "timestamp": utc_now_iso(),
+            "available": True,
+        })
+
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = f"Binance response parsing failed: {exc}."
+        return market
+
+    except Exception as exc:
+        logger.exception("Binance price lookup failed for %s: %s", symbol, exc)
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = f"Binance request failed unexpectedly: {exc}."
+        return market
+
+
+# ============================================================
+# LEGACY MARKET HELPERS
 # ============================================================
 
 def fetch_binance_market(
@@ -2236,13 +2319,15 @@ def fetch_coincap_market(
 # ============================================================
 # UNIFIED MARKET FETCH
 # ============================================================
-# MARKET DATA ORCHESTRATOR — Multi-Provider with Cache
+# MARKET DATA ORCHESTRATOR — Binance first, CoinGecko fallback
 # ============================================================
-# CoinGecko is the sole market-data source.
+# Binance supplies live prices. CoinGecko is used only when Binance
+# does not list the symbol or its public endpoint is unavailable.
 # Cache: 60s TTL. Per-symbol lock prevents duplicate upstream calls.
 # ============================================================
 
 _MARKET_PROVIDERS = [
+    get_binance_price,
     fetch_coingecko_market,
 ]
 
@@ -2339,18 +2424,36 @@ def fetch_market_data(
             market = empty_market_data(symbol)
 
             try:
-                candidate = fetch_coingecko_market(symbol)
-                if isinstance(candidate, dict):
-                    market = candidate
+                market = get_binance_price(symbol)
             except Exception as exc:
                 logger.exception(
-                    "[MARKET] CoinGecko failed for %s: %s",
+                    "[MARKET] Binance failed for %s: %s",
                     symbol,
                     exc,
                 )
+                market = empty_market_data(symbol)
                 market["unavailable_reason"] = (
-                    f"CoinGecko request failed unexpectedly: {exc}."
+                    f"Binance request failed unexpectedly: {exc}."
                 )
+
+            if not market.get("available"):
+                logger.info(
+                    "[MARKET] %s Binance unavailable; trying CoinGecko fallback",
+                    symbol,
+                )
+
+                try:
+                    market = fetch_coingecko_market(symbol)
+                except Exception as exc:
+                    logger.exception(
+                        "[MARKET] CoinGecko fallback failed for %s: %s",
+                        symbol,
+                        exc,
+                    )
+                    market = empty_market_data(symbol)
+                    market["unavailable_reason"] = (
+                        f"CoinGecko fallback failed unexpectedly: {exc}."
+                    )
 
             if not market.get("available"):
                 logger.warning(
