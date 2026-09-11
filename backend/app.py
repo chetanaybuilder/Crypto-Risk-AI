@@ -579,6 +579,18 @@ def _provider_is_cooling(
                 ),
             )
             return True
+
+        # FIX: when a cooldown has expired, also reset the failure
+        # count for this provider. Previously the count was only
+        # cleared after a successful fetch — but during cooldown the
+        # provider is never called, so it could never succeed and
+        # the count never reset. Backoff then escalated to the 300s
+        # cap permanently ("always on 429 cooldown"). Expiry now
+        # starts a fresh cooldown episode at the base duration.
+        if name in _provider_cooldown:
+            _provider_cooldown.pop(name, None)
+            _provider_failure_counts.pop(name, None)
+
         return False
 
 
@@ -599,6 +611,16 @@ def _mark_provider_failure(
             retry_after = float(match.group(1))
 
         with _provider_cooldown_lock:
+            # FIX: if the previous cooldown already expired, this is
+            # a fresh episode — start counting from zero so backoff
+            # does not inherit escalation from a stale failure count.
+            previous = _provider_cooldown.get(name)
+            if (
+                previous is None
+                or time.time() >= previous.get("until", 0)
+            ):
+                _provider_failure_counts.pop(name, None)
+
             failures = _provider_failure_counts.get(name, 0) + 1
             _provider_failure_counts[name] = failures
 
@@ -1067,7 +1089,18 @@ def mean_or_zero(
 
 def standard_deviation(
     values: list,
+    sample: bool = False,
 ) -> float:
+    """
+    Standard deviation of a value list.
+
+    sample=False (default): population std dev (divide by N).
+    sample=True: sample std dev (divide by N-1) — the correct
+    unbiased estimator for return series, which typically have
+    very few observations (e.g. 7 daily returns from 8 candles).
+    Population std dev understates volatility by ~sqrt((N-1)/N),
+    which matters at these small sample sizes (~6.5% low).
+    """
 
     if not isinstance(
         values,
@@ -1082,18 +1115,27 @@ def standard_deviation(
         is not None
     ]
 
-    if len(cleaned) < 2:
+    min_points = 3 if sample else 2
+
+    if len(cleaned) < min_points:
         return 0.0
 
     avg = mean(cleaned)
 
-    variance_value = mean(
-        [
+    divisor = (
+        (len(cleaned) - 1)
+        if sample
+        else len(cleaned)
+    )
+
+    variance_value = (
+        sum(
             (
                 value - avg
             ) ** 2
             for value in cleaned
-        ]
+        )
+        / divisor
     )
 
     return math.sqrt(
@@ -2111,16 +2153,20 @@ def fetch_binance_market(
 # ============================================================
 # UNIFIED MARKET FETCH
 # ============================================================
-# MARKET DATA ORCHESTRATOR — Binance first, CoinGecko fallback
+# MARKET DATA ORCHESTRATOR — CoinGecko primary, Binance fallback
 # ============================================================
-# Binance supplies live prices. CoinGecko is used only when Binance
-# does not list the symbol or its public endpoint is unavailable.
+# CoinGecko (with API key) returns the complete snapshot in one
+# call: price, volume, market cap, high/low. When CoinGecko is
+# rate-limited or cooling down, Binance (keyless, unlimited
+# public ticker via data-api.binance.vision) supplies live
+# price/volume, and market cap is back-filled from the CoinGecko
+# cache (including stale values past the TTL).
 # Cache: 60s TTL. Per-symbol lock prevents duplicate upstream calls.
 # ============================================================
 
 _MARKET_PROVIDERS = [
-    get_binance_price,
     fetch_coingecko_market,
+    get_binance_price,
 ]
 
 
@@ -2215,18 +2261,80 @@ def fetch_market_data(
 
             market = empty_market_data(symbol)
 
-            try:
-                market = get_binance_price(symbol)
-            except Exception as exc:
-                logger.exception(
-                    "[MARKET] Binance failed for %s: %s",
+            # =====================================================
+            # PRIMARY: CoinGecko — returns the complete snapshot
+            # (price, volume, market cap, high/low, 7d change) in a
+            # single call. If CoinGecko is on cooldown we skip it
+            # immediately and go to Binance so the dashboard never
+            # waits for a predictable 429 failure.
+            # =====================================================
+            coingecko_primary_skipped = _provider_is_cooling("CoinGecko")
+
+            if coingecko_primary_skipped:
+                logger.info(
+                    "[MARKET] %s CoinGecko primary skipped (cooling down); using Binance",
                     symbol,
-                    exc,
                 )
-                market = empty_market_data(symbol)
-                market["unavailable_reason"] = (
-                    f"Binance request failed unexpectedly: {exc}."
-                )
+            else:
+                try:
+                    market = fetch_coingecko_market(symbol)
+
+                    # CoinGecko's snapshot includes market cap for
+                    # free. Cache it here so later Binance fallback
+                    # paths never need a second CoinGecko call
+                    # (reduces 429 exposure).
+                    primary_cap = (
+                        optional_numeric(market.get("market_cap"))
+                        if isinstance(market, dict)
+                        else None
+                    )
+
+                    if (
+                        isinstance(market, dict)
+                        and market.get("available")
+                        and primary_cap is not None
+                    ):
+                        with _cache_lock:
+                            _market_cap_cache[symbol] = {
+                                "value": primary_cap,
+                                "timestamp": market.get(
+                                    "timestamp",
+                                    utc_now_iso(),
+                                ),
+                                "cached_at": time.time(),
+                            }
+
+                except Exception as exc:
+                    logger.exception(
+                        "[MARKET] CoinGecko primary failed for %s: %s",
+                        symbol,
+                        exc,
+                    )
+                    market = empty_market_data(symbol)
+                    market["unavailable_reason"] = (
+                        f"CoinGecko primary request failed unexpectedly: {exc}."
+                    )
+
+            # =====================================================
+            # FALLBACK: Binance — unlimited public ticker via the
+            # data-api.binance.vision mirror. Binance does not
+            # return market cap, so enrich from the CoinGecko
+            # market-cap cache (serving stale values past the TTL
+            # when CoinGecko is rate-limited).
+            # =====================================================
+            if not market.get("available"):
+                try:
+                    market = get_binance_price(symbol)
+                except Exception as exc:
+                    logger.exception(
+                        "[MARKET] Binance fallback failed for %s: %s",
+                        symbol,
+                        exc,
+                    )
+                    market = empty_market_data(symbol)
+                    market["unavailable_reason"] = (
+                        f"Binance fallback failed unexpectedly: {exc}."
+                    )
 
             # Binance does not provide circulating supply or market cap.
             # Enrich the live Binance ticker with CoinGecko market cap,
@@ -2292,6 +2400,19 @@ def fetch_market_data(
                         if isinstance(stale_cap, dict) and stale_cap.get("value") is not None:
                             market_cap_entry = stale_cap
                             market["market_cap_stale"] = True
+                            # A stale value was served, so the previous
+                            # "missing market cap" error is no longer
+                            # accurate — reword it as a degradation note.
+                            field_errors_map = market.get("field_errors")
+                            if (
+                                isinstance(field_errors_map, dict)
+                                and "market_cap" in field_errors_map
+                            ):
+                                field_errors_map["market_cap"] = (
+                                    "Market cap served from cache while "
+                                    "CoinGecko is rate-limited; value may "
+                                    "be outdated."
+                                )
 
                 if market_cap_entry is not None:
                     market["market_cap"] = market_cap_entry["value"]
@@ -2304,27 +2425,8 @@ def fetch_market_data(
                     )
 
             if not market.get("available"):
-                logger.info(
-                    "[MARKET] %s Binance unavailable; trying CoinGecko fallback",
-                    symbol,
-                )
-
-                try:
-                    market = fetch_coingecko_market(symbol)
-                except Exception as exc:
-                    logger.exception(
-                        "[MARKET] CoinGecko fallback failed for %s: %s",
-                        symbol,
-                        exc,
-                    )
-                    market = empty_market_data(symbol)
-                    market["unavailable_reason"] = (
-                        f"CoinGecko fallback failed unexpectedly: {exc}."
-                    )
-
-            if not market.get("available"):
                 logger.warning(
-                    "[MARKET] %s CoinGecko unavailable: %s",
+                    "[MARKET] %s both providers unavailable: %s",
                     symbol,
                     market.get("unavailable_reason", "unknown"),
                 )
@@ -2333,7 +2435,8 @@ def fetch_market_data(
                     market = dict(stale_cached)
                     market["stale"] = True
                     market["stale_reason"] = (
-                        "CoinGecko is temporarily rate-limited; serving the last known snapshot."
+                        "Live providers are temporarily rate-limited; "
+                        "serving the last known snapshot."
                     )
 
             market.setdefault("source_timestamps", {})
@@ -3093,23 +3196,29 @@ def fetch_price_history(
             len(prices),
         )
 
-        try:
+        # Only cache NON-EMPTY results. Caching an empty list would
+        # freeze "0 candles" for the full TTL when both providers
+        # fail temporarily (e.g., 451/429), causing volatility, beta
+        # and 7d change to stay missing even after providers recover.
+        if prices:
 
-            with _cache_lock:
+            try:
 
-                _history_cache[
-                    cache_key
-                ] = {
-                    "prices": list(prices),
-                    "_cached_at": now,
-                }
+                with _cache_lock:
 
-        except Exception as exc:
+                    _history_cache[
+                        cache_key
+                    ] = {
+                        "prices": list(prices),
+                        "_cached_at": now,
+                    }
 
-            logger.debug(
-                "History cache write failed: %s",
-                exc,
-            )
+            except Exception as exc:
+
+                logger.debug(
+                    "History cache write failed: %s",
+                    exc,
+                )
 
         return list(prices)
 
@@ -3134,9 +3243,13 @@ def realized_volatility(
     Compute realized volatility from a daily price series.
 
     Methodology:
-        1. Calculate log returns from consecutive prices
-        2. Compute standard deviation of returns (daily volatility)
+        1. Calculate log returns: ln(current / previous)
+        2. Compute SAMPLE standard deviation of returns
+           (divide by N-1 — the unbiased estimator; with only
+           ~7 daily returns the population estimator understates
+           volatility by ~6.5%)
         3. Annualize: daily_std * sqrt(365) * 100
+           (365 because crypto trades 24/7)
 
     Returns:
         dict: daily_volatility_pct, annualized_volatility_pct, observations
@@ -3144,15 +3257,45 @@ def realized_volatility(
 
     try:
 
-        returns = calculate_returns(
-            prices
-        )
-
         if not isinstance(
-            returns,
+            prices,
             list,
         ):
-            returns = []
+            prices = []
+
+        # Log returns: ln(current / previous).
+        # More precise than simple returns for volatile series —
+        # a +15% day contributes ln(1.15) ≈ 13.98%, not 15%,
+        # so volatility is not overstated by asymmetric moves.
+        cleaned = [
+            optional_numeric(price)
+            for price in prices
+        ]
+
+        cleaned = [
+            price
+            for price in cleaned
+            if (
+                price is not None
+                and price > 0
+            )
+        ]
+
+        returns = []
+
+        for previous, current in zip(
+            cleaned,
+            cleaned[1:],
+        ):
+
+            if previous <= 0 or current <= 0:
+                continue
+
+            returns.append(
+                math.log(
+                    current / previous
+                )
+            )
 
         if len(returns) < 2:
 
@@ -3165,7 +3308,8 @@ def realized_volatility(
             })
 
         daily_std = standard_deviation(
-            returns
+            returns,
+            sample=True,
         )
 
         daily_std = numeric(
@@ -9027,7 +9171,9 @@ def market_api(
                 "code": "MARKET_DATA_UNAVAILABLE",
                 "message": market.get(
                     "unavailable_reason",
-                    "CoinGecko did not return usable market data.",
+                    "Both market data providers (CoinGecko and Binance) "
+                    "are temporarily rate-limited. Live data will appear "
+                    "automatically when a provider recovers.",
                 ),
             },
         }), 502
