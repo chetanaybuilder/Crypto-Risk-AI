@@ -44,7 +44,7 @@ from email.utils import parsedate_to_datetime
 from functools import wraps
 from statistics import mean
 from threading import Lock
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 from urllib.parse import quote
 
 from dotenv import load_dotenv
@@ -239,7 +239,7 @@ ANALYSIS_JOB_TIMEOUT_SECONDS = max(
     int(os.getenv("ANALYSIS_JOB_TIMEOUT_SECONDS", "300")),
 )
 MAX_HISTORY_ROWS = 50
-MAX_TOKEN_SYMBOL_LENGTH = 15
+MAX_TOKEN_SYMBOL_LENGTH = 15  # Frontend regex enforces {2,15}; backend normalize_symbol truncates to this length
 SUPPORTED_HISTORY_DAYS = 30
 
 # ============================================================
@@ -406,8 +406,6 @@ COINGECKO_API_URL = (
 # Binance public spot ticker; no API key is required.
 BINANCE_API_URL = "https://api.binance.com/api/v3"
 BINANCE_DATA_API_URL = "https://data-api.binance.vision/api/v3"
-COINCAP_API_URL = ""
-COINCAP_ID_MAP = {}
 
 COINGECKO_API_KEY = (
     os.getenv(
@@ -493,23 +491,30 @@ SUPPORTED_ASSETS = frozenset(TOKEN_MAP)
 
 # ============================================================
 # Native blockchain assets (not ERC-20 tokens)
-NATIVE_ASSETS = {
-    "BTC",
-    "ETH",
-    "SOL",
-    "BNB",
-    "XRP",
-    "ADA",
-    "DOGE",
-    "AVAX",
-    "DOT",
-    "LTC",
-    "BCH",
-    "ATOM",
-    "XLM",
-    "TRX",
-    "TON",
-}
+# Derived from TOKEN_MAP via an explicit allowlist. When adding
+# a new native L1 to TOKEN_MAP, also add it here so it's excluded
+# from GoPlus contract-security checks.
+NATIVE_ASSETS = frozenset(
+    sym
+    for sym in (
+        "BTC",
+        "ETH",
+        "SOL",
+        "BNB",
+        "XRP",
+        "ADA",
+        "DOGE",
+        "AVAX",
+        "DOT",
+        "LTC",
+        "BCH",
+        "ATOM",
+        "XLM",
+        "TRX",
+        "TON",
+    )
+    if sym in TOKEN_MAP
+)
 
 
 # ============================================================
@@ -729,10 +734,28 @@ def analysis_progress_callback(
 
     except Exception as exc:
 
+        # Log at warning level with full traceback for operational
+        # visibility. If DB connection pool is exhausted or other
+        # persistent failures occur, the job could appear frozen
+        # in the UI — the traceback helps diagnose this quickly.
         logger.warning(
-            "Could not update analysis progress: %s",
+            "Could not update analysis progress for job %s: %s",
+            job_id,
             exc,
+            exc_info=True,
         )
+
+        # Best-effort fallback: surface the failure state on the
+        # job record itself, so a frozen-looking job shows why.
+        try:
+            update_analysis_job(
+                job_id,
+                status="running",
+                message=f"Progress update failed: {exc}",
+            )
+        except Exception:
+            # Nested attempt is best-effort only; never let it raise.
+            pass
 
 
 def set_analysis_stage(
@@ -1747,13 +1770,6 @@ def resolve_coin_id(
             f"Unsupported asset '{symbol}'. Add a verified CoinGecko ID before using it."
         )
 
-    # Temporary verification log: remove after production IDs are confirmed.
-    logger.info(
-        "[COINGECKO_ID_DEBUG] symbol=%s resolved_id=%s",
-        symbol,
-        coin_id,
-    )
-
     return coin_id
 
 
@@ -2021,8 +2037,10 @@ def get_binance_price(
                 errors.append("no usable price")
                 continue
 
+            # Track field errors separately — only include non-empty
+            # error dicts so the data quality module can properly
+            # surface which fields had issues.
             field_errors = {}
-            field_errors.update(price_errors)
             market = {
                 "symbol": symbol,
                 "price": price,
@@ -2046,7 +2064,8 @@ def get_binance_price(
                     "Binance": utc_now_iso(),
                 },
                 "available": True,
-                "field_errors": field_errors,
+                # Only include field_errors if there are actual errors
+                "field_errors": field_errors if field_errors else {},
             }
 
             return json_safe(market)
@@ -2080,198 +2099,13 @@ def fetch_binance_market(
 ) -> dict:
     """
     Compatibility wrapper for the live Binance ticker.
+
+    Delegates to get_binance_price() which handles normalization,
+    provider cooldown, and error handling. The legacy implementation
+    has been removed to avoid dead code.
     """
 
     return get_binance_price(symbol)
-
-    symbol = normalize_symbol(symbol)
-
-    if not symbol:
-        return empty_market_data(symbol)
-
-    if _provider_is_cooling("Binance"):
-        return empty_market_data(symbol)
-
-    pair = f"{symbol}USDT"
-
-    logger.info("[MARKET] %s trying Binance", symbol)
-
-    response, status_code, error_reason = _http_get_market(
-        f"{BINANCE_API_URL}/ticker/24hr",
-        params={"symbol": pair},
-        timeout=MARKET_TIMEOUT,
-    )
-
-    if response is None:
-        _mark_provider_failure(
-            "Binance",
-            status_code,
-            error_reason or "no_response",
-        )
-        logger.warning("[MARKET] Binance failed: %s", error_reason)
-        return empty_market_data(symbol)
-
-    if status_code is not None and status_code >= 400:
-        _mark_provider_failure(
-            "Binance",
-            status_code,
-            error_reason or f"HTTP {status_code}",
-        )
-        logger.warning("[MARKET] Binance failed: %s", error_reason)
-        return empty_market_data(symbol)
-
-    try:
-
-        payload = response.json()
-
-        if not isinstance(payload, dict):
-            return empty_market_data(symbol)
-
-        price = optional_numeric(payload.get("lastPrice"))
-        change = optional_numeric(payload.get("priceChangePercent"))
-        volume = optional_numeric(payload.get("quoteVolume"))
-        high = optional_numeric(payload.get("highPrice"))
-        low = optional_numeric(payload.get("lowPrice"))
-
-        if price is None:
-            logger.warning("[MARKET] Binance returned no usable price")
-            return empty_market_data(symbol)
-
-        _clear_provider_success("Binance")
-
-        logger.info(
-            "[MARKET] Binance SUCCESS price=%.4f source=Binance",
-            price,
-        )
-
-        return json_safe({
-            "symbol": symbol,
-            "price": price,
-            "price_change_24h_pct": change,
-            "price_change_7d_pct": None,
-            "volume_24h": volume,
-            "market_cap": None,
-            "high_24h": high,
-            "low_24h": low,
-            "source": "Binance",
-            "timestamp": utc_now_iso(),
-            "available": True,
-        })
-
-    except (ValueError, TypeError, AttributeError, KeyError) as exc:
-        logger.warning("[MARKET] Binance parse failed: %s", exc)
-        return empty_market_data(symbol)
-
-    except Exception as exc:
-        logger.warning("[MARKET] Binance failed unexpectedly: %s", exc)
-        return empty_market_data(symbol)
-
-
-# ============================================================
-# COINCAP MARKET PROVIDER
-# ============================================================
-# CoinCap v2 API — keyless, returns price/volume/market cap.
-# No high/24h/low/24h, but reliable from Render.
-# Docs: https://docs.coincap.io
-# ============================================================
-
-def fetch_coincap_market(
-    symbol: str,
-) -> dict:
-    """
-    Fetch current market snapshot from CoinCap.
-
-    Returns price, 24h change, volume, market cap.
-    Does NOT return high_24h/low_24h — those stay null.
-    """
-
-    symbol = normalize_symbol(symbol)
-
-    if not symbol:
-        return empty_market_data(symbol)
-
-    if _provider_is_cooling("CoinCap"):
-        return empty_market_data(symbol)
-
-    asset_id = COINCAP_ID_MAP.get(symbol)
-
-    if not asset_id:
-        logger.info("[MARKET] CoinCap: no mapping for %s", symbol)
-        return empty_market_data(symbol)
-
-    logger.info("[MARKET] %s trying CoinCap", symbol)
-
-    try:
-        response, status_code, error_reason = _http_get_market(
-            f"{COINCAP_API_URL}/assets/{asset_id}",
-            timeout=MARKET_TIMEOUT,
-        )
-
-        if response is None:
-            _mark_provider_failure(
-                "CoinCap",
-                status_code,
-                error_reason or "no_response",
-            )
-            logger.warning("[MARKET] CoinCap failed: %s", error_reason)
-            return empty_market_data(symbol)
-
-        if status_code is not None and status_code >= 400:
-            _mark_provider_failure(
-                "CoinCap",
-                status_code,
-                error_reason or f"HTTP {status_code}",
-            )
-            logger.warning("[MARKET] CoinCap failed: %s", error_reason)
-            return empty_market_data(symbol)
-
-        payload = response.json()
-
-        if not isinstance(payload, dict):
-            return empty_market_data(symbol)
-
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            logger.warning("[MARKET] CoinCap malformed response")
-            return empty_market_data(symbol)
-
-        price = optional_numeric(data.get("priceUsd"))
-        change = optional_numeric(data.get("changePercent24Hr"))
-        volume = optional_numeric(data.get("volumeUsd24Hr"))
-        market_cap = optional_numeric(data.get("marketCapUsd"))
-
-        if price is None:
-            logger.warning("[MARKET] CoinCap returned no usable price")
-            return empty_market_data(symbol)
-
-        _clear_provider_success("CoinCap")
-
-        logger.info(
-            "[MARKET] CoinCap SUCCESS price=%.4f source=CoinCap",
-            price,
-        )
-
-        return json_safe({
-            "symbol": symbol,
-            "price": price,
-            "price_change_24h_pct": change,
-            "price_change_7d_pct": None,
-            "volume_24h": volume,
-            "market_cap": market_cap,
-            "high_24h": None,
-            "low_24h": None,
-            "source": "CoinCap",
-            "timestamp": utc_now_iso(),
-            "available": True,
-        })
-
-    except (ValueError, TypeError, AttributeError, KeyError) as exc:
-        logger.warning("[MARKET] CoinCap parse failed: %s", exc)
-        return empty_market_data(symbol)
-
-    except Exception as exc:
-        logger.warning("[MARKET] CoinCap failed unexpectedly: %s", exc)
-        return empty_market_data(symbol)
 
 
 # ============================================================
@@ -2432,12 +2266,16 @@ def fetch_market_data(
                             with _cache_lock:
                                 _market_cap_cache[symbol] = market_cap_entry
                         else:
-                            market.setdefault("field_errors", {})[
-                                "market_cap"
-                            ] = market_cap_snapshot.get(
+                            # CoinGecko returned no usable market cap
+                            # (likely rate-limited). Check for ANY
+                            # previously cached value, even if stale.
+                            reason = market_cap_snapshot.get(
                                 "unavailable_reason",
                                 "CoinGecko returned no usable market cap.",
                             )
+                            market.setdefault("field_errors", {})[
+                                "market_cap"
+                            ] = reason
                     except Exception as exc:
                         market.setdefault("field_errors", {})[
                             "market_cap"
@@ -2446,6 +2284,14 @@ def fetch_market_data(
                             "[MARKET] %s market-cap enrichment failed",
                             symbol,
                         )
+
+                    # If enrichment failed, try to serve stale cached value
+                    if market_cap_entry is None:
+                        with _cache_lock:
+                            stale_cap = _market_cap_cache.get(symbol)
+                        if isinstance(stale_cap, dict) and stale_cap.get("value") is not None:
+                            market_cap_entry = stale_cap
+                            market["market_cap_stale"] = True
 
                 if market_cap_entry is not None:
                     market["market_cap"] = market_cap_entry["value"]
@@ -2557,16 +2403,23 @@ def _price_series_change(
     Compute the percentage change over the trailing
     ``lookback`` observations from a daily price series.
 
+    Also returns the actual lookback window used, which may be
+    shorter than requested if the price series has fewer points
+    than expected (e.g., partial history data).
+
     Returns:
-        Optional[float]: percent change, or None when the
-        series is too short or the anchor price is invalid.
+        tuple: (change_pct, actual_lookback) where:
+            change_pct: float or None - percentage change, or None
+                if the series is too short or anchor price is invalid.
+            actual_lookback: int or None - the actual number of data
+                points between latest and anchor, or None if unusable.
     """
 
     if not isinstance(
         prices,
         list,
     ) or not prices:
-        return None
+        return None, None
 
     clean = []
 
@@ -2583,24 +2436,31 @@ def _price_series_change(
             clean.append(value)
 
     if len(clean) < 2:
-        return None
+        return None, None
 
     latest = clean[-1]
 
+    requested_lookback = max(
+        1,
+        _safe_lookback(lookback),
+    )
+
     anchor_index = max(
         0,
-        len(clean) - 1 - max(
-            1,
-            _safe_lookback(lookback),
-        ),
+        len(clean) - 1 - requested_lookback,
     )
 
     anchor = clean[anchor_index]
 
-    return percentage_change(
+    # Calculate actual lookback window used
+    actual_lookback = len(clean) - 1 - anchor_index
+
+    change = percentage_change(
         latest,
         anchor,
     )
+
+    return change, actual_lookback
 
 
 def enrich_market_7d(
@@ -2645,7 +2505,7 @@ def enrich_market_7d(
             days=8,
         )
 
-        change_7d = _price_series_change(
+        change_7d, actual_lookback = _price_series_change(
             history,
             lookback=7,
         )
@@ -2656,6 +2516,7 @@ def enrich_market_7d(
                     "change_7d_pct"
                 )
             )
+            actual_lookback = None
 
         if change_7d is not None:
             market[
@@ -2664,6 +2525,16 @@ def enrich_market_7d(
                 float(change_7d),
                 2,
             )
+            # Include actual lookback window so consumers know
+            # if the "7d" change was computed over a shorter
+            # period due to partial history data.
+            if actual_lookback is not None and actual_lookback < 7:
+                market[
+                    "price_change_7d_actual_days"
+                ] = actual_lookback
+                market[
+                    "price_change_7d_is_partial"
+                ] = True
 
         return json_safe(market)
 
@@ -4754,37 +4625,28 @@ def calculate_stress_test(
     Simulate downside scenarios relative to BTC shocks.
 
     This is a scenario model, NOT a prediction.
+
+    Tracks which inputs are assumed defaults vs measured values
+    so the output can flag when confidence scores are built on
+    guessed parameters rather than real data.
     """
 
-    beta = (
-        optional_numeric(beta)
-        if beta is not None
-        else 1.0
-    )
+    # Track which values are assumed defaults for transparency
+    beta_is_assumed = beta is None
+    volatility_is_assumed = volatility is None
+    liquidity_is_assumed = liquidity_score is None
 
+    beta = optional_numeric(beta)
     if beta is None:
         beta = 1.0
 
-    volatility = (
-        optional_numeric(volatility)
-        if volatility is not None
-        else 60.0
-    )
-
+    volatility = optional_numeric(volatility)
     if volatility is None:
         volatility = 60.0
 
+    liquidity_score = optional_numeric(liquidity_score)
     if liquidity_score is None:
         liquidity_score = 50.0
-    else:
-        liquidity_score = (
-            optional_numeric(
-                liquidity_score
-            )
-        )
-
-        if liquidity_score is None:
-            liquidity_score = 50.0
 
     scenarios = []
 
@@ -4914,6 +4776,15 @@ def calculate_stress_test(
     else:
         resilience_label = "Fragile"
 
+    # Build list of assumed parameters for transparency
+    assumed_parameters = []
+    if beta_is_assumed:
+        assumed_parameters.append("beta")
+    if volatility_is_assumed:
+        assumed_parameters.append("volatility")
+    if liquidity_is_assumed:
+        assumed_parameters.append("liquidity_score")
+
     stress_report = {
         "benchmark": "BTC",
         "scenarios": scenarios,
@@ -4921,6 +4792,14 @@ def calculate_stress_test(
         "beta": round(
             beta,
             3,
+        ),
+        "volatility": round(
+            volatility,
+            2,
+        ),
+        "liquidity_score": round(
+            liquidity_score,
+            2,
         ),
         "confidence": round(
             confidence,
@@ -4952,6 +4831,9 @@ def calculate_stress_test(
             if resilience_score is not None
             else None
         ),
+        "assumed_parameters": assumed_parameters,
+        "used_default_beta": beta_is_assumed,
+        "used_default_volatility": volatility_is_assumed,
         "methodology": (
             "Scenario estimates combine BTC beta, "
             "realized volatility and liquidity risk. "
@@ -5549,19 +5431,25 @@ def validate_ai_report(
     """
     Normalize Gemini output without allowing malformed
     content to break the report.
+
+    Returns:
+        tuple: (cleaned_dict, fallback_used, fallback_fields)
+            fallback_used: bool - True if any field needed fallback
+            fallback_fields: list - which specific fields used fallback
     """
 
     if not isinstance(
         parsed,
         dict,
     ):
-        return fallback, True
+        return fallback, True, ["all"]
 
     cleaned = dict(
         fallback
     )
 
     fallback_used = False
+    fallback_fields = []
 
     for field in AI_STRING_FIELDS:
 
@@ -5577,6 +5465,7 @@ def validate_ai_report(
             or not value.strip()
         ):
             fallback_used = True
+            fallback_fields.append(field)
 
         cleaned[field] = clean_ai_text(
             value,
@@ -5597,6 +5486,7 @@ def validate_ai_report(
             list,
         ):
             fallback_used = True
+            fallback_fields.append(field)
 
         cleaned[field] = clean_ai_list(
             value,
@@ -5624,6 +5514,7 @@ def validate_ai_report(
             50,
         )
         fallback_used = True
+        fallback_fields.append("confidence")
 
     cleaned["confidence"] = round(
         clamp(
@@ -5637,6 +5528,7 @@ def validate_ai_report(
     return (
         cleaned,
         fallback_used,
+        fallback_fields,
     )
 
 
@@ -5859,6 +5751,7 @@ def run_gemini_interpretation(
     risk_profile,
     stress,
     security=None,
+    gemini_max_retries_override: Optional[int] = None,
 ):
     """
     Reliable Gemini layer.
@@ -5871,6 +5764,10 @@ def run_gemini_interpretation(
       - JSON extraction
       - response validation
       - deterministic fallback
+
+    gemini_max_retries_override: Optional[int]
+        If not None, overrides GEMINI_MAX_RETRIES for the inner
+        _gemini_generate retry loop.
     """
 
     fallback = fallback_ai_report(
@@ -5901,9 +5798,15 @@ def run_gemini_interpretation(
 
     last_error = None
 
-    total_attempts = (
-        GEMINI_MAX_RETRIES + 1
+    # Allow synchronous /api/analyze to cap retries to 0 for
+    # bounded latency; background jobs always use the full budget.
+    max_retries = (
+        gemini_max_retries_override
+        if gemini_max_retries_override is not None
+        else GEMINI_MAX_RETRIES
     )
+
+    total_attempts = max_retries + 1
 
     for attempt in range(
         total_attempts
@@ -5931,7 +5834,7 @@ def run_gemini_interpretation(
                     "Gemini returned invalid JSON."
                 )
 
-            cleaned, used_fallback = (
+            cleaned, used_fallback, fallback_fields = (
                 validate_ai_report(
                     parsed,
                     fallback,
@@ -5946,12 +5849,28 @@ def run_gemini_interpretation(
                 used_fallback
             )
 
-            if used_fallback:
+            # Store the specific fields that used fallback so the
+            # frontend can show granular info instead of implying
+            # the entire AI layer failed when only one field was bad.
+            cleaned["partially_invalid_fields"] = fallback_fields
 
-                cleaned["data_quality_note"] += (
-                    " Some Gemini fields were invalid or "
-                    "missing and were replaced with safe defaults."
-                )
+            # Provide granular info about which fields used fallback
+            # so users know it's not a total AI failure if only one
+            # field was invalid.
+            if used_fallback:
+                if len(fallback_fields) <= 3:
+                    fields_str = ", ".join(fallback_fields)
+                    cleaned["data_quality_note"] += (
+                        f" Some Gemini fields were invalid or "
+                        f"missing ({fields_str}) and were replaced "
+                        f"with safe defaults."
+                    )
+                else:
+                    cleaned["data_quality_note"] += (
+                        f" Some Gemini fields were invalid or "
+                        f"missing ({len(fallback_fields)} fields) and "
+                        f"were replaced with safe defaults."
+                    )
 
             return json_safe(cleaned)
 
@@ -6131,11 +6050,17 @@ def build_structured_report(
         if value is None or value == 0
     ]
 
+    # Also surface any field-level parse errors reported by providers
+    # (e.g., priceChangePercent, quoteVolume parse failures) even when
+    # the final top-level field appears non-None from another source.
     field_errors = dict(
         market.get("field_errors")
         if isinstance(market.get("field_errors"), dict)
         else {}
     )
+    for error_field in field_errors:
+        if error_field not in missing_signals:
+            missing_signals.append(error_field)
     dq["available_fields"] = available_fields
     dq["field_errors"] = field_errors
     dq["source_timestamps"] = dict(
@@ -6325,6 +6250,7 @@ def run_analysis(
     contract_address=None,
     force_market_refresh=False,
     progress_callback=None,
+    gemini_max_retries_override: Optional[int] = None,
 ):
     """
     Main CryptoRisk AI pipeline.
@@ -6348,6 +6274,13 @@ def run_analysis(
         Gemini
           ↓
         Structured Report
+
+    gemini_max_retries_override: Optional[int]
+        If not None, overrides GEMINI_MAX_RETRIES when calling
+        run_gemini_interpretation(). Used by the synchronous
+        /api/analyze route to force zero retries and cap
+        worst-case latency. The background job path ignores
+        this parameter and always uses GEMINI_MAX_RETRIES.
     """
 
     symbol = normalize_symbol(
@@ -6636,6 +6569,7 @@ def run_analysis(
         risk_profile,
         stress,
         security,
+        gemini_max_retries_override=gemini_max_retries_override,
     )
 
     report_progress(
@@ -6881,12 +6815,14 @@ def get_db_connection():
             conn = pool.getconn()
 
             # Detect dead/stale pooled connections instead of
-            # handing back a broken one.
+            # handing back a broken one. Don't consume a retry
+            # attempt for stale connections — the pool itself
+            # is fine, it just handed back a bad connection.
             if conn.closed:
                 pool.putconn(conn, close=True)
-                raise psycopg2.OperationalError(
-                    "Pooled connection was closed."
-                )
+                # On stale connection, retry immediately without
+                # consuming an attempt or sleeping.
+                continue
 
             return _PooledConnection(pool, conn)
 
@@ -8435,6 +8371,12 @@ def decode_jwt_token(
         # turned into an unhandled 500 instead of a clean "logged out"
         # response. This is the single most likely cause of your
         # intermittent "sometimes it just doesn't load" symptom.
+        #
+        # NOTE: This is a wide catch by design — any JWT decode failure
+        # should result in a clean "logged out" response. However, this
+        # also means unrelated bugs in this block (e.g., future refactors
+        # accidentally raising TypeError) will be silently swallowed.
+        # If JWT issues arise, add specific logging here temporarily.
 
         return None
 
@@ -9180,12 +9122,12 @@ def analyze():
             contract_address=contract_address,
 
             force_market_refresh=False,
+
+            # Synchronous path: force zero Gemini retries to cap
+            # worst-case latency at GEMINI_TIMEOUT_SECONDS instead
+            # of GEMINI_TIMEOUT_SECONDS * (GEMINI_MAX_RETRIES + 1).
+            gemini_max_retries_override=0,
         )
-        
-        try:
-            logger.info("DEBUG REPORT OUTPUT: %s", json.dumps(json_safe(report), indent=2, default=str))
-        except Exception:
-            pass  # logging must never break the response
 
         # Persist to DB — but never let persistence failure
         # break the response. The report is the source of
@@ -9258,6 +9200,24 @@ def analyze():
             "error": str(exc),
             "code": "MARKET_DATA_UNAVAILABLE",
         }), 502
+
+    except UnsupportedAssetError as exc:
+        # Explicit handling for unsupported assets — return the
+        # specific error message instead of a generic "Analysis failed"
+        # so users know exactly why their request was rejected.
+        # This provides consistent error handling between /api/analyze
+        # and /api/market/<symbol> endpoints.
+        logger.warning(
+            "Unsupported asset requested: %s - %s",
+            symbol,
+            exc,
+        )
+
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+            "code": "UNSUPPORTED_ASSET",
+        }), 400
 
     except ValueError as exc:
 
@@ -9357,6 +9317,16 @@ def start_analysis():
 
             with connection.cursor() as cursor:
 
+                # Use a single consistent time window for both created_at
+                # and updated_at checks. This prevents confusion when
+                # ANALYSIS_JOB_TIMEOUT_SECONDS is configured larger than
+                # the old hardcoded 10-minute created_at window.
+                # Use 2x timeout so created_at and updated_at windows
+                # can never contradict each other.
+                job_dedup_window_seconds = max(
+                    600,  # minimum 10 minutes
+                    ANALYSIS_JOB_TIMEOUT_SECONDS * 2,
+                )
                 cursor.execute(
                     """
                     SELECT id
@@ -9370,7 +9340,7 @@ def start_analysis():
                       )
                       AND created_at >
                           NOW()
-                          - INTERVAL '10 minutes'
+                          - (%s * INTERVAL '1 second')
                       AND updated_at >
                           NOW()
                           - (%s * INTERVAL '1 second')
@@ -9380,7 +9350,8 @@ def start_analysis():
                     (
                         g.current_user["id"],
                         symbol,
-                        ANALYSIS_JOB_TIMEOUT_SECONDS,
+                        job_dedup_window_seconds,
+                        job_dedup_window_seconds,
                     ),
                 )
 

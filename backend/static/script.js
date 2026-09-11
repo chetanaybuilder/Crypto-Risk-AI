@@ -661,8 +661,8 @@ function renderUser(user) {
         $all(".user-avatar");
 
     avatars.forEach((avatar) => {
-        if (user.avatar_url) {
-            avatar.src = user.avatar_url;
+        if (user.picture) {
+            avatar.src = user.picture;
             avatar.alt = String(
                 displayName
             );
@@ -671,6 +671,11 @@ function renderUser(user) {
             avatar.alt = String(
                 displayName
             );
+            const initial = displayName.charAt(0).toUpperCase();
+            const initialSpan = avatar.querySelector("#user-avatar-initial");
+            if (initialSpan) {
+                initialSpan.textContent = initial;
+            }
         }
     });
 }
@@ -682,23 +687,43 @@ function renderUser(user) {
 
 const PROGRESS_STAGES = {
     market: {
-        percent: 20,
+        percent: 10,
         title: "Fetching live market data"
     },
 
-    model: {
-        percent: 45,
-        title: "Running quantitative risk engine"
+    history: {
+        percent: 20,
+        title: "Fetching price history"
+    },
+
+    quant: {
+        percent: 35,
+        title: "Running quantitative engine"
+    },
+
+    risk: {
+        percent: 50,
+        title: "Computing risk profile"
+    },
+
+    security: {
+        percent: 60,
+        title: "Checking contract security"
     },
 
     stress: {
-        percent: 65,
+        percent: 70,
         title: "Running stress scenarios"
     },
 
+    evidence: {
+        percent: 80,
+        title: "Collecting evidence"
+    },
+
     ai: {
-        percent: 82,
-        title: "Synthesizing evidence"
+        percent: 88,
+        title: "Synthesizing with Gemini AI"
     },
 
     save: {
@@ -714,8 +739,12 @@ const PROGRESS_STAGES = {
 
 const PROGRESS_ORDER = [
     "market",
-    "model",
+    "history",
+    "quant",
+    "risk",
+    "security",
     "stress",
+    "evidence",
     "ai",
     "save"
 ];
@@ -725,9 +754,13 @@ let _progressCurrent = 0;
 
 function _stageForPercent(percent) {
     if (percent >= 96) return "save";
-    if (percent >= 82) return "ai";
-    if (percent >= 65) return "stress";
-    if (percent >= 45) return "model";
+    if (percent >= 88) return "ai";
+    if (percent >= 80) return "evidence";
+    if (percent >= 70) return "stress";
+    if (percent >= 60) return "security";
+    if (percent >= 50) return "risk";
+    if (percent >= 35) return "quant";
+    if (percent >= 20) return "history";
     return "market";
 }
 
@@ -2333,7 +2366,11 @@ function updateLiveMarket(
 
     setText(
         "#report-market-cap",
-        formatUsd(marketCap)
+        marketCap !== null
+            ? (market.market_cap_stale
+                ? `${formatUsd(marketCap)} (stale)`
+                : formatUsd(marketCap))
+            : "—"
     );
 
     setText(
@@ -2666,7 +2703,7 @@ async function handleAnalysisSubmit(
     }
 
     if (
-        !/^[A-Z0-9]{2,15}$/.test(
+        !/^[A-Z0-9]{1,15}$/.test(
             symbol
         )
     ) {
@@ -3022,7 +3059,11 @@ function renderMarket(report) {
 
     setText(
         "#report-market-cap",
-        formatUsd(marketCap)
+        marketCap !== null
+            ? (market.market_cap_stale
+                ? `${formatUsd(marketCap)} (stale)`
+                : formatUsd(marketCap))
+            : "—"
     );
 
     setText(
