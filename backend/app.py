@@ -28,6 +28,7 @@ import logging
 import math
 import os
 import re
+import traceback
 import time
 import uuid
 
@@ -211,72 +212,26 @@ GEMINI_MAX_RETRIES = min(
     ),
 )
 
-
 # ============================================================
 # NETWORK CONFIG
 # ============================================================
 
-MARKET_TIMEOUT = max(
-    3,
-    int(
-        os.getenv(
-            "MARKET_TIMEOUT",
-            "10",
-        )
-    ),
-)
-
-HISTORY_CACHE_TTL = max(
-    15,
-    int(
-        os.getenv(
-            "HISTORY_CACHE_TTL",
-            "60",
-        )
-    ),
-)
-
-MARKET_CACHE_TTL = max(
-    5,
-    int(
-        os.getenv(
-            "MARKET_CACHE_TTL",
-            "60",
-        )
-    ),
-)
-
+MARKET_TIMEOUT = max(3, int(os.getenv("MARKET_TIMEOUT", "10")))
+HISTORY_CACHE_TTL = max(15, int(os.getenv("HISTORY_CACHE_TTL", "60")))
+MARKET_CACHE_TTL = max(5, int(os.getenv("MARKET_CACHE_TTL", "60")))
 
 # ============================================================
 # JOB CONFIG
 # ============================================================
 
-JOB_TTL_SECONDS = max(
-    300,
-    int(
-        os.getenv(
-            "JOB_TTL_SECONDS",
-            "1800",
-        )
-    ),
-)
-
+JOB_TTL_SECONDS = max(300, int(os.getenv("JOB_TTL_SECONDS", "1800")))
 ANALYSIS_JOB_TIMEOUT_SECONDS = max(
     60,
-    int(
-        os.getenv(
-            "ANALYSIS_JOB_TIMEOUT_SECONDS",
-            "300",
-        )
-    ),
+    int(os.getenv("ANALYSIS_JOB_TIMEOUT_SECONDS", "300")),
 )
-
 MAX_HISTORY_ROWS = 50
-
 MAX_TOKEN_SYMBOL_LENGTH = 15
-
 SUPPORTED_HISTORY_DAYS = 30
-
 
 # ============================================================
 # FLASK APP
@@ -288,15 +243,7 @@ app = Flask(
     template_folder="templates",
 )
 
-# NOTE: CORS is configured once, correctly, in the "CORS" section
-# further below. A duplicate, malformed CORS() call used to live
-# here — it matched the literal path "/api/" (not the wildcard
-# "/api/*") and set origins to an empty string, so it never matched
-# any real request and was silently superseded by the real config
-# anyway. Removed to avoid confusion; behavior is unchanged.
-
 app.config["SECRET_KEY"] = SECRET_KEY
-
 app.wsgi_app = ProxyFix(
     app.wsgi_app,
     x_for=1,
@@ -306,86 +253,36 @@ app.wsgi_app = ProxyFix(
     x_prefix=1,
 )
 
-
 # ============================================================
-# JWT
+# JWT AND SESSION CONFIGURATION
 # ============================================================
 
 app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
-app.config["JWT_TOKEN_LOCATION"] = [
-    "headers"
-]
+app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 app.config["JWT_HEADER_NAME"] = "Authorization"
 app.config["JWT_HEADER_TYPE"] = "Bearer"
-
-# Persistent JWTs are intentionally disabled.
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
-
-
-# ============================================================
-# SESSION COOKIE CONFIG
-# ============================================================
-
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-
-if IS_PRODUCTION:
-    app.config["SESSION_COOKIE_SECURE"] = True
-else:
-    app.config["SESSION_COOKIE_SECURE"] = False
-
-
-# ============================================================
-# EXTENSIONS
-# ============================================================
+app.config["SESSION_COOKIE_SECURE"] = IS_PRODUCTION
 
 jwt = JWTManager(app)
-
 bcrypt = Bcrypt(app)
-
 
 # ============================================================
 # CORS
 # ============================================================
 
-cors_origins = []
-
-if FRONTEND_URL:
-    cors_origins.append(
-        FRONTEND_URL
-    )
-
-# Allow same-origin deployment.
-if not cors_origins:
-    cors_origins = ["*"]
-
-# FIX: browsers silently REJECT credentialed requests (cookies /
-# Authorization headers with fetch's credentials:'include') when
-# Access-Control-Allow-Origin is "*". That failure never appears
-# in Flask's logs — it just looks like the frontend "sometimes"
-# doesn't get data back. Only turn on supports_credentials when
-# we have a concrete origin list; log a warning so this doesn't
-# get missed if FRONTEND_URL is forgotten in production.
-_cors_supports_credentials = cors_origins != ["*"]
-
-if not _cors_supports_credentials:
-    logger.warning(
-        "FRONTEND_URL is not set — CORS is wide open ('*') and "
-        "credentialed requests (cookies/Authorization headers) "
-        "will be silently blocked by browsers. Set FRONTEND_URL "
-        "in production."
-    )
-
+cors_origins = [FRONTEND_URL] if FRONTEND_URL else ["*"]
 CORS(
     app,
     resources={
         r"/api/*": {
             "origins": cors_origins,
-            "supports_credentials": _cors_supports_credentials,
+            "supports_credentials": cors_origins != ["*"],
         }
     },
 )
-
 
 # ============================================================
 # GEMINI CLIENT
@@ -394,48 +291,31 @@ CORS(
 gemini_client = None
 
 if GEMINI_API_KEY:
-
     try:
-
         if genai_types is not None:
-
             try:
-
                 gemini_client = genai.Client(
                     api_key=GEMINI_API_KEY,
                     http_options=genai_types.HttpOptions(
                         timeout=GEMINI_TIMEOUT_MS,
                     ),
                 )
-
             except TypeError:
-
-                gemini_client = genai.Client(
-                    api_key=GEMINI_API_KEY,
-                )
-
+                gemini_client = genai.Client(api_key=GEMINI_API_KEY)
         else:
-
-            gemini_client = genai.Client(
-                api_key=GEMINI_API_KEY,
-            )
+            gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
         logger.info(
             "Gemini client initialized: %s",
             GEMINI_MODEL,
         )
-
     except Exception as exc:
-
         logger.exception(
             "Failed to initialize Gemini client: %s",
             exc,
         )
-
         gemini_client = None
-
 else:
-
     logger.warning(
         "GEMINI_API_KEY is not configured. "
         "Deterministic fallback will be used."
@@ -514,36 +394,11 @@ COINGECKO_API_URL = (
     "https://api.coingecko.com/api/v3"
 )
 
-# Binance — Fallback market data provider (real-time ticker)
-BINANCE_API_URL = (
-    "https://api.binance.com/api/v3"
-)
-
-# CoinCap — Alternative market data provider (price, volume, mcap)
-# Requires a free API key at https://coincap.io for full access.
-# Without a key the provider is auto-skipped in the chain.
-COINCAP_API_URL = (
-    "https://api.coincap.io/v2"
-)
-
-# Kraken — Public exchange API (no key required)
-KRAKEN_API_URL = (
-    "https://api.kraken.com/0"
-)
-
-# Coinbase Pro/Exchange — Public API (no key required)
-# Returns 24h OHLCV stats that are reliably accessible from Render.
-COINBASE_API_URL = (
-    "https://api.exchange.coinbase.com"
-)
-
-# Optional API keys — increase rate limits when configured.
-COINCAP_API_KEY = (
-    os.getenv(
-        "COINCAP_API_KEY",
-        "",
-    ).strip()
-)
+# Retained only to keep obsolete compatibility helpers inert. The
+# unified market and history fetchers never call these helpers.
+BINANCE_API_URL = ""
+COINCAP_API_URL = ""
+COINCAP_ID_MAP = {}
 
 COINGECKO_API_KEY = (
     os.getenv(
@@ -625,95 +480,6 @@ TOKEN_MAP = {
 
 
 # ============================================================
-# COINCAP SLUG MAP
-# ============================================================
-# Maps user-input symbols to CoinCap v2 asset slugs.
-# Used by fetch_coincap_market() as a fallback provider.
-# ============================================================
-
-COINCAP_ID_MAP = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum",
-    "SOL": "solana",
-    "BNB": "binance-coin",
-    "XRP": "ripple",
-    "ADA": "cardano",
-    "DOGE": "dogecoin",
-    "AVAX": "avalanche",
-    "DOT": "polkadot",
-    "MATIC": "polygon",
-    "POL": "polygon",
-    "LINK": "chainlink",
-    "LTC": "litecoin",
-    "BCH": "bitcoin-cash",
-    "ATOM": "cosmos",
-    "UNI": "uniswap",
-    "XLM": "stellar",
-    "TRX": "tron",
-    "SHIB": "shiba-inu",
-}
-
-
-# ============================================================
-# COINBASE PRODUCT PAIR MAP
-# ============================================================
-# Maps symbols to Coinbase Exchange product IDs (e.g. BTC-USD).
-# Used by fetch_coinbase_market() — a no-key provider that
-# is reliably accessible from Render.
-# ============================================================
-
-COINBASE_PAIR_MAP = {
-    "BTC": "BTC-USD",
-    "ETH": "ETH-USD",
-    "SOL": "SOL-USD",
-    "BNB": "BNB-USD",
-    "XRP": "XRP-USD",
-    "ADA": "ADA-USD",
-    "DOGE": "DOGE-USD",
-    "AVAX": "AVAX-USD",
-    "DOT": "DOT-USD",
-    "MATIC": "MATIC-USD",
-    "POL": "POL-USD",
-    "LINK": "LINK-USD",
-    "LTC": "LTC-USD",
-    "BCH": "BCH-USD",
-    "ATOM": "ATOM-USD",
-    "UNI": "UNI-USD",
-    "XLM": "XLM-USD",
-    "TRX": "TRX-USD",
-    "SHIB": "SHIB-USD",
-}
-
-
-# ============================================================
-# KRAKEN PAIR MAP
-# ============================================================
-# Maps symbols to Kraken pairs for the public Ticker endpoint.
-# ============================================================
-
-KRAKEN_PAIR_MAP = {
-    "BTC": "XBTUSD",
-    "ETH": "ETHUSD",
-    "SOL": "SOLUSD",
-    "BNB": "BNBUSDT",
-    "XRP": "XRPUSD",
-    "ADA": "ADAUSD",
-    "DOGE": "DOGEUSD",
-    "AVAX": "AVAXUSD",
-    "DOT": "DOTUSD",
-    "MATIC": "POLUSD",
-    "POL": "POLUSD",
-    "LINK": "LINKUSD",
-    "LTC": "LTCUSD",
-    "BCH": "BCHUSD",
-    "ATOM": "ATOMUSD",
-    "UNI": "UNIUSD",
-    "XLM": "XLMUSD",
-    "TRX": "TRXUSD",
-    "SHIB": "SHIBUSD",
-}
-
-
 # Native blockchain assets (not ERC-20 tokens)
 NATIVE_ASSETS = {
     "BTC",
@@ -1784,6 +1550,10 @@ def empty_market_data(
     }
 
 
+class MarketDataUnavailableError(RuntimeError):
+    """Raised when CoinGecko cannot provide a usable market snapshot."""
+
+
 # ============================================================
 # HTTP HELPER
 # ============================================================
@@ -2042,7 +1812,7 @@ def resolve_coin_id(
 # Returns: price, 24h_volume, market_cap, high_24h, low_24h,
 #          price_change_7d_pct, and other market structure data.
 #
-# Rate-limited with fallback to Binance if CoinGecko fails.
+# Rate-limited with an explicit error when CoinGecko fails.
 # ============================================================
 
 def fetch_coingecko_market(
@@ -2052,8 +1822,8 @@ def fetch_coingecko_market(
     Fetch current market snapshot from CoinGecko (/coins/markets).
 
     Uses the status-aware HTTP helper so 429/403/451/5xx responses
-    are recorded via the provider cooldown system and the caller
-    can fall through to the next provider.
+    are recorded via the provider cooldown system and returned as
+    a precise unavailable result.
     """
 
     symbol = normalize_symbol(symbol)
@@ -2063,12 +1833,16 @@ def fetch_coingecko_market(
 
     # Skip if currently on cooldown
     if _provider_is_cooling("CoinGecko"):
-        return empty_market_data(symbol)
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = "CoinGecko is temporarily cooling down after a provider failure."
+        return market
 
     coin_id = resolve_coin_id(symbol)
 
     if not coin_id:
-        return empty_market_data(symbol)
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = f"CoinGecko could not resolve symbol {symbol}."
+        return market
 
     logger.info("[MARKET] %s trying CoinGecko", symbol)
 
@@ -2096,11 +1870,11 @@ def fetch_coingecko_market(
             status_code,
             error_reason or "no_response",
         )
-        logger.warning(
-            "[MARKET] CoinGecko failed: %s",
-            error_reason,
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = (
+            f"CoinGecko request failed: {error_reason or 'no response'}."
         )
-        return empty_market_data(symbol)
+        return market
 
     if status_code is not None and status_code >= 400:
         _mark_provider_failure(
@@ -2108,14 +1882,13 @@ def fetch_coingecko_market(
             status_code,
             error_reason or f"HTTP {status_code}",
         )
-        logger.warning(
-            "[MARKET] CoinGecko failed: %s",
-            error_reason,
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = (
+            f"CoinGecko returned {error_reason or f'HTTP {status_code}'}."
         )
-        return empty_market_data(symbol)
+        return market
 
     try:
-
         payload = response.json()
 
         if not isinstance(payload, list) or not payload:
@@ -2124,13 +1897,20 @@ def fetch_coingecko_market(
                 status_code,
                 "malformed_json",
             )
-            logger.warning("[MARKET] CoinGecko returned empty/malformed list")
-            return empty_market_data(symbol)
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                "CoinGecko returned an empty or malformed market response."
+            )
+            return market
 
         coin = payload[0]
 
         if not isinstance(coin, dict):
-            return empty_market_data(symbol)
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                "CoinGecko returned an invalid market record."
+            )
+            return market
 
         price = optional_numeric(coin.get("current_price"))
         volume = optional_numeric(coin.get("total_volume"))
@@ -2144,28 +1924,23 @@ def fetch_coingecko_market(
         high_24h = optional_numeric(coin.get("high_24h"))
         low_24h = optional_numeric(coin.get("low_24h"))
 
-        # Got a 200 but no usable price — treat as a provider failure
         if price is None:
-            logger.warning("[MARKET] CoinGecko returned no usable price")
-            return empty_market_data(symbol)
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                "CoinGecko returned no usable price."
+            )
+            return market
 
-        # Success — clear any cooldown
         _clear_provider_success("CoinGecko")
-
-        last_updated = coin.get("last_updated")
         timestamp = utc_now_iso()
+        last_updated = coin.get("last_updated")
 
         if last_updated:
             try:
-                if isinstance(last_updated, (date, datetime)):
-                    timestamp = last_updated.isoformat()
-                else:
-                    timestamp = (
-                        datetime.fromisoformat(
-                            str(last_updated).replace("Z", "+00:00"),
-                        ).isoformat()
-                    )
-            except Exception:
+                timestamp = datetime.fromisoformat(
+                    str(last_updated).replace("Z", "+00:00")
+                ).isoformat()
+            except (TypeError, ValueError):
                 pass
 
         logger.info(
@@ -2189,15 +1964,19 @@ def fetch_coingecko_market(
 
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
         logger.warning("[MARKET] CoinGecko parse failed: %s", exc)
-        return empty_market_data(symbol)
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = f"CoinGecko response parsing failed: {exc}."
+        return market
 
     except Exception as exc:
         logger.warning("[MARKET] CoinGecko failed unexpectedly: %s", exc)
-        return empty_market_data(symbol)
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = f"CoinGecko request failed unexpectedly: {exc}."
+        return market
 
 
 # ============================================================
-# BINANCE MARKET FALLBACK
+# SINGLE-SOURCE MARKET FETCH
 # ============================================================
 
 def fetch_binance_market(
@@ -2209,6 +1988,8 @@ def fetch_binance_market(
     Binance returns 451 on Render's IP range, so this is used as
     a later fallback, not the primary provider.
     """
+
+    return empty_market_data(normalize_symbol(symbol))
 
     symbol = normalize_symbol(symbol)
 
@@ -2311,6 +2092,8 @@ def fetch_coincap_market(
     Does NOT return high_24h/low_24h — those stay null.
     """
 
+    return empty_market_data(normalize_symbol(symbol))
+
     symbol = normalize_symbol(symbol)
 
     if not symbol:
@@ -2401,269 +2184,16 @@ def fetch_coincap_market(
 
 
 # ============================================================
-# KRAKEN MARKET PROVIDER
-# ============================================================
-# Kraken public Ticker API — no key required.
-# Returns last price, 24h high/low, 24h volume.
-# Reliable from Render.
-# Docs: https://docs.kraken.com/rest/#tag/Spot-Market-Data
-# ============================================================
-
-def fetch_kraken_market(
-    symbol: str,
-) -> dict:
-    """
-    Fetch current market snapshot from Kraken.
-
-    Returns last price, 24h high/low, 24h volume.
-    Does NOT return market cap or 24h percent change directly.
-    """
-
-    symbol = normalize_symbol(symbol)
-
-    if not symbol:
-        return empty_market_data(symbol)
-
-    if _provider_is_cooling("Kraken"):
-        return empty_market_data(symbol)
-
-    pair = KRAKEN_PAIR_MAP.get(symbol)
-
-    if not pair:
-        logger.info("[MARKET] Kraken: no mapping for %s", symbol)
-        return empty_market_data(symbol)
-
-    logger.info("[MARKET] %s trying Kraken", symbol)
-
-    try:
-        response, status_code, error_reason = _http_get_market(
-            f"{KRAKEN_API_URL}/public/Ticker",
-            params={"pair": pair},
-            timeout=MARKET_TIMEOUT,
-        )
-
-        if response is None:
-            _mark_provider_failure(
-                "Kraken",
-                status_code,
-                error_reason or "no_response",
-            )
-            logger.warning("[MARKET] Kraken failed: %s", error_reason)
-            return empty_market_data(symbol)
-
-        if status_code is not None and status_code >= 400:
-            _mark_provider_failure(
-                "Kraken",
-                status_code,
-                error_reason or f"HTTP {status_code}",
-            )
-            logger.warning("[MARKET] Kraken failed: %s", error_reason)
-            return empty_market_data(symbol)
-
-        payload = response.json()
-
-        if not isinstance(payload, dict):
-            return empty_market_data(symbol)
-
-        errors = payload.get("error", [])
-        if isinstance(errors, list) and errors:
-            _mark_provider_failure(
-                "Kraken",
-                status_code,
-                f"kraken_error: {errors[0]}",
-            )
-            logger.warning("[MARKET] Kraken error: %s", errors[0])
-            return empty_market_data(symbol)
-
-        result = payload.get("result")
-        if not isinstance(result, dict):
-            return empty_market_data(symbol)
-
-        ticker = None
-        for key, value in result.items():
-            if isinstance(value, dict) and key == pair:
-                ticker = value
-                break
-
-        if ticker is None:
-            for key, value in result.items():
-                if isinstance(value, dict):
-                    ticker = value
-                    break
-
-        if not isinstance(ticker, dict):
-            logger.warning("[MARKET] Kraken: no ticker data")
-            return empty_market_data(symbol)
-
-        price_raw = ticker.get("c")
-        high_raw = ticker.get("h")
-        low_raw = ticker.get("l")
-        vol_raw = ticker.get("v")
-
-        price = optional_numeric(
-            price_raw[0] if isinstance(price_raw, list) else price_raw
-        )
-        high_24h = optional_numeric(
-            high_raw[1] if isinstance(high_raw, list) else high_raw
-        )
-        low_24h = optional_numeric(
-            low_raw[1] if isinstance(low_raw, list) else low_raw
-        )
-        volume = optional_numeric(
-            vol_raw[1] if isinstance(vol_raw, list) else vol_raw
-        )
-
-        if price is None:
-            logger.warning("[MARKET] Kraken returned no usable price")
-            return empty_market_data(symbol)
-
-        _clear_provider_success("Kraken")
-
-        logger.info(
-            "[MARKET] Kraken SUCCESS price=%.4f source=Kraken",
-            price,
-        )
-
-        return json_safe({
-            "symbol": symbol,
-            "price": price,
-            "price_change_24h_pct": None,
-            "price_change_7d_pct": None,
-            "volume_24h": volume,
-            "market_cap": None,
-            "high_24h": high_24h,
-            "low_24h": low_24h,
-            "source": "Kraken",
-            "timestamp": utc_now_iso(),
-            "available": True,
-        })
-
-    except (ValueError, TypeError, AttributeError, KeyError) as exc:
-        logger.warning("[MARKET] Kraken parse failed: %s", exc)
-        return empty_market_data(symbol)
-
-    except Exception as exc:
-        logger.warning("[MARKET] Kraken failed unexpectedly: %s", exc)
-        return empty_market_data(symbol)
-
-
-# ============================================================
-# COINBASE MARKET PROVIDER
-# ============================================================
-# Coinbase Exchange public API — no key required.
-# Returns 24h stats: high/low/open/last/volume.
-# Reliable from Render.
-# Docs: https://docs.cloud.coinbase.com/exchange/reference
-# ============================================================
-
-def fetch_coinbase_market(
-    symbol: str,
-) -> dict:
-    """
-    Fetch current market snapshot from Coinbase Exchange.
-
-    Returns last price, 24h volume.
-    Does NOT return market cap, high/low, or 24h percent change.
-    """
-
-    symbol = normalize_symbol(symbol)
-
-    if not symbol:
-        return empty_market_data(symbol)
-
-    if _provider_is_cooling("Coinbase"):
-        return empty_market_data(symbol)
-
-    pair = COINBASE_PAIR_MAP.get(symbol)
-
-    if not pair:
-        logger.info("[MARKET] Coinbase: no mapping for %s", symbol)
-        return empty_market_data(symbol)
-
-    logger.info("[MARKET] %s trying Coinbase", symbol)
-
-    try:
-        response, status_code, error_reason = _http_get_market(
-            f"{COINBASE_API_URL}/products/{pair}/ticker",
-            timeout=MARKET_TIMEOUT,
-        )
-
-        if response is None:
-            _mark_provider_failure(
-                "Coinbase",
-                status_code,
-                error_reason or "no_response",
-            )
-            logger.warning("[MARKET] Coinbase failed: %s", error_reason)
-            return empty_market_data(symbol)
-
-        if status_code is not None and status_code >= 400:
-            _mark_provider_failure(
-                "Coinbase",
-                status_code,
-                error_reason or f"HTTP {status_code}",
-            )
-            logger.warning("[MARKET] Coinbase failed: %s", error_reason)
-            return empty_market_data(symbol)
-
-        payload = response.json()
-
-        if not isinstance(payload, dict):
-            return empty_market_data(symbol)
-
-        price = optional_numeric(payload.get("price"))
-        volume = optional_numeric(payload.get("volume"))
-
-        if price is None:
-            logger.warning("[MARKET] Coinbase returned no usable price")
-            return empty_market_data(symbol)
-
-        _clear_provider_success("Coinbase")
-
-        logger.info(
-            "[MARKET] Coinbase SUCCESS price=%.4f source=Coinbase",
-            price,
-        )
-
-        return json_safe({
-            "symbol": symbol,
-            "price": price,
-            "price_change_24h_pct": None,
-            "price_change_7d_pct": None,
-            "volume_24h": volume,
-            "market_cap": None,
-            "high_24h": None,
-            "low_24h": None,
-            "source": "Coinbase",
-            "timestamp": utc_now_iso(),
-            "available": True,
-        })
-
-    except (ValueError, TypeError, AttributeError, KeyError) as exc:
-        logger.warning("[MARKET] Coinbase parse failed: %s", exc)
-        return empty_market_data(symbol)
-
-    except Exception as exc:
-        logger.warning("[MARKET] Coinbase failed unexpectedly: %s", exc)
-        return empty_market_data(symbol)
-
-
-# ============================================================
 # UNIFIED MARKET FETCH
 # ============================================================
 # MARKET DATA ORCHESTRATOR — Multi-Provider with Cache
 # ============================================================
-# Provider chain: CoinGecko → CoinCap → Binance → Kraken → Coinbase
-# Each provider is tried in order. 429/403/451/5xx → cooldown + next.
+# CoinGecko is the sole market-data source.
 # Cache: 60s TTL. Per-symbol lock prevents duplicate upstream calls.
 # ============================================================
 
 _MARKET_PROVIDERS = [
     fetch_coingecko_market,
-    fetch_coincap_market,
-    fetch_binance_market,
-    fetch_kraken_market,
-    fetch_coinbase_market,
 ]
 
 
@@ -2745,34 +2275,19 @@ def fetch_market_data(
 
             market = empty_market_data(symbol)
 
-            # Try each provider in order until one succeeds
-            for provider_fn in _MARKET_PROVIDERS:
-                provider_name = getattr(
-                    provider_fn, "__name__", "unknown"
+            try:
+                candidate = fetch_coingecko_market(symbol)
+                if isinstance(candidate, dict):
+                    market = candidate
+            except Exception as exc:
+                logger.exception(
+                    "[MARKET] CoinGecko failed for %s: %s",
+                    symbol,
+                    exc,
                 )
-
-                try:
-                    candidate = provider_fn(symbol)
-
-                    if (
-                        isinstance(candidate, dict)
-                        and candidate.get("available")
-                    ):
-                        market = candidate
-                        logger.info(
-                            "[MARKET] %s SUCCESS from %s",
-                            symbol,
-                            candidate.get("source", provider_name),
-                        )
-                        break
-
-                except Exception as exc:
-                    logger.warning(
-                        "[MARKET] %s provider %s raised: %s",
-                        symbol,
-                        provider_name,
-                        exc,
-                    )
+                market["unavailable_reason"] = (
+                    f"CoinGecko request failed unexpectedly: {exc}."
+                )
 
             if not market.get("available"):
                 logger.warning("[MARKET] %s ALL PROVIDERS FAILED", symbol)
@@ -3103,6 +2618,8 @@ def fetch_binance_history(
     symbol: str,
     days: int = SUPPORTED_HISTORY_DAYS,
 ) -> list:
+
+    return []
 
     symbol = normalize_symbol(
         symbol
@@ -3457,53 +2974,11 @@ def fetch_price_history(
             days,
         )
 
-        if (
-            not isinstance(
-                prices,
-                list,
-            )
-            or len(prices) < 2
-        ):
-
-            fallback_prices = fetch_binance_history(
-                symbol,
-                days,
-            )
-
-            if isinstance(
-                fallback_prices,
-                list,
-            ):
-                prices = fallback_prices
-            else:
-                prices = []
-
         if not isinstance(
             prices,
             list,
         ):
             prices = []
-
-        if len(prices) < 2:
-
-            logger.info(
-                "Using Yahoo Finance history fallback for %s",
-                symbol,
-            )
-
-            yahoo_prices = fetch_yahoo_history(
-                symbol,
-                days,
-            )
-
-            if isinstance(
-                yahoo_prices,
-                list,
-            ):
-                prices = yahoo_prices
-            else:
-                prices = []
-
 
         try:
 
@@ -4504,7 +3979,7 @@ def build_risk_profile(
     )
 
     # NOTE: the market dict produced anywhere in this pipeline
-    # (empty_market_data / fetch_coingecko_market / fetch_binance_market)
+    # (empty_market_data / fetch_coingecko_market)
     # only ever sets "volume_24h" and "market_cap" — there is no
     # "_usd"-suffixed variant. A dead first-lookup for "volume_24h_usd"
     # / "market_cap_usd" used to sit here; it always missed and fell
@@ -6661,6 +6136,16 @@ def run_analysis(
     )
 
     market = fetch_market_data(symbol, force_refresh=force_market_refresh)
+
+    if not isinstance(market, dict) or not market.get("available"):
+        raise MarketDataUnavailableError(
+            market.get(
+                "unavailable_reason",
+                "CoinGecko did not return usable market data.",
+            )
+            if isinstance(market, dict)
+            else "CoinGecko did not return usable market data."
+        )
 
     report_progress(
         progress_callback,
@@ -9301,8 +8786,16 @@ def market_api(
 
     try:
 
+        raw_symbol = str(symbol or "").strip()
+
+        if not is_valid_symbol(raw_symbol):
+            return jsonify({
+                "success": False,
+                "error": "Invalid token symbol. Use 1-15 letters or digits.",
+            }), 400
+
         symbol = normalize_symbol(
-            symbol
+            raw_symbol
         )
 
         if not symbol:
@@ -9348,11 +8841,16 @@ def market_api(
             "market": market,
             "error": {
                 "code": "MARKET_DATA_UNAVAILABLE",
-                "message": "All market providers failed",
+                "message": market.get(
+                    "unavailable_reason",
+                    "CoinGecko did not return usable market data.",
+                ),
             },
         }), 502
 
     except Exception as exc:
+
+        traceback.print_exc()
 
         logger.exception(
             "Market API failed: %s",
@@ -9361,9 +8859,7 @@ def market_api(
 
         return jsonify({
             "success": False,
-            "error": (
-                "Market data unavailable."
-            ),
+            "error": str(exc) or "Market data unavailable.",
         }), 502
 
 
@@ -9392,13 +8888,16 @@ def analyze():
             or {}
         )
 
+        raw_symbol = data.get("token_symbol") or data.get("symbol")
+
+        if not is_valid_symbol(raw_symbol):
+            return jsonify({
+                "success": False,
+                "error": "Invalid token symbol. Use 1-15 letters or digits.",
+            }), 400
+
         symbol = normalize_symbol(
-            data.get(
-                "token_symbol"
-            )
-            or data.get(
-                "symbol"
-            )
+            raw_symbol
         )
 
         chain_id = data.get(
@@ -9495,6 +8994,16 @@ def analyze():
             },
         })
 
+    except MarketDataUnavailableError as exc:
+
+        traceback.print_exc()
+
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+            "code": "MARKET_DATA_UNAVAILABLE",
+        }), 502
+
     except ValueError as exc:
 
         return jsonify({
@@ -9503,6 +9012,8 @@ def analyze():
         }), 400
 
     except Exception as exc:
+
+        traceback.print_exc()
 
         logger.exception(
             "Synchronous analysis failed: %s",
@@ -9537,13 +9048,16 @@ def start_analysis():
             or {}
         )
 
+        raw_symbol = data.get("token_symbol") or data.get("symbol")
+
+        if not is_valid_symbol(raw_symbol):
+            return jsonify({
+                "success": False,
+                "error": "Invalid token symbol. Use 1-15 letters or digits.",
+            }), 400
+
         symbol = normalize_symbol(
-            data.get(
-                "token_symbol"
-            )
-            or data.get(
-                "symbol"
-            )
+            raw_symbol
         )
 
         chain_id = data.get(
@@ -9688,6 +9202,8 @@ def start_analysis():
         }), 400
 
     except Exception as exc:
+
+        traceback.print_exc()
 
         logger.exception(
             "Could not start analysis: %s",
