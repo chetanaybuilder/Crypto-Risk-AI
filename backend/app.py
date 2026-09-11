@@ -391,7 +391,7 @@ else:
 # All API calls include timeout and error handling.
 # ============================================================
 
-# CoinGecko — Primary market data provider (price, volume, mcap)
+# CoinGecko — Secondary market-data provider (market cap/history)
 COINGECKO_API_URL = (
     "https://api.coingecko.com/api/v3"
 )
@@ -2032,7 +2032,7 @@ def fetch_coingecko_market(
 def get_binance_price(
     symbol: str,
 ) -> dict:
-    """Fetch a live USDT spot price from Binance without CoinGecko cooldowns."""
+    """Fetch the Binance 24-hour USDT ticker used by live market reports."""
 
     symbol = normalize_symbol(symbol)
 
@@ -2049,7 +2049,7 @@ def get_binance_price(
     ):
         try:
             response, status_code, error_reason = _http_get_market(
-                f"{base_url}/ticker/price",
+                f"{base_url}/ticker/24hr",
                 params={"symbol": pair},
                 timeout=MARKET_TIMEOUT,
             )
@@ -2068,7 +2068,7 @@ def get_binance_price(
 
             payload = response.json()
             price = optional_numeric(
-                payload.get("price")
+                payload.get("lastPrice")
                 if isinstance(payload, dict)
                 else None
             )
@@ -2077,19 +2077,37 @@ def get_binance_price(
                 errors.append("no usable price")
                 continue
 
-            return json_safe({
+            market = {
                 "symbol": symbol,
                 "price": price,
-                "price_change_24h_pct": None,
+                "price_change_24h_pct": optional_numeric(
+                    payload.get("priceChangePercent")
+                ),
                 "price_change_7d_pct": None,
-                "volume_24h": None,
+                "volume_24h": optional_numeric(
+                    payload.get("quoteVolume")
+                ),
                 "market_cap": None,
-                "high_24h": None,
-                "low_24h": None,
+                "high_24h": optional_numeric(payload.get("highPrice")),
+                "low_24h": optional_numeric(payload.get("lowPrice")),
                 "source": "Binance",
                 "timestamp": utc_now_iso(),
                 "available": True,
-            })
+                "field_errors": {},
+            }
+
+            for field, label in (
+                ("price_change_24h_pct", "24h change"),
+                ("volume_24h", "24h volume"),
+                ("high_24h", "24h high"),
+                ("low_24h", "24h low"),
+            ):
+                if market[field] is None:
+                    market["field_errors"][field] = (
+                        f"Binance returned no usable {label}."
+                    )
+
+            return json_safe(market)
 
         except (ValueError, TypeError, AttributeError, KeyError) as exc:
             errors.append(f"response parsing failed: {exc}")
@@ -2119,13 +2137,10 @@ def fetch_binance_market(
     symbol: str,
 ) -> dict:
     """
-    Fetch current market snapshot from Binance (24hr ticker).
-
-    Binance returns 451 on Render's IP range, so this is used as
-    a later fallback, not the primary provider.
+    Compatibility wrapper for the live Binance ticker.
     """
 
-    return empty_market_data(normalize_symbol(symbol))
+    return get_binance_price(symbol)
 
     symbol = normalize_symbol(symbol)
 
@@ -2438,6 +2453,42 @@ def fetch_market_data(
                 market["unavailable_reason"] = (
                     f"Binance request failed unexpectedly: {exc}."
                 )
+
+            # Binance does not provide circulating supply or market cap.
+            # Enrich the live Binance ticker with CoinGecko market cap,
+            # without allowing a CoinGecko failure to discard live fields.
+            if market.get("available") and market.get("source") == "Binance":
+                try:
+                    market_cap_snapshot = fetch_coingecko_market(symbol)
+                    market_cap = optional_numeric(
+                        market_cap_snapshot.get("market_cap")
+                        if isinstance(market_cap_snapshot, dict)
+                        else None
+                    )
+
+                    if market_cap is not None:
+                        market["market_cap"] = market_cap
+                        market["market_cap_source"] = "CoinGecko"
+                    else:
+                        market.setdefault("field_errors", {})[
+                            "market_cap"
+                        ] = market_cap_snapshot.get(
+                            "unavailable_reason",
+                            "CoinGecko returned no usable market cap.",
+                        )
+                        logger.warning(
+                            "[MARKET] %s market cap unavailable: %s",
+                            symbol,
+                            market["field_errors"]["market_cap"],
+                        )
+                except Exception as exc:
+                    market.setdefault("field_errors", {})[
+                        "market_cap"
+                    ] = f"CoinGecko market-cap lookup failed: {exc}."
+                    logger.exception(
+                        "[MARKET] %s market-cap enrichment failed",
+                        symbol,
+                    )
 
             if not market.get("available"):
                 logger.info(
@@ -6028,78 +6079,44 @@ def build_structured_report(
         data_quality
     )
 
-    if dq.get(
-        "confidence"
-    ) is None:
+    field_checks = {
+        "Live price": market.get("price"),
+        "24h volume": market.get("volume_24h"),
+        "Market cap": market.get("market_cap"),
+        "24h high": market.get("high_24h"),
+        "24h low": market.get("low_24h"),
+        "Price history": quant.get("history_observations"),
+        "BTC benchmark history": quant.get("btc_history_observations"),
+        "Contract security": (
+            True
+            if isinstance(security, dict) and security.get("available")
+            else None
+        ),
+    }
 
-        dq_confidence = (
-            risk_profile.get(
-                "confidence",
-                0,
-            )
-        )
+    available_fields = [
+        name
+        for name, value in field_checks.items()
+        if value is not None and value != 0
+    ]
+    missing_signals = [
+        name
+        for name, value in field_checks.items()
+        if value is None or value == 0
+    ]
 
-        if dq_confidence is None:
-            dq_confidence = (
-                ai.get(
-                    "confidence",
-                    50,
-                )
-            )
-
-        dq[
-            "confidence"
-        ] = dq_confidence
-
-    if dq.get(
-        "missing_signals"
-    ) is None:
-
-        missing_signals = []
-
-        if market.get(
-            "price"
-        ) is None:
-            missing_signals.append(
-                "Live price unavailable"
-            )
-
-        if market.get(
-            "volume_24h"
-        ) is None:
-            missing_signals.append(
-                "24h volume unavailable"
-            )
-
-        if market.get(
-            "market_cap"
-        ) is None:
-            missing_signals.append(
-                "Market cap unavailable"
-            )
-
-        if not quant.get(
-            "history_observations"
-        ):
-            missing_signals.append(
-                "Price history unavailable"
-            )
-
-        dq[
-            "missing_signals"
-        ] = missing_signals
-
-    # Final safety net: ensure confidence is always a valid number
-    # (the block above already handles this, but this guarantees it).
-    if not isinstance(
-        dq.get("confidence"),
-        (int, float),
-    ) or dq.get("confidence") is None:
-        dq["confidence"] = first_defined(
-            risk_profile.get("confidence"),
-            ai.get("confidence"),
-            50,
-        )
+    field_errors = dict(
+        market.get("field_errors")
+        if isinstance(market.get("field_errors"), dict)
+        else {}
+    )
+    dq["available_fields"] = available_fields
+    dq["field_errors"] = field_errors
+    dq["missing_signals"] = missing_signals
+    dq["confidence"] = round(
+        len(available_fields) / len(field_checks) * 100,
+        1,
+    )
 
     dq["source"] = first_defined(
         market.get(
