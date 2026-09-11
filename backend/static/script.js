@@ -160,6 +160,8 @@ const state = {
     isAnalyzing: false
 };
 
+const MARKET_POLL_INTERVAL_MS = 30000;
+
 
 /* ============================================================
    DOM HELPERS
@@ -2051,7 +2053,7 @@ function startLivePolling(symbol) {
             refreshLiveMarket(
                 state.currentSymbol
             );
-        }, 15000);
+        }, MARKET_POLL_INTERVAL_MS);
 }
 
 async function refreshLiveMarket(
@@ -2356,8 +2358,10 @@ function updateLiveMarket(
      * data.
      */
     setMarketLiveState(
-        true,
-        "Live • Backend feed"
+        !market.stale,
+        market.stale
+            ? "Cached market snapshot (stale)"
+            : "Live • Backend feed"
     );
 
     setText(
@@ -3047,8 +3051,10 @@ function renderMarket(report) {
      */
     setText(
         "#market-live-status",
-        marketAvailable
-            ? "Report market snapshot"
+        market.stale
+            ? "Cached market snapshot (stale)"
+            : marketAvailable
+                ? "Report market snapshot"
             : unavailableReason
     );
 

@@ -31,6 +31,7 @@ import re
 import traceback
 import time
 import uuid
+from math import ceil
 
 from concurrent.futures import (
     ThreadPoolExecutor,
@@ -39,6 +40,7 @@ from concurrent.futures import (
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 from functools import wraps
 from statistics import mean
 from threading import Lock
@@ -526,6 +528,7 @@ _cache_lock = Lock()
 
 _provider_cooldown = {}
 _provider_cooldown_lock = Lock()
+_provider_failure_counts = {}
 
 _symbol_fetch_locks = {}
 _symbol_fetch_locks_guard = Lock()
@@ -569,7 +572,27 @@ def _mark_provider_failure(
 ) -> None:
     """Record a provider failure and start its cooldown."""
     if status_code == 429:
-        seconds = PROVIDER_COOLDOWN_429
+        retry_after = None
+        match = re.search(
+            r"retry_after=([0-9]+(?:\.[0-9]+)?)",
+            str(reason or ""),
+        )
+
+        if match:
+            retry_after = float(match.group(1))
+
+        with _provider_cooldown_lock:
+            failures = _provider_failure_counts.get(name, 0) + 1
+            _provider_failure_counts[name] = failures
+
+        backoff = min(
+            300,
+            PROVIDER_COOLDOWN_429 * (2 ** min(failures - 1, 4)),
+        )
+        seconds = max(
+            backoff,
+            ceil(retry_after or 0),
+        )
     elif status_code in (
         403,
         451,
@@ -611,6 +634,7 @@ def _clear_provider_success(
                 name,
                 None,
             )
+        _provider_failure_counts.pop(name, None)
 
 
 def _get_symbol_fetch_lock(
@@ -1646,10 +1670,30 @@ def _http_get_market(
         if response.ok:
             return response, response.status_code, None
 
-        # Non-2xx — return the response AND the status code so the
-        # caller can record the failure and fall through.
+        retry_after = response.headers.get("Retry-After")
+
+        if retry_after:
+            try:
+                retry_after = str(max(0, float(retry_after)))
+            except (TypeError, ValueError):
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    retry_after = str(
+                        max(0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    retry_after = None
+        retry_suffix = (
+            f"; retry_after={retry_after}"
+            if retry_after
+            else ""
+        )
+
+        # Return the response and status so callers can apply backoff.
         return response, response.status_code, (
-            f"HTTP {response.status_code}"
+            f"HTTP {response.status_code}{retry_suffix}"
         )
 
     except requests.exceptions.Timeout:
@@ -2217,6 +2261,7 @@ def fetch_market_data(
             return empty_market_data(symbol)
 
         now = time.time()
+        stale_cached = None
 
         # Check cache first
         if not force_refresh:
@@ -2225,6 +2270,9 @@ def fetch_market_data(
                     cached = _market_cache.get(symbol)
 
                 if isinstance(cached, dict) and cached:
+                    if cached.get("available"):
+                        stale_cached = dict(cached)
+
                     cached_at = numeric(
                         cached.get("_cached_at", 0),
                         default=0,
@@ -2260,6 +2308,9 @@ def fetch_market_data(
                         cached = _market_cache.get(symbol)
 
                     if isinstance(cached, dict) and cached:
+                        if cached.get("available"):
+                            stale_cached = dict(cached)
+
                         cached_at = numeric(
                             cached.get("_cached_at", 0),
                             default=0,
@@ -2308,16 +2359,24 @@ def fetch_market_data(
                     market.get("unavailable_reason", "unknown"),
                 )
 
-            # Enrich with 7d change from history if needed
-            try:
-                market = enrich_market_7d(
-                    market,
-                    symbol,
-                    force_refresh=force_refresh,
-                )
+                if stale_cached:
+                    market = dict(stale_cached)
+                    market["stale"] = True
+                    market["stale_reason"] = (
+                        "CoinGecko is temporarily rate-limited; serving the last known snapshot."
+                    )
 
-            except Exception as exc:
-                logger.debug("Market 7d enrichment failed: %s", exc)
+            # Enrich with 7d change from history if needed
+            if not market.get("stale"):
+                try:
+                    market = enrich_market_7d(
+                        market,
+                        symbol,
+                        force_refresh=force_refresh,
+                    )
+
+                except Exception as exc:
+                    logger.debug("Market 7d enrichment failed: %s", exc)
 
             if not isinstance(market, dict):
                 market = empty_market_data(symbol)
@@ -2326,7 +2385,7 @@ def fetch_market_data(
 
             # Cache only usable snapshots. A 429/error must never poison
             # the cache and turn a temporary provider failure permanent.
-            if market.get("available"):
+            if market.get("available") and not market.get("stale"):
                 try:
                     cache_value = dict(market)
                     cache_value["_cached_at"] = time.time()
