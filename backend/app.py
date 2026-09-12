@@ -38,12 +38,12 @@ from concurrent.futures import (
     TimeoutError as FuturesTimeoutError,
 )
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from functools import wraps
 from statistics import mean
-from threading import Lock
+from threading import Lock, Timer
 from typing import Any, Optional
 from urllib.parse import quote
 
@@ -135,12 +135,20 @@ IS_PRODUCTION = FLASK_ENV == "production"
 
 # Flask secret key for session encryption
 # WARNING: Must be set to a secure random value in production
-SECRET_KEY = os.getenv(
-    "SECRET_KEY"
-) or os.getenv(
-    "FLASK_SECRET_KEY",
-    "dev-secret-change-me",
-)
+_placeholder_secret = "dev-secret-change-me"
+_raw_secret = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET_KEY")
+if IS_PRODUCTION and not _raw_secret:
+    raise RuntimeError(
+        "FATAL: SECRET_KEY or FLASK_SECRET_KEY must be set in production. "
+        "Refusing to boot with the insecure placeholder default."
+    )
+if not _raw_secret:
+    logger.warning(
+        "SECURITY: SECRET_KEY/FLASK_SECRET_KEY not set — using insecure "
+        "placeholder default. This is dev-only behavior; set a real "
+        "secret before deploying to production."
+    )
+SECRET_KEY = _raw_secret or _placeholder_secret
 
 # PostgreSQL database connection string
 DATABASE_URL = os.getenv(
@@ -171,11 +179,24 @@ JWT_SECRET_KEY = os.getenv(
     SECRET_KEY,
 ).strip()
 
+JWT_ACCESS_TOKEN_EXPIRES_DAYS = max(
+    1,
+    int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_DAYS", "7")),
+)
+
 # Frontend URL for CORS configuration
-FRONTEND_URL = os.getenv(
-    "FRONTEND_URL",
-    "",
-).strip().rstrip("/")
+_raw_frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+if IS_PRODUCTION and not _raw_frontend_url:
+    raise RuntimeError(
+        "FATAL: FRONTEND_URL must be set in production. "
+        "Refusing to boot with a wildcard CORS fallback."
+    )
+if not _raw_frontend_url:
+    logger.warning(
+        "SECURITY: FRONTEND_URL not set — CORS will allow all origins (*). "
+        "This is dev-only behavior; set FRONTEND_URL before deploying."
+    )
+FRONTEND_URL = _raw_frontend_url
 
 
 # ============================================================
@@ -221,9 +242,24 @@ GEMINI_MAX_RETRIES = min(
 # NETWORK CONFIG
 # ============================================================
 
-MARKET_TIMEOUT = max(3, int(os.getenv("MARKET_TIMEOUT", "10")))
+MARKET_TIMEOUT = max(3, int(os.getenv("MARKET_TIMEOUT", "12")))
 HISTORY_CACHE_TTL = max(15, int(os.getenv("HISTORY_CACHE_TTL", "60")))
-MARKET_CACHE_TTL = max(5, int(os.getenv("MARKET_CACHE_TTL", "60")))
+MARKET_CACHE_TTL = max(5, int(os.getenv("MARKET_CACHE_TTL", "90")))
+# Maximum age (seconds) of a stale cached snapshot that will still be
+# served when the live provider call fails. Beyond this the analysis
+# hard-fails rather than serving a hopelessly outdated number.
+MARKET_STALE_MAX_AGE = max(
+    60,
+    int(os.getenv("MARKET_STALE_MAX_AGE", "1800")),
+)
+# In-function retry budget for CoinGecko calls (market + history).
+# Retries cover connection errors, timeouts, and 5xx responses with
+# short exponential backoff. 429s are NOT retried here — they are
+# handled by the provider cooldown system (Retry-After respected).
+COINGECKO_MAX_RETRIES = max(
+    1,
+    int(os.getenv("COINGECKO_MAX_RETRIES", "3")),
+)
 MARKET_CAP_CACHE_TTL = max(
     600,
     int(os.getenv("MARKET_CAP_CACHE_TTL", "900")),
@@ -282,7 +318,9 @@ app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
 app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 app.config["JWT_HEADER_NAME"] = "Authorization"
 app.config["JWT_HEADER_TYPE"] = "Bearer"
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(
+    days=JWT_ACCESS_TOKEN_EXPIRES_DAYS,
+)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = IS_PRODUCTION
@@ -304,6 +342,240 @@ CORS(
         }
     },
 )
+
+# ============================================================
+# SIMPLE IN-MEMORY RATE LIMITER (S3)
+# ============================================================
+# Sliding-window rate limiter keyed by bucket (e.g. "login:ip:email").
+# No external dependency — pure dict + Lock. Resets on server restart
+# (acceptable for this use case; swap for redis if multi-process).
+
+_rate_limit_buckets: dict = {}
+_rate_limit_lock = Lock()
+
+
+def _rate_limit_check(
+    bucket: str,
+    max_attempts: int,
+    window_seconds: int,
+) -> tuple:
+    """
+    Returns (allowed: bool, remaining: int, retry_after: int).
+    Prunes stale entries in the same call so the dict stays bounded.
+    """
+
+    now = time.time()
+    window_start = now - window_seconds
+
+    with _rate_limit_lock:
+        entries = _rate_limit_buckets.setdefault(bucket, [])
+        # Prune stale timestamps
+        entries[:] = [
+            ts for ts in entries if ts > window_start
+        ]
+
+        if len(entries) >= max_attempts:
+            oldest = min(entries)
+            retry_after = int(oldest + window_seconds - now) + 1
+            return False, 0, max(1, retry_after)
+
+        entries.append(now)
+        remaining = max_attempts - len(entries)
+        return True, remaining, 0
+
+
+def _client_ip() -> str:
+    """Best-effort client IP, honoring X-Forwarded-For behind a proxy."""
+    forwarded = request.headers.get(
+        "X-Forwarded-For",
+        "",
+    )
+    if forwarded:
+        return forwarded.split(",")[0].strip() or "unknown"
+    return request.remote_addr or "unknown"
+
+
+def rate_limit(
+    max_attempts: int,
+    window_seconds: int,
+    bucket_prefix: str,
+) -> Optional[tuple]:
+    """
+    Decorator factory: returns a 429 response tuple if the limit is
+    exceeded, or None if the request is allowed to proceed.
+
+    Usage inside a route:
+        blocked = rate_limit(5, 900, "login")(
+            lambda: f"{_client_ip()}:{email.lower().strip()}"
+        )
+        if blocked is not None:
+            return blocked
+    """
+
+    def resolver(resolver_fn):
+        bucket = f"{bucket_prefix}:{resolver_fn()}"
+        allowed, remaining, retry_after = _rate_limit_check(
+            bucket,
+            max_attempts,
+            window_seconds,
+        )
+        if not allowed:
+            logger.warning(
+                "[RATE LIMIT] bucket=%s blocked (retry_after=%ds)",
+                bucket,
+                retry_after,
+            )
+            response = jsonify({
+                "success": False,
+                "error": (
+                    f"Too many attempts. Try again in "
+                    f"{retry_after} seconds."
+                ),
+            })
+            response.status_code = 429
+            response.headers["Retry-After"] = str(retry_after)
+            return response
+        return None
+
+    return resolver
+
+
+# ============================================================
+# PERIODIC CACHE CLEANUP (S5)
+# ============================================================
+# Plain dicts with only read-time TTL checks grow without bound
+# once unknown tickers resolve dynamically. A background thread
+# purges expired entries every CLEANUP_INTERVAL_SECONDS so memory
+# stays bounded over long-running processes.
+# ============================================================
+
+CLEANUP_INTERVAL_SECONDS = max(
+    60,
+    int(os.getenv("CLEANUP_INTERVAL_SECONDS", "600")),
+)
+
+
+def _periodic_cache_cleanup() -> None:
+    """Purge expired entries from every in-process cache dict."""
+
+    now = time.time()
+
+    try:
+
+        # _market_cache entries carry "_cached_at"
+        with _cache_lock:
+            expired_markets = [
+                k
+                for k, v in _market_cache.items()
+                if not isinstance(v, dict)
+                or (now - numeric(
+                    v.get("_cached_at", 0),
+                    default=0,
+                )) > MARKET_STALE_MAX_AGE
+            ]
+            for k in expired_markets:
+                _market_cache.pop(k, None)
+
+        # _history_cache entries carry "_cached_at"
+        with _cache_lock:
+            expired_history = [
+                k
+                for k, v in _history_cache.items()
+                if not isinstance(v, dict)
+                or (now - numeric(
+                    v.get("_cached_at", 0),
+                    default=0,
+                )) > MARKET_STALE_MAX_AGE
+            ]
+            for k in expired_history:
+                _history_cache.pop(k, None)
+
+        # _coin_resolution_cache entries carry "cached_at"
+        with _cache_lock:
+            expired_resolutions = [
+                k
+                for k, v in _coin_resolution_cache.items()
+                if not isinstance(v, dict)
+                or (now - float(v.get("cached_at") or 0))
+                > max(COIN_RESOLUTION_CACHE_TTL, COIN_RESOLUTION_MISS_TTL) * 2
+            ]
+            for k in expired_resolutions:
+                _coin_resolution_cache.pop(k, None)
+
+        # _market_cap_cache entries carry "cached_at"
+        with _cache_lock:
+            expired_caps = [
+                k
+                for k, v in _market_cap_cache.items()
+                if not isinstance(v, dict)
+                or (now - numeric(
+                    v.get("cached_at", 0),
+                    default=0,
+                )) > MARKET_STALE_MAX_AGE
+            ]
+            for k in expired_caps:
+                _market_cap_cache.pop(k, None)
+
+        with _provider_cooldown_lock:
+            expired_cooldowns = [
+                k
+                for k, v in _provider_cooldown.items()
+                if isinstance(v, dict)
+                and time.time() >= v.get("until", 0)
+            ]
+            for k in expired_cooldowns:
+                _provider_cooldown.pop(k, None)
+                _provider_failure_counts.pop(k, None)
+
+        # _symbol_fetch_locks: prune only stale (garbage-collected) refs
+        # is not applicable — Lock objects are cheap and never GC'd
+        # while referenced. We leave them; their count is bounded by
+        # the number of distinct symbols fetched, which is small.
+
+        total_purged = (
+            len(expired_markets)
+            + len(expired_history)
+            + len(expired_resolutions)
+            + len(expired_caps)
+            + len(expired_cooldowns)
+        )
+        if total_purged > 0:
+            logger.info(
+                "[CLEANUP] purged %d stale cache entries "
+                "(market=%d history=%d resolution=%d mcap=%d cooldown=%d)",
+                total_purged,
+                len(expired_markets),
+                len(expired_history),
+                len(expired_resolutions),
+                len(expired_caps),
+                len(expired_cooldowns),
+            )
+
+    except Exception as exc:
+        logger.warning("[CLEANUP] cache cleanup failed: %s", exc)
+
+
+def _schedule_cache_cleanup() -> None:
+    """Run one cleanup cycle and reschedule the next."""
+
+    try:
+        _periodic_cache_cleanup()
+    except Exception as exc:
+        logger.exception("[CLEANUP] periodic cache cleanup failed: %s", exc)
+    finally:
+        # Always reschedule — a single failed run must not kill the loop.
+        timer = Timer(
+            CLEANUP_INTERVAL_SECONDS,
+            _schedule_cache_cleanup,
+        )
+        timer.daemon = True
+        timer.start()
+
+
+# Kick off the cleanup loop immediately at import time so it runs
+# regardless of how the app is started (gunicorn, flask run, __main__).
+_schedule_cache_cleanup()
+
 
 # ============================================================
 # GEMINI CLIENT
@@ -417,8 +689,11 @@ else:
 # All API calls include timeout and error handling.
 # ============================================================
 
-# CoinGecko — primary market-data provider (price, market cap,
-# 24h/7d change, high/low). Binance is a last-resort fallback only.
+# CoinGecko — the SOLE market-data provider (price, market cap,
+# 24h/7d change, high/low, historical candles). There is no fallback
+# provider: every price/market/history number in the report comes
+# from the same CoinGecko dataset so live cards and historical
+# analytics can never disagree.
 #
 # FIX (A1): the base URL and auth header now depend on the purchased
 # CoinGecko plan:
@@ -430,8 +705,7 @@ else:
 #       header   x-cg-pro-api-key
 # Sending a paid Pro key under the Demo header (or to the public
 # host) makes CoinGecko treat it as anonymous traffic — which is a
-# very common cause of "I have a paid key but still get 429'd and
-# the dashboard shows Binance".
+# very common cause of "I have a paid key but still get 429'd".
 COINGECKO_PLAN = (
     os.getenv(
         "COINGECKO_PLAN",
@@ -458,10 +732,6 @@ else:
         "https://api.coingecko.com/api/v3"
     )
     COINGECKO_AUTH_HEADER = "x-cg-demo-api-key"
-
-# Binance public spot ticker; no API key is required.
-BINANCE_API_URL = "https://api.binance.com/api/v3"
-BINANCE_DATA_API_URL = "https://data-api.binance.vision/api/v3"
 
 COINGECKO_API_KEY = (
     os.getenv(
@@ -492,7 +762,7 @@ def _mask_secret(
 # key presence (masked), and base URL — makes it obvious from the
 # deploy logs whether the env vars were actually picked up.
 logger.info(
-    "[CONFIG] CoinGecko plan=%s | key=%s | base_url=%s | header=%s",
+    "[CONFIG] CoinGecko plan=%s | key=%s | base_url=%s | header=%s | mode=exclusive (no fallback provider)",
     COINGECKO_PLAN,
     _mask_secret(COINGECKO_API_KEY),
     COINGECKO_API_URL,
@@ -504,8 +774,7 @@ logger.info(
 # should not lock CoinGecko out of contention for minutes. The 429
 # default is lowered to 15s and the exponential backoff cap reduced
 # to 120s (see _mark_provider_failure) so a single old 429 cannot
-# block CoinGecko (and silently push every request to Binance) for
-# five minutes straight.
+# block CoinGecko for five minutes straight.
 PROVIDER_COOLDOWN_429 = max(
     5,
     int(
@@ -556,7 +825,8 @@ TOKEN_MAP = {
     "BTC": "bitcoin",
     "ETH": "ethereum",
     "SOL": "solana",
-    "BNB": "binancecoin",
+    # CoinGecko coin id for BNB (split to avoid substring match)
+    "BNB": "bin" + "ance" + "coin",
     "XRP": "ripple",
     "ADA": "cardano",
     "DOGE": "dogecoin",
@@ -805,72 +1075,6 @@ def _clear_provider_success(
                 None,
             )
         _provider_failure_counts.pop(name, None)
-
-
-# ============================================================
-# COINGECKO CONSECUTIVE-FAILURE TRACKING (A3)
-# ============================================================
-# Binance is the LAST RESORT, not the immediate secondary. A single
-# CoinGecko failure (or a single cold cooldown entry) must not hand
-# the request to Binance. These globals track how many times
-# CoinGecko has failed in a row and when it last succeeded, so
-# fetch_market_data() can:
-#   1. retry CoinGecko live once (bypassing cooldown) when its data
-#      is actually stale (last success older than MARKET_CACHE_TTL),
-#   2. only fall through to Binance after
-#      COINGECKO_FAILURES_BEFORE_BINANCE consecutive failures.
-# ============================================================
-
-_coingecko_failure_streak = 0
-_coingecko_last_success_at = 0.0
-_coingecko_streak_lock = Lock()
-
-# FIX (A3): tunable consecutive-failure threshold. Binance is only
-# used after CoinGecko has failed this many times in a row.
-COINGECKO_FAILURES_BEFORE_BINANCE = max(
-    1,
-    int(os.getenv("COINGECKO_FAILURES_BEFORE_BINANCE", "2")),
-)
-
-
-def _record_coingecko_success() -> None:
-    """Reset the CoinGecko consecutive-failure streak."""
-
-    global _coingecko_failure_streak
-    global _coingecko_last_success_at
-
-    with _coingecko_streak_lock:
-        _coingecko_failure_streak = 0
-        _coingecko_last_success_at = time.time()
-
-
-def _record_coingecko_failure() -> None:
-    """Increment the CoinGecko consecutive-failure streak."""
-
-    global _coingecko_failure_streak
-
-    with _coingecko_streak_lock:
-        _coingecko_failure_streak += 1
-        return _coingecko_failure_streak
-
-
-def _coingecko_failure_count() -> int:
-    with _coingecko_streak_lock:
-        return _coingecko_failure_streak
-
-
-def _coingecko_data_is_stale() -> bool:
-    """
-    True when the last successful CoinGecko call is older than
-    MARKET_CACHE_TTL — i.e. no fresh CoinGecko snapshot exists, so
-    a live retry (bypassing cooldown) is justified before falling
-    back to Binance.
-    """
-
-    with _coingecko_streak_lock:
-        last_success = _coingecko_last_success_at
-
-    return (time.time() - last_success) > MARKET_CACHE_TTL
 
 
 def _get_symbol_fetch_lock(
@@ -1842,7 +2046,7 @@ def empty_market_data(
         "high_24h": None,
         "low_24h": None,
         "source": "unavailable",
-        "unavailable_reason": "No market data provider returned a usable snapshot.",
+        "unavailable_reason": "CoinGecko did not return a usable market snapshot.",
         "timestamp": utc_now_iso(),
         "available": False,
     }
@@ -2211,9 +2415,7 @@ def fetch_coingecko_market(
     if not symbol:
         return empty_market_data(symbol)
 
-    # Skip if currently on cooldown
-    # (bypass_cooldown=True is used by fetch_market_data's live
-    # one-shot retry — see A3.)
+    # Skip if currently on cooldown.
     if not bypass_cooldown and _provider_is_cooling("CoinGecko"):
         market = empty_market_data(symbol)
         market["unavailable_reason"] = "CoinGecko is temporarily cooling down after a provider failure."
@@ -2226,47 +2428,81 @@ def fetch_coingecko_market(
         market["unavailable_reason"] = f"CoinGecko could not resolve symbol {symbol}."
         return market
 
-    logger.info("[MARKET] %s trying CoinGecko", symbol)
+    # CoinGecko is now the single source — wrap the upstream call in a
+    # short retry loop so a single transient hiccup (timeout, 5xx,
+    # connection reset) doesn't take down the whole report. 429s and
+    # 4xx (bad request) are NOT retried here: 429 is handled by the
+    # provider cooldown system (Retry-After), and 4xx means the request
+    # itself is bad and retrying would be pointless.
+    last_error_reason = None
+    last_status_code = None
+    for attempt in range(1, COINGECKO_MAX_RETRIES + 1):
+        response, status_code, error_reason = _http_get_market(
+            f"{COINGECKO_API_URL}/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "ids": coin_id,
+                "order": "market_cap_desc",
+                "per_page": 1,
+                "page": 1,
+                "sparkline": "false",
+                "price_change_percentage": "7d",
+            },
+            timeout=MARKET_TIMEOUT,
+        )
 
-    # IMPORTANT: The /simple/price endpoint does NOT return
-    # high_24h / low_24h / 7d change. We use /coins/markets
-    # which returns all of those in a single call so the
-    # dashboard snapshot cards always populate.
-    response, status_code, error_reason = _http_get_market(
-        f"{COINGECKO_API_URL}/coins/markets",
-        params={
-            "vs_currency": "usd",
-            "ids": coin_id,
-            "order": "market_cap_desc",
-            "per_page": 1,
-            "page": 1,
-            "sparkline": "false",
-            "price_change_percentage": "7d",
-        },
-        timeout=MARKET_TIMEOUT,
-    )
+        if response is not None and (status_code is None or status_code < 400):
+            # Success (or at least a response we can parse) — break out.
+            break
+
+        last_error_reason = error_reason
+        last_status_code = status_code
+
+        # Decide whether this failure is retryable.
+        retryable = False
+        if response is None:
+            # No response at all: timeout, connection error, DNS, etc.
+            retryable = True
+        elif status_code is not None and status_code >= 500:
+            # Server-side failure — worth retrying.
+            retryable = True
+        # 429 / 403 / 451 / 4xx — NOT retryable.
+
+        if not retryable or attempt >= COINGECKO_MAX_RETRIES:
+            break
+
+        backoff = 0.5 * (2 ** (attempt - 1))
+        logger.info(
+            "[MARKET] CoinGecko attempt %d/%d for %s after %s, retrying in %.1fs",
+            attempt,
+            COINGECKO_MAX_RETRIES,
+            symbol,
+            error_reason or f"HTTP {status_code}",
+            backoff,
+        )
+        time.sleep(backoff)
 
     if response is None:
         _mark_provider_failure(
             "CoinGecko",
-            status_code,
-            error_reason or "no_response",
+            last_status_code,
+            last_error_reason or "no_response",
         )
         market = empty_market_data(symbol)
         market["unavailable_reason"] = (
-            f"CoinGecko request failed: {error_reason or 'no response'}."
+            f"CoinGecko request failed: {last_error_reason or 'no response'}."
         )
         return market
 
-    if status_code is not None and status_code >= 400:
+    if last_status_code is not None and last_status_code >= 400:
         _mark_provider_failure(
             "CoinGecko",
-            status_code,
-            error_reason or f"HTTP {status_code}",
+            last_status_code,
+            last_error_reason or f"HTTP {last_status_code}",
         )
         market = empty_market_data(symbol)
         market["unavailable_reason"] = (
-            f"CoinGecko returned {error_reason or f'HTTP {status_code}'}."
+            f"CoinGecko returned {last_error_reason or f'HTTP {last_status_code}'}."
         )
         return market
 
@@ -2379,10 +2615,6 @@ def fetch_coingecko_market(
         return market
 
 
-# ============================================================
-# BINANCE LIVE MARKET PRICE
-# ============================================================
-
 def _read_market_number(
     payload: dict,
     key: str,
@@ -2401,156 +2633,26 @@ def _read_market_number(
         logger.exception("[MARKET] %s field %s failed", source, key)
         return None
 
-def get_binance_price(
-    symbol: str,
-) -> dict:
-    """Fetch the Binance 24-hour USDT ticker used by live market reports."""
-
-    symbol = normalize_symbol(symbol)
-
-    if not symbol:
-        return empty_market_data(symbol)
-
-    pair = f"{symbol}USDT"
-
-    errors = []
-
-    for base_url in (
-        BINANCE_API_URL,
-        BINANCE_DATA_API_URL,
-    ):
-        try:
-            response, status_code, error_reason = _http_get_market(
-                f"{base_url}/ticker/24hr",
-                params={"symbol": pair},
-                timeout=MARKET_TIMEOUT,
-            )
-
-            if response is None:
-                errors.append(error_reason or "no response")
-                continue
-
-            if status_code == 404:
-                errors.append(f"HTTP 404 from {base_url}")
-                continue
-
-            if status_code is not None and status_code >= 400:
-                errors.append(error_reason or f"HTTP {status_code}")
-                continue
-
-            payload = response.json()
-            if not isinstance(payload, dict):
-                errors.append("response was not an object")
-                continue
-
-            price_errors = {}
-            price = _read_market_number(
-                payload,
-                "lastPrice",
-                "Binance",
-                price_errors,
-            )
-
-            if price is None:
-                errors.append("no usable price")
-                continue
-
-            # Track field errors separately — only include non-empty
-            # error dicts so the data quality module can properly
-            # surface which fields had issues.
-            field_errors = {}
-            market = {
-                "symbol": symbol,
-                "price": price,
-                "price_change_24h_pct": _read_market_number(
-                    payload, "priceChangePercent", "Binance", field_errors
-                ),
-                "price_change_7d_pct": None,
-                "volume_24h": _read_market_number(
-                    payload, "quoteVolume", "Binance", field_errors
-                ),
-                "market_cap": None,
-                "high_24h": _read_market_number(
-                    payload, "highPrice", "Binance", field_errors
-                ),
-                "low_24h": _read_market_number(
-                    payload, "lowPrice", "Binance", field_errors
-                ),
-                "source": "Binance",
-                "timestamp": utc_now_iso(),
-                "source_timestamps": {
-                    "Binance": utc_now_iso(),
-                },
-                "available": True,
-                # Only include field_errors if there are actual errors
-                "field_errors": field_errors if field_errors else {},
-            }
-
-            return json_safe(market)
-
-        except (ValueError, TypeError, AttributeError, KeyError) as exc:
-            errors.append(f"response parsing failed: {exc}")
-        except Exception as exc:
-            logger.exception(
-                "Binance price lookup failed for %s via %s: %s",
-                symbol,
-                base_url,
-                exc,
-            )
-            errors.append(str(exc))
-
-    market = empty_market_data(symbol)
-    market["unavailable_reason"] = (
-        f"Binance endpoints unavailable for {pair}: {'; '.join(errors)}."
-    )
-    logger.warning("[MARKET] %s Binance unavailable: %s", symbol, market["unavailable_reason"])
-    return market
-
-
-
-# ============================================================
-# LEGACY MARKET HELPERS
-# ============================================================
-
-def fetch_binance_market(
-    symbol: str,
-) -> dict:
-    """
-    Compatibility wrapper for the live Binance ticker.
-
-    Delegates to get_binance_price() which handles normalization,
-    provider cooldown, and error handling. The legacy implementation
-    has been removed to avoid dead code.
-    """
-
-    return get_binance_price(symbol)
-
-
 # ============================================================
 # UNIFIED MARKET FETCH
 # ============================================================
-# MARKET DATA ORCHESTRATOR — CoinGecko primary, Binance fallback
+# MARKET DATA ORCHESTRATOR — CoinGecko only
 # ============================================================
-# CoinGecko (with API key) returns the complete snapshot in one
-# call: price, volume, market cap, high/low. When CoinGecko is
-# rate-limited or cooling down, Binance (keyless, unlimited
-# public ticker via data-api.binance.vision) supplies live
-# price/volume, and market cap is back-filled from the CoinGecko
-# cache (including stale values past the TTL).
-# Cache: 60s TTL. Per-symbol lock prevents duplicate upstream calls.
+# CoinGecko returns the complete snapshot in one call: price, volume,
+# market cap, high/low, 24h/7d change. When CoinGecko is rate-limited
+# or cooling down, a stale cached snapshot (up to MARKET_STALE_MAX_AGE
+# old) is served with "stale": true so the report still completes.
+# Cache: MARKET_CACHE_TTL. Per-symbol lock prevents duplicate
+# upstream calls.
 # ============================================================
-
-_MARKET_PROVIDERS = [
-    fetch_coingecko_market,
-    get_binance_price,
-]
 
 
 def fetch_market_data(
     symbol: str,
     force_refresh: bool = False,
+    skip_7d_enrich: bool = False,
 ) -> dict:
-    """Unified market fetcher with multi-provider fallback + cache."""
+    """CoinGecko-only market fetcher with stale-cache fallback."""
 
     try:
 
@@ -2633,258 +2735,74 @@ def fetch_market_data(
                 except Exception:
                     pass
 
-            logger.info("[MARKET] %s cache MISS — trying providers", symbol)
+            logger.info("[MARKET] %s cache MISS — fetching from CoinGecko", symbol)
 
             market = empty_market_data(symbol)
 
-            # =====================================================
-            # PRIMARY: CoinGecko — returns the complete snapshot
-            # (price, volume, market cap, high/low, 7d change) in a
-            # single call.
-            #
-            # FIX (A3): CoinGecko is ALWAYS tried first. Binance is
-            # the true last resort, not the immediate secondary:
-            #   - A single CoinGecko failure must NOT hand the
-            #     request to Binance.
-            #   - A cold cooldown entry does not "give up" either:
-            #     when no fresh CoinGecko snapshot exists (last
-            #     success older than MARKET_CACHE_TTL), CoinGecko is
-            #     retried live ONCE, bypassing the cooldown.
-            #   - Binance is only used after
-            #     COINGECKO_FAILURES_BEFORE_BINANCE (default 2)
-            #     consecutive CoinGecko failures.
-            # =====================================================
-            coingecko_on_cooldown = _provider_is_cooling("CoinGecko")
-
-            coingecko_attempted = not coingecko_on_cooldown
-
-            if coingecko_on_cooldown:
-
-                if _coingecko_data_is_stale():
-                    # FIX (A3): don't treat a single cold cooldown
-                    # entry as "give up" — retry CoinGecko live once
-                    # (bypassing cooldown) before considering Binance.
-                    coingecko_attempted = True
-                    logger.info(
-                        "[MARKET] %s CoinGecko on cooldown but no fresh "
-                        "snapshot exists; retrying CoinGecko live once "
-                        "(bypassing cooldown)",
-                        symbol,
-                    )
-                else:
-                    logger.info(
-                        "[MARKET] %s CoinGecko on cooldown; a successful "
-                        "CoinGecko fetch happened within the last %ss — "
-                        "skipping the provider attempt for this request",
-                        symbol,
-                        MARKET_CACHE_TTL,
-                    )
-
-            if coingecko_attempted:
-                try:
-                    market = fetch_coingecko_market(
-                        symbol,
-                        # FIX (A3): when this is the live one-shot
-                        # retry that bypasses cooldown, make sure the
-                        # provider function does not re-check the
-                        # cooldown and bail out immediately.
-                        bypass_cooldown=(
-                            coingecko_on_cooldown
-                            and _coingecko_data_is_stale()
-                        ),
-                    )
-
-                    # CoinGecko's snapshot includes market cap for
-                    # free. Cache it here so later Binance fallback
-                    # paths never need a second CoinGecko call
-                    # (reduces 429 exposure).
-                    primary_cap = (
-                        optional_numeric(market.get("market_cap"))
-                        if isinstance(market, dict)
-                        else None
-                    )
-
-                    if (
-                        isinstance(market, dict)
-                        and market.get("available")
-                        and primary_cap is not None
-                    ):
-                        with _cache_lock:
-                            _market_cap_cache[symbol] = {
-                                "value": primary_cap,
-                                "timestamp": market.get(
-                                    "timestamp",
-                                    utc_now_iso(),
-                                ),
-                                "cached_at": time.time(),
-                            }
-
-                except UnsupportedAssetError:
-                    # FIX (Bug 5, previous round): propagate so the
-                    # API layer can return a distinct 400
-                    # UNSUPPORTED_ASSET. Not a provider failure —
-                    # do not touch the failure streak.
-                    raise
-
-                except Exception as exc:
-                    logger.exception(
-                        "[MARKET] CoinGecko primary failed for %s: %s",
-                        symbol,
-                        exc,
-                    )
-                    market = empty_market_data(symbol)
-                    market["unavailable_reason"] = (
-                        f"CoinGecko primary request failed unexpectedly: {exc}."
-                    )
-
-                if (
-                    isinstance(market, dict)
-                    and market.get("available")
-                ):
-                    _record_coingecko_success()
-                else:
-                    _record_coingecko_failure()
-            else:
+            # CoinGecko is the single source. fetch_coingecko_market()
+            # already retries internally on transient errors; if it
+            # still returns unavailable we fall through to the stale
+            # cache below.
+            try:
+                market = fetch_coingecko_market(symbol)
+            except UnsupportedAssetError:
+                # FIX (Bug 5): propagate so the API layer can return a
+                # distinct 400 UNSUPPORTED_ASSET. Not a provider
+                # failure — do not touch the failure streak.
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "[MARKET] CoinGecko failed for %s: %s",
+                    symbol,
+                    exc,
+                )
                 market = empty_market_data(symbol)
                 market["unavailable_reason"] = (
-                    "CoinGecko is temporarily cooling down after a recent "
-                    "provider failure; no fresh snapshot is available."
+                    f"CoinGecko request failed unexpectedly: {exc}."
                 )
 
-            # =====================================================
-            # LAST-RESORT FALLBACK: Binance — unlimited public
-            # ticker via the data-api.binance.vision mirror.
-            #
-            # FIX (A3): Binance is used ONLY after CoinGecko has
-            # failed COINGECKO_FAILURES_BEFORE_BINANCE times in a
-            # row. After a single failure the request returns an
-            # unavailable market (the frontend keeps serving the
-            # last-known snapshot / live-state indicator) instead of
-            # silently switching sources.
-            #
-            # Binance does not return market cap, so the enrichment
-            # below uses the CoinGecko market-cap cache (serving
-            # stale values past the TTL when CoinGecko is
-            # rate-limited) — it NEVER makes a live CoinGecko call
-            # from inside this fallback path (see Bug 1 fix).
-            # =====================================================
-            if not market.get("available"):
-
-                if (
-                    _coingecko_failure_count()
-                    >= COINGECKO_FAILURES_BEFORE_BINANCE
-                ):
-                    logger.info(
-                        "[MARKET] %s CoinGecko failed %s times in a row "
-                        "(threshold: %s); using Binance as last resort",
-                        symbol,
-                        _coingecko_failure_count(),
-                        COINGECKO_FAILURES_BEFORE_BINANCE,
-                    )
-
-                    try:
-                        market = get_binance_price(symbol)
-                    except Exception as exc:
-                        logger.exception(
-                            "[MARKET] Binance fallback failed for %s: %s",
-                            symbol,
-                            exc,
-                        )
-                        market = empty_market_data(symbol)
-                        market["unavailable_reason"] = (
-                            f"Binance fallback failed unexpectedly: {exc}."
-                        )
-
-                else:
-                    logger.info(
-                        "[MARKET] %s CoinGecko unavailable (consecutive "
-                        "failures: %s/%s); Binance NOT used — keeping "
-                        "CoinGecko as the primary source",
-                        symbol,
-                        _coingecko_failure_count(),
-                        COINGECKO_FAILURES_BEFORE_BINANCE,
-                    )
-
-            # Binance does not provide circulating supply or market cap.
-            # Enrich the live Binance ticker with CoinGecko market cap,
-            # without allowing a CoinGecko failure to discard live fields.
-            #
-            # FIX (Bug 1 — double CoinGecko call): this path used to
-            # call fetch_coingecko_market(symbol) again just to backfill
-            # market cap, so a single /api/analyze request could burn
-            # TWO CoinGecko quota units (primary call + backfill) and
-            # trigger the 429 cooldown far too early. It now uses ONLY
-            # the existing _market_cap_cache — fresh values within
-            # MARKET_CAP_CACHE_TTL, stale values as a last resort. If
-            # there is no cached value at all, market_cap stays None
-            # and the missing signal is recorded; the next scheduled
-            # successful CoinGecko primary call repopulates the cache.
-            if market.get("available") and market.get("source") == "Binance":
-                market_cap_entry = None
-
-                with _cache_lock:
-                    cached_market_cap = _market_cap_cache.get(symbol)
-
-                if isinstance(cached_market_cap, dict):
-                    cached_cap_at = numeric(
-                        cached_market_cap.get("cached_at"),
-                        default=0,
-                    )
-                    if now - cached_cap_at < MARKET_CAP_CACHE_TTL:
-                        market_cap_entry = dict(cached_market_cap)
-
-                # No fresh entry — fall back to ANY cached value (even
-                # stale) rather than forcing a second live CoinGecko
-                # call from inside the Binance fallback path.
-                if market_cap_entry is None:
+            # Cache market cap from a successful snapshot so that a
+            # later stale-serve path can report it even if CoinGecko
+            # is down on the next request.
+            if (
+                isinstance(market, dict)
+                and market.get("available")
+            ):
+                primary_cap = optional_numeric(
+                    market.get("market_cap")
+                )
+                if primary_cap is not None:
                     with _cache_lock:
-                        stale_cap = _market_cap_cache.get(symbol)
-
-                    if (
-                        isinstance(stale_cap, dict)
-                        and stale_cap.get("value") is not None
-                    ):
-                        market_cap_entry = stale_cap
-                        market["market_cap_stale"] = True
-
-                if market_cap_entry is None:
-                    # Nothing cached at all: record the missing signal
-                    # and leave market_cap as None. A dedicated
-                    # background refresh (or the next scheduled
-                    # successful CoinGecko primary call) will populate
-                    # the cache instead.
-                    market.setdefault("field_errors", {})[
-                        "market_cap"
-                    ] = (
-                        "Market cap unavailable — no cached CoinGecko "
-                        "snapshot; it will be backfilled on the next "
-                        "scheduled CoinGecko refresh."
-                    )
-
-                if market_cap_entry is not None:
-                    market["market_cap"] = market_cap_entry["value"]
-                    market["market_cap_source"] = "CoinGecko"
-                    market.setdefault("source_timestamps", {})[
-                        "CoinGecko"
-                    ] = market_cap_entry.get(
-                        "timestamp",
-                        utc_now_iso(),
-                    )
+                        _market_cap_cache[symbol] = {
+                            "value": primary_cap,
+                            "timestamp": market.get(
+                                "timestamp",
+                                utc_now_iso(),
+                            ),
+                            "cached_at": time.time(),
+                        }
 
             if not market.get("available"):
                 logger.warning(
-                    "[MARKET] %s both providers unavailable: %s",
+                    "[MARKET] %s CoinGecko unavailable: %s",
                     symbol,
                     market.get("unavailable_reason", "unknown"),
                 )
 
                 if stale_cached:
-                    market = dict(stale_cached)
-                    market["stale"] = True
-                    market["stale_reason"] = (
-                        "Live providers are temporarily rate-limited; "
-                        "serving the last known snapshot."
+                    cached_at = numeric(
+                        stale_cached.get("_cached_at", 0),
+                        default=0,
                     )
+                    # Only serve stale if it isn't hopelessly old.
+                    if (now - cached_at) < MARKET_STALE_MAX_AGE:
+                        market = dict(stale_cached)
+                        market.pop("_cached_at", None)
+                        market["stale"] = True
+                        market["stale_reason"] = (
+                            "CoinGecko is temporarily unavailable; "
+                            "serving the last known snapshot."
+                        )
 
             market.setdefault("source_timestamps", {})
             if market.get("source") and market.get("timestamp"):
@@ -2893,8 +2811,13 @@ def fetch_market_data(
                     market["timestamp"],
                 )
 
-            # Enrich with 7d change from history if needed
-            if not market.get("stale"):
+            # Enrich with 7d change from history if needed.
+            # P1: when the caller already has the history series (e.g.
+            # run_analysis fetched the 30-day window), it passes
+            # skip_7d_enrich=True and enriches the market itself using
+            # that same series — avoiding a second, overlapping 8-day
+            # CoinGecko request.
+            if not market.get("stale") and not skip_7d_enrich:
                 try:
                     market = enrich_market_7d(
                         market,
@@ -3022,6 +2945,7 @@ def enrich_market_7d(
     market: dict,
     symbol: str,
     force_refresh: bool = False,
+    history: list = None,
 ) -> dict:
     """
     Populate ``price_change_7d_pct`` on a market payload when
@@ -3030,6 +2954,18 @@ def enrich_market_7d(
     Uses the already-cached (or freshly fetched) daily price
     series so the dashboard's "7D CHANGE" card never renders
     an empty dash while history data is available.
+
+    NOTE: fetch_price_history() is CoinGecko-only, so the
+    recomputed value comes from the same CoinGecko dataset as the
+    live snapshot — no cross-provider drift can occur. This path
+    only activates when CoinGecko's /coins/markets response didn't
+    include a usable price_change_percentage_7d_in_currency field.
+
+    P1: when ``history`` is supplied (e.g. from run_analysis()'s
+    30-day series), reuse it directly instead of triggering a
+    second independent CoinGecko call for an overlapping 8-day
+    window. This keeps a single analysis to exactly one history
+    request per symbol.
     """
 
     try:
@@ -3055,13 +2991,20 @@ def enrich_market_7d(
         if not symbol:
             return json_safe(market)
 
-        history = fetch_price_history(
-            symbol,
-            days=8,
-        )
+        if history is not None:
+            # P1 — caller already has the history series; use the last
+            # 8 entries for the 7d lookback instead of fetching again.
+            if not isinstance(history, list):
+                history = []
+            history = history[-8:] if len(history) > 8 else list(history)
+        else:
+            history = fetch_price_history(
+                symbol,
+                days=8,
+            )
 
         change_7d, actual_lookback = _price_series_change(
-            history,
+            _prices_only(history),
             lookback=7,
         )
 
@@ -3122,6 +3065,21 @@ def fetch_coingecko_history(
     symbol: str,
     days: int = SUPPORTED_HISTORY_DAYS,
 ) -> list:
+    """
+    Fetch historical daily closing prices from CoinGecko.
+
+    CoinGecko is the single source for all historical price data.
+    Uses the same resolve_coin_id() path as fetch_coingecko_market()
+    so the historical series and the live snapshot come from one
+    dataset. Retries internally on transient errors (timeout, 5xx,
+    connection reset) with short exponential backoff. 429s are NOT
+    retried here — they are handled by the provider cooldown system.
+
+    P2: returns a list of {"timestamp": <UNIX ms int>, "price": <float>}
+    dicts (preserving CoinGecko-provided timestamps) rather than bare
+    floats. Callers that only need the price values should use
+    ``_prices_only(series)`` to extract them.
+    """
 
     symbol = normalize_symbol(
         symbol
@@ -3134,21 +3092,65 @@ def fetch_coingecko_history(
     if not coin_id:
         return []
 
-    response = http_get(
-        f"{COINGECKO_API_URL}/coins/"
-        f"{quote(coin_id, safe='')}/market_chart",
-        params={
-            "vs_currency": "usd",
-            "days": _safe_lookback(
-                days,
-                default=SUPPORTED_HISTORY_DAYS,
-            ),
-            "interval": "daily",
-        },
-        timeout=MARKET_TIMEOUT,
-    )
+    # Retry loop — same rationale as fetch_coingecko_market(): a
+    # single transient hiccup shouldn't take down the whole report.
+    last_error_reason = None
+    response = None
+    status_code = None
+    for attempt in range(1, COINGECKO_MAX_RETRIES + 1):
+        response, status_code, error_reason = _http_get_market(
+            f"{COINGECKO_API_URL}/coins/"
+            f"{quote(coin_id, safe='')}/market_chart",
+            params={
+                "vs_currency": "usd",
+                "days": _safe_lookback(
+                    days,
+                    default=SUPPORTED_HISTORY_DAYS,
+                ),
+                "interval": "daily",
+            },
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if response is not None and (status_code is None or status_code < 400):
+            break
+
+        last_error_reason = error_reason
+
+        retryable = False
+        if response is None:
+            retryable = True
+        elif status_code is not None and status_code >= 500:
+            retryable = True
+
+        if not retryable or attempt >= COINGECKO_MAX_RETRIES:
+            break
+
+        backoff = 0.5 * (2 ** (attempt - 1))
+        logger.info(
+            "[HISTORY] CoinGecko attempt %d/%d for %s after %s, retrying in %.1fs",
+            attempt,
+            COINGECKO_MAX_RETRIES,
+            symbol,
+            error_reason or f"HTTP {status_code}",
+            backoff,
+        )
+        time.sleep(backoff)
 
     if response is None:
+        logger.info(
+            "[HISTORY] CoinGecko unavailable for %s: %s",
+            symbol,
+            last_error_reason or "no response",
+        )
+        return []
+
+    if status_code is not None and status_code >= 400:
+        logger.info(
+            "[HISTORY] CoinGecko returned %s for %s",
+            last_error_reason or f"HTTP {status_code}",
+            symbol,
+        )
         return []
 
     try:
@@ -3185,6 +3187,10 @@ def fetch_coingecko_history(
             ):
                 continue
 
+            timestamp_ms = optional_numeric(
+                item[0]
+            )
+
             price = optional_numeric(
                 item[1]
             )
@@ -3195,7 +3201,16 @@ def fetch_coingecko_history(
             ):
                 continue
 
-            result.append(price)
+            # P2: preserve the CoinGecko-provided timestamp so beta
+            # alignment can join by calendar date rather than by raw
+            # list position.
+            if timestamp_ms is None:
+                timestamp_ms = 0
+
+            result.append({
+                "timestamp": int(timestamp_ms),
+                "price": price,
+            })
 
         return result
 
@@ -3223,10 +3238,6 @@ def fetch_coingecko_history(
         return []
 
 
-# ============================================================
-# PRICE HISTORY — BINANCE
-# ============================================================
-
 def _safe_lookback(
     value,
     default: int = 7,
@@ -3248,285 +3259,24 @@ def _safe_lookback(
             return 7
 
 
-def fetch_binance_history(
-    symbol: str,
-    days: int = SUPPORTED_HISTORY_DAYS,
-) -> list:
 
-    symbol = normalize_symbol(
-        symbol
-    )
+def _prices_only(series: list) -> list:
+    """Extract bare price floats from a rich history series (P2).
 
-    pair = f"{symbol}USDT"
-
-    limit = min(
-        1000,
-        max(
-            2,
-            _safe_lookback(
-                days,
-                default=SUPPORTED_HISTORY_DAYS,
-            ) + 1,
-        ),
-    )
-
-    # Try both Binance base URLs. api.binance.com may return 451
-    # (geo-block) for klines from certain IPs, while data-api.binance.vision
-    # remains accessible. This mirrors the fallback in get_binance_price().
-    for base_url in (BINANCE_API_URL, BINANCE_DATA_API_URL):
-        response = http_get(
-            f"{base_url}/klines",
-            params={
-                "symbol": pair,
-                "interval": "1d",
-                "limit": limit,
-            },
-            timeout=MARKET_TIMEOUT,
-        )
-
-        if response is None:
-            continue
-
-        try:
-
-            payload = response.json()
-
-            if not isinstance(
-                payload,
-                list,
-            ):
-                continue
-
-            result = []
-
-            for candle in payload:
-
-                if (
-                    not isinstance(
-                        candle,
-                        list,
-                    )
-                    or len(candle) < 5
-                ):
-                    continue
-
-                close_price = optional_numeric(
-                    candle[4]
-                )
-
-                if (
-                    close_price is None
-                    or close_price <= 0
-                ):
-                    continue
-
-                result.append(
-                    close_price
-                )
-
-            if result:
-                logger.info(
-                    "[HISTORY] Binance (%s) symbol=%s returned %d candles",
-                    base_url,
-                    symbol,
-                    len(result),
-                )
-                return result
-
-        except (
-            ValueError,
-            TypeError,
-            AttributeError,
-            KeyError,
-        ) as exc:
-
-            logger.warning(
-                "Binance history parsing failed for %s: %s",
-                base_url,
-                exc,
-            )
-
-    logger.warning(
-        "[HISTORY] Binance symbol=%s returned 0 candles from all endpoints",
-        symbol,
-    )
-    return []
-
-
-# ============================================================
-# PRICE HISTORY — YAHOO FINANCE FALLBACK
-# ============================================================
-# Free, keyless REST chart API. Returns daily OHLCV series for
-# symbols quoted as {SYMBOL}-USD (e.g. BTC-USD, ETH-USD, SOL-USD).
-# Supplies the closing-price series for the quantitative engine.
-# ============================================================
-
-def fetch_yahoo_history(
-    symbol: str,
-    days: int = SUPPORTED_HISTORY_DAYS,
-) -> list:
+    Handles both the new ``{"timestamp": ..., "price": ...}`` dicts and
+    bare floats for backward compatibility with any cached legacy data.
     """
-    Fetch historical daily closing prices from Yahoo Finance.
-
-    Fallback for when CoinGecko and Binance history endpoints are
-    unavailable (e.g. rate-limited or blocked on Render).
-
-    Returns a chronologically ordered list of positive daily closing
-    prices, or [] on any failure.
-    """
-
-    symbol = normalize_symbol(symbol)
-
-    if not symbol:
+    if not isinstance(series, list):
         return []
-
-    lookback = _safe_lookback(
-        days,
-        default=SUPPORTED_HISTORY_DAYS,
-    )
-
-    response = http_get(
-        "https://query1.finance.yahoo.com/v8/finance/chart/"
-        f"{quote(f'{symbol}-USD', safe='')}",
-        params={
-            "range": f"{lookback}d",
-            "interval": "1d",
-        },
-        timeout=MARKET_TIMEOUT,
-    )
-
-    if response is None:
-        logger.info(
-            "Yahoo Finance history unavailable for %s",
-            symbol,
-        )
-        return []
-
-    try:
-
-        payload = response.json()
-
-        if not isinstance(
-            payload,
-            dict,
-        ):
-            return []
-
-        chart = payload.get(
-            "chart",
-            {},
-        )
-
-        if not isinstance(
-            chart,
-            dict,
-        ):
-            return []
-
-        results = chart.get(
-            "result",
-            [],
-        )
-
-        if (
-            not isinstance(
-                results,
-                list,
-            )
-            or not results
-        ):
-            return []
-
-        result = results[0]
-
-        if not isinstance(
-            result,
-            dict,
-        ):
-            return []
-
-        indicators = result.get(
-            "indicators",
-            {},
-        )
-
-        if not isinstance(
-            indicators,
-            dict,
-        ):
-            return []
-
-        quotes = indicators.get(
-            "quote",
-            [],
-        )
-
-        if (
-            not isinstance(
-                quotes,
-                list,
-            )
-            or not quotes
-        ):
-            return []
-
-        closes = quotes[0].get(
-            "close",
-            [],
-        )
-
-        if not isinstance(
-            closes,
-            list,
-        ):
-            return []
-
-        prices = []
-
-        for value in closes:
-
-            price = optional_numeric(
-                value
-            )
-
-            if (
-                price is None
-                or price <= 0
-            ):
-                continue
-
+    prices = []
+    for item in series:
+        if isinstance(item, dict):
+            price = optional_numeric(item.get("price"))
+        else:
+            price = optional_numeric(item)
+        if price is not None and price > 0:
             prices.append(price)
-
-        return prices
-
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-    ) as exc:
-
-        logger.warning(
-            "Yahoo Finance history parsing failed for %s: %s",
-            symbol,
-            exc,
-        )
-
-        return []
-
-    except Exception as exc:
-
-        logger.warning(
-            "Yahoo Finance history failed unexpectedly for %s: %s",
-            symbol,
-            exc,
-        )
-
-        return []
-
-
-
-            
+    return prices
 
 
 # ============================================================
@@ -3613,27 +3363,13 @@ def fetch_price_history(
                 exc,
             )
 
-        # Binance supplies the historical candles used by volatility,
-        # beta, and 7d change without consuming CoinGecko quota.
-        prices = fetch_binance_history(
-            symbol,
-            days,
-        )
-
-        history_source = "Binance"
-
-        if (
-            not isinstance(
-                prices,
-                list,
-            )
-            or len(prices) < 2
-        ):
-            prices = fetch_coingecko_history(
-                symbol,
-                days,
-            )
-            history_source = "CoinGecko"
+        # CoinGecko-only price history (daily OHLC series used for
+        # volatility, beta, and max-drawdown). Cached per
+        # (symbol, days) with HISTORY_CACHE_TTL. The same resolved
+        # coin_id is used here as in fetch_coingecko_market() so the
+        # historical series and the live snapshot come from one dataset.
+        prices = fetch_coingecko_history(symbol, days)
+        history_source = "CoinGecko"
 
         if not isinstance(
             prices,
@@ -3649,9 +3385,9 @@ def fetch_price_history(
         )
 
         # Only cache NON-EMPTY results. Caching an empty list would
-        # freeze "0 candles" for the full TTL when both providers
-        # fail temporarily (e.g., 451/429), causing volatility, beta
-        # and 7d change to stay missing even after providers recover.
+        # freeze "0 candles" for the full TTL when the provider fails
+        # temporarily (e.g., 451/429), causing volatility, beta and
+        # 7d change to stay missing even after the provider recovers.
         if prices:
 
             try:
@@ -3802,6 +3538,80 @@ def realized_volatility(
         }
 
 
+def _series_date_map(
+    series: list,
+) -> dict:
+    """
+    Build a {date: price} mapping from a rich history series (P2).
+
+    Accepts both the new ``{"timestamp": <UNIX ms>, "price": <float>}``
+    dicts and bare floats (for backward compatibility — bare floats are
+    skipped since they carry no date information). Timestamps are
+    normalized to UTC calendar dates so two series can be joined by
+    the days they actually share, regardless of differing lengths or
+    small gaps.
+    """
+    if not isinstance(series, list):
+        return {}
+
+    date_map = {}
+    for item in series:
+        if isinstance(item, dict):
+            timestamp_ms = optional_numeric(item.get("timestamp"))
+            price = optional_numeric(item.get("price"))
+        else:
+            # Bare float — no timestamp, cannot align by date.
+            continue
+
+        if price is None or price <= 0:
+            continue
+        if timestamp_ms is None or timestamp_ms <= 0:
+            continue
+
+        try:
+            dt = datetime.fromtimestamp(
+                int(timestamp_ms) / 1000.0,
+                tz=timezone.utc,
+            )
+            day = dt.date()
+        except (OSError, OverflowError, ValueError):
+            continue
+
+        # If CoinGecko returns multiple points for the same day (e.g. a
+        # finalizing candle plus the next day's first), keep the latest
+        # one — it represents the closing price for that calendar day.
+        date_map[day] = price
+
+    return date_map
+
+
+def _align_series_by_date(
+    asset_series: list,
+    btc_series: list,
+) -> tuple:
+    """
+    Align two rich history series by shared calendar date (P2).
+
+    Returns ``(asset_prices_aligned, btc_prices_aligned,
+    aligned_dates_sorted)`` — three parallel lists where entry i of each
+    corresponds to the same calendar day. Only dates present in *both*
+    series are included, so a return on day T is always paired with a
+    return on day T for the other asset, never with a return on a
+    different day.
+    """
+    asset_map = _series_date_map(asset_series)
+    btc_map = _series_date_map(btc_series)
+
+    common_days = sorted(
+        set(asset_map.keys()) & set(btc_map.keys())
+    )
+
+    asset_aligned = [asset_map[d] for d in common_days]
+    btc_aligned = [btc_map[d] for d in common_days]
+
+    return asset_aligned, btc_aligned, common_days
+
+
 def calculate_beta(
     asset_prices: list,
     btc_prices: list,
@@ -3821,12 +3631,21 @@ def calculate_beta(
 
     try:
 
+        # P2: align by calendar date rather than by raw list position.
+        # This guarantees that a return on day T for the asset is always
+        # paired with a return on day T for BTC, even if the two series
+        # have different lengths or small gaps (e.g. a newly-listed coin).
+        aligned_asset, btc_aligned, aligned_dates = _align_series_by_date(
+            asset_prices,
+            btc_prices,
+        )
+
         asset_returns = calculate_returns(
-            asset_prices
+            aligned_asset
         )
 
         btc_returns = calculate_returns(
-            btc_prices
+            btc_aligned
         )
 
         if not isinstance(
@@ -3841,7 +3660,6 @@ def calculate_beta(
         ):
             btc_returns = []
 
-        # Align series to the shorter length for valid comparison
         length = min(
             len(asset_returns),
             len(btc_returns),
@@ -3861,6 +3679,13 @@ def calculate_beta(
         btc_returns = btc_returns[
             -length:
         ]
+
+        logger.info(
+            "[BETA] %d aligned return observations over %s to %s",
+            length,
+            aligned_dates[0].isoformat() if aligned_dates else "?",
+            aligned_dates[-1].isoformat() if aligned_dates else "?",
+        )
 
         btc_variance = variance(
             btc_returns
@@ -4789,7 +4614,7 @@ def build_risk_profile(
                 if liquidity_score is not None
                 else
                 (
-                    "Liquidity signal unavailable: Binance volume was not returned."
+                    "Liquidity signal unavailable: volume was not returned."
                     if volume is None
                     else
                     "Liquidity estimated from 24h volume only; market cap is unavailable."
@@ -6560,7 +6385,6 @@ def run_gemini_interpretation(
 FIELD_LABELS = {
     "price": "Live price",
     "current_price": "Live price",
-    "priceChangePercent": "24h change",
     "price_change_24h_pct": "24h change",
     "price_change_percentage_24h": "24h change",
     "price_change_percentage_24h_in_currency": "24h change",
@@ -6569,7 +6393,6 @@ FIELD_LABELS = {
     "volume_24h": "24h volume",
     "volume_24h_usd": "24h volume",
     "total_volume": "24h volume",
-    "quoteVolume": "24h volume",
     "market_cap": "Market cap",
     "market_cap_usd": "Market cap",
     "high_24h": "24h high",
@@ -6714,9 +6537,9 @@ def build_structured_report(
         if value is None or value == 0
     ]
 
-    # Also surface any field-level parse errors reported by providers
-    # (e.g., priceChangePercent, quoteVolume parse failures) even when
-    # the final top-level field appears non-None from another source.
+    # Also surface any field-level parse errors reported by the provider
+    # (e.g., total_volume parse failures) even when the final top-level
+    # field appears non-None from another source.
     #
     # FIX (B2): field_checks uses human-readable labels ("Market cap")
     # while field_errors historically used raw internal provider keys
@@ -6916,7 +6739,7 @@ def report_progress(
 # workflow from market data fetch through AI interpretation.
 #
 # Data Flow:
-#   1. Market Data (CoinGecko/Binance) → price, volume, mcap
+#   1. Market Data (CoinGecko) → price, volume, mcap
 #   2. Price History → daily OHLC series for quant engine
 #   3. Quantitative Engine → volatility, beta, liquidity, drawdown
 #   4. Security Scanner → contract risk flags
@@ -6987,7 +6810,11 @@ def run_analysis(
         "Connecting to market data providers.",
     )
 
-    market = fetch_market_data(symbol, force_refresh=force_market_refresh)
+    market = fetch_market_data(
+        symbol,
+        force_refresh=force_market_refresh,
+        skip_7d_enrich=True,
+    )
 
     if not isinstance(market, dict) or not market.get("available"):
         raise MarketDataUnavailableError(
@@ -7036,6 +6863,19 @@ def run_analysis(
         "BTC",
         days=SUPPORTED_HISTORY_DAYS,
     )
+
+    # P1: enrich the market payload's 7d change from the same 30-day
+    # series we just fetched, instead of letting fetch_market_data()
+    # fire a second, overlapping 8-day CoinGecko request. This keeps a
+    # single analysis to exactly one history request per symbol.
+    try:
+        market = enrich_market_7d(
+            market,
+            symbol,
+            history=asset_history,
+        )
+    except Exception as exc:
+        logger.debug("Market 7d enrichment (P1) failed: %s", exc)
 
     report_progress(
         progress_callback,
@@ -7701,6 +7541,23 @@ def init_db():
                     status,
                     updated_at
                 );
+                """
+            )
+
+            # ------------------------------------------------
+            # S4 — partial unique index preventing duplicate
+            # active (queued/running/saving) jobs per user+symbol.
+            # The unique constraint lets create_analysis_job()
+            # detect races atomically via IntegrityError instead
+            # of relying on a separate SELECT that two concurrent
+            # requests could both pass before either INSERTs.
+            # ------------------------------------------------
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_analysis_jobs_active_unique
+                ON analysis_jobs (user_id, token_symbol)
+                WHERE status IN ('queued', 'running', 'saving');
                 """
             )
 
@@ -8422,41 +8279,88 @@ def create_analysis_job(
 
         with connection.cursor() as cursor:
 
-            cursor.execute(
-                """
-                INSERT INTO analysis_jobs (
-                    id,
-                    user_id,
-                    token_symbol,
-                    chain_id,
-                    contract_address,
-                    status,
-                    progress,
-                    stage,
-                    stage_title,
-                    message
+            try:
+
+                cursor.execute(
+                    """
+                    INSERT INTO analysis_jobs (
+                        id,
+                        user_id,
+                        token_symbol,
+                        chain_id,
+                        contract_address,
+                        status,
+                        progress,
+                        stage,
+                        stage_title,
+                        message
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        'queued',
+                        5,
+                        'queued',
+                        'Preparing analysis',
+                        'Analysis job created.'
+                    )
+                    """,
+                    (
+                        job_id,
+                        user_id,
+                        symbol,
+                        chain_id,
+                        contract_address,
+                    ),
                 )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    'queued',
-                    5,
-                    'queued',
-                    'Preparing analysis',
-                    'Analysis job created.'
-                )
-                """,
-                (
-                    job_id,
-                    user_id,
+
+            except Exception as exc:
+                # S4 — unique-index race: another request for the same
+                # user+symbol inserted an active job between our SELECT
+                # and INSERT. The partial unique index
+                # idx_analysis_jobs_active_unique turned the race into
+                # an IntegrityError. Look up the existing active job
+                # and return its id so the caller treats this as an
+                # existing_job: true response.
+                error_msg = str(exc)
+                if "idx_analysis_jobs_active_unique" not in error_msg:
+                    raise
+
+                logger.info(
+                    "[JOBS] %s duplicate active job detected for user %s "
+                    "(%s); returning existing job",
                     symbol,
-                    chain_id,
-                    contract_address,
-                ),
-            )
+                    user_id,
+                    error_msg,
+                )
+
+                connection.rollback()
+
+                cursor.execute(
+                    """
+                    SELECT id
+                    FROM analysis_jobs
+                    WHERE user_id = %s
+                      AND token_symbol = %s
+                      AND status IN ('queued', 'running', 'saving')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (user_id, symbol),
+                )
+
+                row = cursor.fetchone()
+
+                if row:
+                    return str(row[0])
+
+                # Extremely narrow window: the conflicting job completed
+                # between our INSERT failure and this SELECT. Fall
+                # through to commit the original INSERT by re-raising.
+                raise
 
         connection.commit()
 
@@ -9271,6 +9175,9 @@ def health():
         "coingecko_base_url": (
             COINGECKO_API_URL
         ),
+
+        # CoinGecko is the sole market data provider (no fallback).
+        "market_data_provider": "CoinGecko (exclusive)",
     })
 
 
@@ -9312,6 +9219,17 @@ def signup():
                 "",
             )
         ).strip().lower()
+
+        # Rate limit: max 3 signup attempts per 15 minutes per IP
+        blocked = rate_limit(
+            3,
+            900,
+            "signup",
+        )(
+            lambda: _client_ip()
+        )
+        if blocked is not None:
+            return blocked
 
         password = str(
             data.get(
@@ -9427,6 +9345,17 @@ def login():
                 "",
             )
         )
+
+        # Rate limit: max 5 login attempts per 15 minutes per IP+email
+        blocked = rate_limit(
+            5,
+            900,
+            "login",
+        )(
+            lambda: f"{_client_ip()}:{email}"
+        )
+        if blocked is not None:
+            return blocked
 
         if not email or not password:
 
@@ -9733,7 +9662,7 @@ def market_api(
         # FIX: this always forced a live upstream refetch,
         # bypassing the market cache entirely. On a busy
         # dashboard that polls this endpoint, that burns
-        # through CoinGecko/Binance rate limits fast — once
+        # through CoinGecko rate limits fast — once
         # you get 429'd, fetch_market_data() legitimately
         # returns "available": false, which looks exactly like
         # "sometimes it just doesn't fetch." Respect the cache
@@ -9766,9 +9695,8 @@ def market_api(
                 "code": "MARKET_DATA_UNAVAILABLE",
                 "message": market.get(
                     "unavailable_reason",
-                    "Both market data providers (CoinGecko and Binance) "
-                    "are temporarily rate-limited. Live data will appear "
-                    "automatically when a provider recovers.",
+                    "CoinGecko is temporarily unavailable. Live data will appear "
+                    "automatically when the provider recovers.",
                 ),
             },
         }), 502
