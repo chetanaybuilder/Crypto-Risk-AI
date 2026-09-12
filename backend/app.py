@@ -4502,7 +4502,7 @@ def calculate_composite_risk(
         weight_sum += weight
 
     if weight_sum <= 0:
-        return None, 0
+        return None, 0, True
 
     # Weighted average of available signals
     composite = (
@@ -6870,7 +6870,9 @@ def run_analysis(
     )
 
     if not isinstance(market, dict) or not market.get("available"):
-        raise MarketDataUnavailableError(
+        logger.warning(
+            "Market data unavailable for %s: %s",
+            symbol,
             market.get(
                 "unavailable_reason",
                 "CoinGecko did not return usable market data.",
