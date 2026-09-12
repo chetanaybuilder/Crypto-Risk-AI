@@ -4518,12 +4518,16 @@ def calculate_composite_risk(
         95,
     )
 
+    # Composite score considers partial data if available signals < 50%
+    is_partial = weight_sum < 0.5
+
     return (
         round(
             composite,
             1,
         ),
         confidence,
+        is_partial,
     )
 
 
@@ -4603,7 +4607,7 @@ def build_risk_profile(
     else:
         structural_detail = "Contract security assessment unavailable."
 
-    composite, confidence = (
+    composite, confidence, is_partial = (
         calculate_composite_risk(
             volatility_score,
             liquidity_score,
@@ -4687,6 +4691,7 @@ def build_risk_profile(
             composite
         ),
         "confidence": confidence,
+        "partial_data": is_partial,
         "pillars": pillars,
     }
 
@@ -5076,14 +5081,22 @@ def calculate_stress_test(
     guessed parameters rather than real data.
     """
 
-    # Track which values are assumed defaults for transparency
     beta_is_assumed = beta is None
     volatility_is_assumed = volatility is None
     liquidity_is_assumed = liquidity_score is None
 
     beta = optional_numeric(beta)
     if beta is None:
-        beta = 1.0
+        return json_safe({
+            "available": False,
+            "unavailable_reason": "Beta unavailable — no historical BTC data",
+            "base_scenario": {},
+            "scenarios": [],
+            "expected_downside_pct": None,
+            "resilience_score": None,
+            "verdict": "Unavailable",
+            "confidence": None,
+        })
 
     volatility = optional_numeric(volatility)
     if volatility is None:
@@ -5166,8 +5179,10 @@ def calculate_stress_test(
         - max(
             volatility - 70,
             0,
-        ) * 0.15,
-        45,
+        ) * 0.15
+        - (40 if volatility_is_assumed else 0)
+        - (20 if liquidity_is_assumed else 0),
+        10,
         90,
     )
 
@@ -5573,6 +5588,10 @@ STRICT RULES:
 
 12. Distinguish observed facts from scenario interpretation.
 
+13. If any signals are missing in the evidence, the executive 
+    summary must explicitly start with a caveat acknowledging 
+    that it is based on partial data.
+
 Return ONLY valid JSON.
 
 Required JSON structure:
@@ -5698,8 +5717,12 @@ def fallback_ai_report(
             "structural risk cannot be fully assessed."
         )
 
+    is_partial = risk_profile.get("partial_data", False)
+    partial_prefix = "Based on partial data: " if is_partial else ""
+
     return {
         "executive_summary": (
+            partial_prefix +
             f"{symbol.upper()} currently has a "
             f"{label.lower()} quantitative risk profile"
             + (

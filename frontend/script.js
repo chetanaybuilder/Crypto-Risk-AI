@@ -242,16 +242,24 @@ function setText(selector, value, fallback = "—") {
 
     if (!element) return;
 
+    let finalValue = value;
+
     if (
         value === null ||
         value === undefined ||
         value === ""
     ) {
-        element.textContent = fallback;
-        return;
+        finalValue = fallback;
     }
 
-    element.textContent = String(value);
+    const strValue = String(finalValue);
+    element.textContent = strValue;
+
+    if (strValue === "N/A" || strValue === "—" || strValue === "-") {
+        element.style.opacity = "0.5";
+    } else {
+        element.style.opacity = "1";
+    }
 }
 
 function setHTML(selector, html) {
@@ -3331,6 +3339,8 @@ function renderMarket(report) {
 
     const timestamp =
         firstDefined(
+            report?.created_at,
+            report?.generated_at,
             market.timestamp,
             market.updated_at,
             market.fetched_at,
@@ -3489,6 +3499,11 @@ function renderRiskProfile(
             )
             : "—"
     );
+
+    const partialBadge = document.getElementById("report-risk-partial");
+    if (partialBadge) {
+        partialBadge.style.display = risk.partial_data ? "inline-block" : "none";
+    }
 
     setText(
         "#report-risk-label",
@@ -4057,9 +4072,7 @@ function getExpectedDrawdown(
                 numericMove
             )
         ) {
-            return Math.abs(
-                numericMove
-            );
+            return numericMove;
         }
     }
 
@@ -4527,6 +4540,9 @@ function renderDataQuality(
      */
     const timestamp =
         firstDefined(
+            reportObj.created_at,
+            reportObj.generated_at,
+            
             reportMarket.timestamp,
             reportMarket.updated_at,
             reportMarket.fetched_at,
@@ -4536,8 +4552,6 @@ function renderDataQuality(
             quality.updated_at,
             quality.fetched_at,
 
-            reportObj.generated_at,
-            reportObj.created_at,
             reportObj.updated_at
         );
 
