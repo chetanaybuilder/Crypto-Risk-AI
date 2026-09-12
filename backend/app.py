@@ -2664,16 +2664,17 @@ def fetch_market_data(
         now = time.time()
         stale_cached = None
 
-        # Check cache first
-        if not force_refresh:
-            try:
-                with _cache_lock:
-                    cached = _market_cache.get(symbol)
+        # Always try to populate stale_cached so that if a forced refresh fails,
+        # we can fall back to the last known good state.
+        try:
+            with _cache_lock:
+                cached = _market_cache.get(symbol)
 
-                if isinstance(cached, dict) and cached:
-                    if cached.get("available"):
-                        stale_cached = dict(cached)
+            if isinstance(cached, dict) and cached:
+                if cached.get("available"):
+                    stale_cached = dict(cached)
 
+                if not force_refresh:
                     cached_at = numeric(
                         cached.get("_cached_at", 0),
                         default=0,
@@ -2695,23 +2696,23 @@ def fetch_market_data(
 
                         return json_safe(result)
 
-            except Exception as exc:
-                logger.debug("Market cache read failed: %s", exc)
+        except Exception as exc:
+            logger.debug("Market cache read failed: %s", exc)
 
         # Per-symbol lock to prevent duplicate concurrent calls
         lock = _get_symbol_fetch_lock(symbol)
 
         with lock:
             # Re-check cache after acquiring lock
-            if not force_refresh:
-                try:
-                    with _cache_lock:
-                        cached = _market_cache.get(symbol)
+            try:
+                with _cache_lock:
+                    cached = _market_cache.get(symbol)
 
-                    if isinstance(cached, dict) and cached:
-                        if cached.get("available"):
-                            stale_cached = dict(cached)
+                if isinstance(cached, dict) and cached:
+                    if cached.get("available"):
+                        stale_cached = dict(cached)
 
+                    if not force_refresh:
                         cached_at = numeric(
                             cached.get("_cached_at", 0),
                             default=0,
@@ -2732,8 +2733,8 @@ def fetch_market_data(
 
                             return json_safe(result)
 
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
             logger.info("[MARKET] %s cache MISS — fetching from CoinGecko", symbol)
 
