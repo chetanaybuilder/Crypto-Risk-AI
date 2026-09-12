@@ -175,6 +175,40 @@
 
                 </div>
 
+                <!-- FIX (Bug 2): optional contract security inputs.
+                     The backend runs the GoPlus structural check only
+                     when BOTH a chain and a contract address are
+                     provided. Leave blank for native assets. -->
+
+                <div class="optional-token-fields">
+
+                    <select
+                        id="chain-id"
+                        name="chain_id"
+                        aria-label="Blockchain (optional)"
+                    >
+                        <option value="">Chain (optional)</option>
+                        <option value="eth">Ethereum (eth)</option>
+                        <option value="bsc">BNB Chain (bsc)</option>
+                        <option value="polygon">Polygon</option>
+                        <option value="arbitrum">Arbitrum</option>
+                        <option value="optimism">Optimism</option>
+                        <option value="base">Base</option>
+                        <option value="avalanche">Avalanche</option>
+                    </select>
+
+                    <input
+                        type="text"
+                        id="contract-address"
+                        name="contract_address"
+                        placeholder="0x… contract address (optional)"
+                        maxlength="42"
+                        autocomplete="off"
+                        spellcheck="false"
+                        aria-label="Contract address (optional)"
+                    >
+
+                </div>
 
                 <button
                     type="submit"

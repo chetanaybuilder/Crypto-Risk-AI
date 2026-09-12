@@ -228,6 +228,18 @@ MARKET_CAP_CACHE_TTL = max(
     600,
     int(os.getenv("MARKET_CAP_CACHE_TTL", "900")),
 )
+# How long a resolved CoinGecko coin id (from TOKEN_MAP or a
+# dynamic /search lookup) stays cached. Negative ("no match")
+# results are cached for a shorter window so recently-listed
+# tokens can be picked up without a restart.
+COIN_RESOLUTION_CACHE_TTL = max(
+    300,
+    int(os.getenv("COIN_RESOLUTION_CACHE_TTL", "86400")),
+)
+COIN_RESOLUTION_MISS_TTL = max(
+    60,
+    int(os.getenv("COIN_RESOLUTION_MISS_TTL", "600")),
+)
 
 # ============================================================
 # JOB CONFIG
@@ -236,7 +248,7 @@ MARKET_CAP_CACHE_TTL = max(
 JOB_TTL_SECONDS = max(300, int(os.getenv("JOB_TTL_SECONDS", "1800")))
 ANALYSIS_JOB_TIMEOUT_SECONDS = max(
     60,
-    int(os.getenv("ANALYSIS_JOB_TIMEOUT_SECONDS", "300")),
+    int(os.getenv("ANALYSIS_JOB_TIMEOUT_SECONDS", "150")),
 )
 MAX_HISTORY_ROWS = 50
 MAX_TOKEN_SYMBOL_LENGTH = 15  # Frontend regex enforces {2,15}; backend normalize_symbol truncates to this length
@@ -346,12 +358,19 @@ else:
 # IMPORTANT:
 # Part 3 references ANALYSIS_EXECUTOR_WORKERS,
 # so this value must be defined separately.
+#
+# FIX (Bug 4): default raised from 2 to 5. With only 2 workers,
+# concurrent users beyond 2 sat in "queued" status until a worker
+# freed up. DB_POOL_MAX_CONN (default 20) comfortably covers
+# ANALYSIS_EXECUTOR_WORKERS + GEMINI_EXECUTOR_WORKERS concurrent
+# DB usage; a startup warning below guards against a mismatched
+# deployment config.
 ANALYSIS_EXECUTOR_WORKERS = max(
     1,
     int(
         os.getenv(
             "ANALYSIS_WORKERS",
-            "2",
+            "5",
         )
     ),
 )
@@ -484,6 +503,48 @@ TOKEN_MAP = {
     "TRX": "tron",
     "SHIB": "shiba-inu",
     "TON": "the-open-network",
+    # ------------------------------------------------------------
+    # FIX (Bug 5): expanded the allowlist with more common tickers.
+    # Symbols not listed here are no longer a hard failure — they
+    # are resolved dynamically via CoinGecko's /search endpoint
+    # (see resolve_coin_id) and cached in _coin_resolution_cache.
+    # ------------------------------------------------------------
+    "USDT": "tether",
+    "USDC": "usd-coin",
+    "DAI": "dai",
+    "XMR": "monero",
+    "ETC": "ethereum-classic",
+    "FIL": "filecoin",
+    "APT": "aptos",
+    "ARB": "arbitrum",
+    "OP": "optimism",
+    "NEAR": "near",
+    "ICP": "internet-computer",
+    "PEPE": "pepe",
+    "ALGO": "algorand",
+    "VET": "vechain",
+    "FTM": "fantom",
+    "SAND": "the-sandbox",
+    "MANA": "decentraland",
+    "AXS": "axie-infinity",
+    "AAVE": "aave",
+    "MKR": "maker",
+    "GRT": "the-graph",
+    "CRV": "curve-dao-token",
+    "SUSHI": "sushi",
+    "COMP": "compound-governance-token",
+    "SNX": "havven",
+    "BAT": "basic-attention-token",
+    "ZEC": "zcash",
+    "DASH": "dash",
+    "EGLD": "elrond-erd-2",
+    "FLOW": "flow",
+    "HBAR": "hedera-hashgraph",
+    "XDC": "xdce-crowd-sale",
+    "KAVA": "kava",
+    "CAKE": "pancakeswap-token",
+    "LDO": "lido-dao",
+    "STETH": "staked-ether",
 }
 
 SUPPORTED_ASSETS = frozenset(TOKEN_MAP)
@@ -1794,9 +1855,46 @@ def _http_get_market(
 # COINGECKO RESOLUTION
 # ============================================================
 
+def _cache_coin_resolution(
+    symbol: str,
+    coin_id: Optional[str],
+) -> None:
+    """Store a (possibly negative) coin-id resolution result."""
+
+    with _cache_lock:
+        _coin_resolution_cache[symbol] = {
+            "coin_id": coin_id,
+            "cached_at": time.time(),
+        }
+
+
 def resolve_coin_id(
     symbol: str,
 ) -> Optional[str]:
+    """
+    Resolve a user-supplied ticker to a verified CoinGecko coin id.
+
+    FIX (Bug 5): previously this was a pure TOKEN_MAP lookup and any
+    ticker outside the hardcoded allowlist raised
+    UnsupportedAssetError immediately — a hard, permanent failure
+    that users perceived as "sometimes it just doesn't work". Now:
+
+      1. TOKEN_MAP is checked first (no network call).
+      2. The persistent _coin_resolution_cache is consulted
+         (positive results cached for COIN_RESOLUTION_CACHE_TTL,
+         misses for the shorter COIN_RESOLUTION_MISS_TTL).
+      3. Unknown symbols are resolved dynamically via CoinGecko's
+         /search endpoint and cached.
+      4. UnsupportedAssetError is raised only when a symbol truly
+         cannot be resolved — a clear 400 UNSUPPORTED_ASSET,
+         distinct from the 502 MARKET_DATA_UNAVAILABLE used for
+         provider failures.
+
+    Returns None (without raising) when CoinGecko is on cooldown or
+    the lookup fails transiently, so callers degrade to a
+    market-unavailable response instead of claiming the asset is
+    unsupported.
+    """
 
     symbol = normalize_symbol(
         symbol
@@ -1805,14 +1903,140 @@ def resolve_coin_id(
     if not symbol:
         return None
 
+    now = time.time()
+
+    # 1. Static allowlist — cheapest path, no network call.
     coin_id = TOKEN_MAP.get(symbol)
 
-    if not coin_id:
-        raise UnsupportedAssetError(
-            f"Unsupported asset '{symbol}'. Add a verified CoinGecko ID before using it."
+    if coin_id:
+        return coin_id
+
+    # 2. Cached result from an earlier resolution.
+    with _cache_lock:
+        cached = _coin_resolution_cache.get(symbol)
+
+    if isinstance(cached, dict):
+
+        try:
+            cached_at = float(cached.get("cached_at") or 0)
+        except (TypeError, ValueError):
+            cached_at = 0
+
+        cached_id = cached.get("coin_id")
+
+        ttl = (
+            COIN_RESOLUTION_CACHE_TTL
+            if cached_id
+            else COIN_RESOLUTION_MISS_TTL
         )
 
-    return coin_id
+        if now - cached_at < ttl:
+
+            if cached_id:
+                return cached_id
+
+            raise UnsupportedAssetError(
+                f"Unsupported asset '{symbol}'. "
+                "This token isn't supported yet."
+            )
+
+    # 3. Dynamic resolution via CoinGecko /search. While CoinGecko
+    # is cooling down, return None so callers produce a market-
+    # unavailable response rather than a false "unsupported asset".
+    if _provider_is_cooling("CoinGecko"):
+        return None
+
+    try:
+
+        response, status_code, error_reason = _http_get_market(
+            f"{COINGECKO_API_URL}/search",
+            params={"query": symbol},
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if (
+            response is None
+            or (
+                status_code is not None
+                and status_code >= 400
+            )
+        ):
+            # Transient provider failure — do NOT cache a negative
+            # result; leave un-resolved and treat as unavailable.
+            logger.info(
+                "[COIN] /search lookup failed for %s: %s",
+                symbol,
+                error_reason or f"HTTP {status_code}",
+            )
+
+            return None
+
+        payload = response.json()
+
+        matches = (
+            payload.get("coins")
+            if isinstance(payload, dict)
+            else None
+        )
+
+        resolved_id = None
+
+        if isinstance(matches, list):
+
+            # Only accept an EXACT symbol match (case-insensitive).
+            # /search returns fuzzy matches; blindly taking the first
+            # entry would silently analyze the wrong asset.
+            wanted = symbol.lower()
+
+            for entry in matches:
+
+                if not isinstance(entry, dict):
+                    continue
+
+                entry_id = entry.get("id")
+
+                if not entry_id:
+                    continue
+
+                entry_symbol = str(
+                    entry.get("symbol", "")
+                ).strip().lower()
+
+                if entry_symbol == wanted:
+                    resolved_id = entry_id
+                    break
+
+        if resolved_id:
+
+            _cache_coin_resolution(symbol, resolved_id)
+
+            logger.info(
+                "[COIN] resolved %s -> %s via CoinGecko /search",
+                symbol,
+                resolved_id,
+            )
+
+            return resolved_id
+
+        # Genuinely unresolvable — cache the miss briefly and raise
+        # a distinct UNSUPPORTED_ASSET error (HTTP 400).
+        _cache_coin_resolution(symbol, None)
+
+        raise UnsupportedAssetError(
+            f"Unsupported asset '{symbol}'. "
+            "This token isn't supported yet."
+        )
+
+    except UnsupportedAssetError:
+        raise
+
+    except Exception as exc:
+        logger.warning(
+            "[COIN] dynamic resolution failed for %s: %s",
+            symbol,
+            exc,
+        )
+        return None
 
 
 # ============================================================
@@ -1989,6 +2213,12 @@ def fetch_coingecko_market(
             "available": True,
             "field_errors": field_errors,
         })
+
+    except UnsupportedAssetError:
+        # FIX (Bug 5): let "unsupported asset" bubble up so the API
+        # layer can return a distinct 400 UNSUPPORTED_ASSET instead
+        # of a generic 502 market-unavailable response.
+        raise
 
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
         logger.warning("[MARKET] CoinGecko parse failed: %s", exc)
@@ -2339,6 +2569,17 @@ def fetch_market_data(
             # Binance does not provide circulating supply or market cap.
             # Enrich the live Binance ticker with CoinGecko market cap,
             # without allowing a CoinGecko failure to discard live fields.
+            #
+            # FIX (Bug 1 — double CoinGecko call): this path used to
+            # call fetch_coingecko_market(symbol) again just to backfill
+            # market cap, so a single /api/analyze request could burn
+            # TWO CoinGecko quota units (primary call + backfill) and
+            # trigger the 429 cooldown far too early. It now uses ONLY
+            # the existing _market_cap_cache — fresh values within
+            # MARKET_CAP_CACHE_TTL, stale values as a last resort. If
+            # there is no cached value at all, market_cap stays None
+            # and the missing signal is recorded; the next scheduled
+            # successful CoinGecko primary call repopulates the cache.
             if market.get("available") and market.get("source") == "Binance":
                 market_cap_entry = None
 
@@ -2353,66 +2594,33 @@ def fetch_market_data(
                     if now - cached_cap_at < MARKET_CAP_CACHE_TTL:
                         market_cap_entry = dict(cached_market_cap)
 
+                # No fresh entry — fall back to ANY cached value (even
+                # stale) rather than forcing a second live CoinGecko
+                # call from inside the Binance fallback path.
                 if market_cap_entry is None:
-                    try:
-                        market_cap_snapshot = fetch_coingecko_market(symbol)
-                        market_cap = optional_numeric(
-                            market_cap_snapshot.get("market_cap")
-                            if isinstance(market_cap_snapshot, dict)
-                            else None
-                        )
+                    with _cache_lock:
+                        stale_cap = _market_cap_cache.get(symbol)
 
-                        if market_cap is not None:
-                            market_cap_entry = {
-                                "value": market_cap,
-                                "timestamp": market_cap_snapshot.get(
-                                    "timestamp",
-                                    utc_now_iso(),
-                                ),
-                                "cached_at": time.time(),
-                            }
-                            with _cache_lock:
-                                _market_cap_cache[symbol] = market_cap_entry
-                        else:
-                            # CoinGecko returned no usable market cap
-                            # (likely rate-limited). Check for ANY
-                            # previously cached value, even if stale.
-                            reason = market_cap_snapshot.get(
-                                "unavailable_reason",
-                                "CoinGecko returned no usable market cap.",
-                            )
-                            market.setdefault("field_errors", {})[
-                                "market_cap"
-                            ] = reason
-                    except Exception as exc:
-                        market.setdefault("field_errors", {})[
-                            "market_cap"
-                        ] = f"CoinGecko market-cap lookup failed: {exc}."
-                        logger.exception(
-                            "[MARKET] %s market-cap enrichment failed",
-                            symbol,
-                        )
+                    if (
+                        isinstance(stale_cap, dict)
+                        and stale_cap.get("value") is not None
+                    ):
+                        market_cap_entry = stale_cap
+                        market["market_cap_stale"] = True
 
-                    # If enrichment failed, try to serve stale cached value
-                    if market_cap_entry is None:
-                        with _cache_lock:
-                            stale_cap = _market_cap_cache.get(symbol)
-                        if isinstance(stale_cap, dict) and stale_cap.get("value") is not None:
-                            market_cap_entry = stale_cap
-                            market["market_cap_stale"] = True
-                            # A stale value was served, so the previous
-                            # "missing market cap" error is no longer
-                            # accurate — reword it as a degradation note.
-                            field_errors_map = market.get("field_errors")
-                            if (
-                                isinstance(field_errors_map, dict)
-                                and "market_cap" in field_errors_map
-                            ):
-                                field_errors_map["market_cap"] = (
-                                    "Market cap served from cache while "
-                                    "CoinGecko is rate-limited; value may "
-                                    "be outdated."
-                                )
+                if market_cap_entry is None:
+                    # Nothing cached at all: record the missing signal
+                    # and leave market_cap as None. A dedicated
+                    # background refresh (or the next scheduled
+                    # successful CoinGecko primary call) will populate
+                    # the cache instead.
+                    market.setdefault("field_errors", {})[
+                        "market_cap"
+                    ] = (
+                        "Market cap unavailable — no cached CoinGecko "
+                        "snapshot; it will be backfilled on the next "
+                        "scheduled CoinGecko refresh."
+                    )
 
                 if market_cap_entry is not None:
                     market["market_cap"] = market_cap_entry["value"]
@@ -2484,6 +2692,11 @@ def fetch_market_data(
             )
 
             return market
+
+    except UnsupportedAssetError:
+        # FIX (Bug 5): propagate so /api/analyze and /api/market can
+        # return a distinct 400 UNSUPPORTED_ASSET response.
+        raise
 
     except Exception as exc:
 
@@ -6160,6 +6373,17 @@ def build_structured_report(
 
     is_native_asset = symbol.upper() in NATIVE_ASSETS
 
+    # FIX (Bug 2): a missing contract address is "not applicable",
+    # NOT a failed/missing signal. "Contract security" only counts
+    # against data quality when an address WAS provided but GoPlus
+    # could not resolve it — in that case security is a genuine
+    # failure (not_applicable is False / absent).
+    security_not_applicable = (
+        isinstance(security, dict)
+        and security.get("not_applicable")
+        is True
+    )
+
     field_checks = {
         "Live price": market.get("price"),
         "24h volume": market.get("volume_24h"),
@@ -6170,7 +6394,10 @@ def build_structured_report(
         "BTC benchmark history": quant.get("btc_history_observations"),
     }
 
-    if not is_native_asset:
+    if (
+        not is_native_asset
+        and not security_not_applicable
+    ):
         field_checks["Contract security"] = (
             True
             if isinstance(security, dict) and security.get("available")
@@ -6209,7 +6436,7 @@ def build_structured_report(
     dq["missing_signals"] = missing_signals
     dq["not_applicable"] = (
         ["Contract security"]
-        if is_native_asset
+        if (is_native_asset or security_not_applicable)
         else []
     )
     dq["confidence"] = round(
@@ -6573,14 +6800,23 @@ def run_analysis(
 
     else:
 
+        # FIX (Bug 2): the frontend can now send chain_id +
+        # contract_address. When it doesn't, this is NOT a data
+        # failure — the user simply didn't provide a contract, so the
+        # signal is "not applicable" rather than "Unavailable".
+        # data_quality.not_applicable marks it, so it neither lowers
+        # the confidence score nor shows as a red missing-signal.
         security = {
-            "status": "Unavailable",
-            "confidence": 0,
+            "status": (
+                "Not applicable — no contract address provided"
+            ),
+            "confidence": None,
             "flags": [],
             "red_flags": [],
-            "source": "GoPlus",
+            "source": "Not provided",
             "timestamp": utc_now_iso(),
             "available": False,
+            "not_applicable": True,
         }
 
     # --------------------------------------------------------
@@ -6859,6 +7095,25 @@ DB_POOL_MIN_CONN = max(1, _safe_env_int("DB_POOL_MIN_CONN", 2))
 DB_POOL_MAX_CONN = max(DB_POOL_MIN_CONN, _safe_env_int("DB_POOL_MAX_CONN", 20))
 DB_CONNECT_RETRIES = max(1, _safe_env_int("DB_CONNECT_RETRIES", 3))
 DB_CONNECT_RETRY_DELAY = max(0.2, _safe_env_float("DB_CONNECT_RETRY_DELAY", 0.75))
+
+# FIX (Bug 4): sanity-check that the DB connection pool can cover
+# ANALYSIS_EXECUTOR_WORKERS + GEMINI_EXECUTOR_WORKERS concurrent DB
+# users. Each analysis worker touches Postgres (job updates, history,
+# saves) and each Gemini worker persists too — if the pool max is
+# lower than the combined worker count, concurrent analyses can stall
+# waiting for a connection and look "stuck in queued".
+# All three values are env-tunable:
+#   ANALYSIS_WORKERS, GEMINI_WORKERS, DB_POOL_MAX_CONN.
+if DB_POOL_MAX_CONN < (ANALYSIS_EXECUTOR_WORKERS + GEMINI_EXECUTOR_WORKERS):
+    logger.warning(
+        "DB_POOL_MAX_CONN (%s) is lower than ANALYSIS_WORKERS (%s) + "
+        "GEMINI_WORKERS (%s). Raise DB_POOL_MAX_CONN to at least %s to "
+        "avoid connection-starved (stuck) analyses.",
+        DB_POOL_MAX_CONN,
+        ANALYSIS_EXECUTOR_WORKERS,
+        GEMINI_EXECUTOR_WORKERS,
+        ANALYSIS_EXECUTOR_WORKERS + GEMINI_EXECUTOR_WORKERS,
+    )
 
 
 def _init_db_pool():
@@ -8676,6 +8931,12 @@ def health():
         "analysis_workers": (
             ANALYSIS_EXECUTOR_WORKERS
         ),
+
+        # FIX (Bug 7): let the frontend derive JOB_POLL_MAX_MS from
+        # the real backend job timeout instead of hardcoding it.
+        "analysis_job_timeout_seconds": (
+            ANALYSIS_JOB_TIMEOUT_SECONDS
+        ),
     })
 
 
@@ -9430,6 +9691,26 @@ def start_analysis():
                 "error": (
                     "Token symbol is required."
                 ),
+            }), 400
+
+        # ----------------------------------------------------
+        # FIX (Bug 5): fail fast for symbols that cannot be resolved
+        # to a CoinGecko asset id, so the user gets a clear 400
+        # UNSUPPORTED_ASSET immediately instead of a job that runs
+        # and fails later with a raw provider error.
+        # ----------------------------------------------------
+        try:
+            resolve_coin_id(symbol)
+        except UnsupportedAssetError as exc:
+            logger.warning(
+                "Unsupported asset requested (job start): %s - %s",
+                symbol,
+                exc,
+            )
+            return jsonify({
+                "success": False,
+                "error": str(exc),
+                "code": "UNSUPPORTED_ASSET",
             }), 400
 
         # ----------------------------------------------------

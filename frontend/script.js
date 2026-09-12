@@ -7,22 +7,25 @@
  *
  * Backend is the single source of truth.
  *
- * FIXES:
- *  - Robust nested API/report response extraction
- *  - Robust /api/market response extraction
- *  - CoinGecko source normalization
- *  - Live status only shown after successful market response
- *  - Live polling race protection
- *  - No duplicate polling intervals
- *  - Better HTTP/network error messages
- *  - Correct progress completion stage
- *  - Prevent stale risk-pillar values
- *  - Supports multiple timestamp fields
- *  - Correct Bitcoin symbol ₿
- *  - Safer report detection
- *  - Clears unavailable market values instead of leaving stale data
- *  - Better auth/session handling
- *  - Safer AnalysisBeam lifecycle
+ * FIX (this revision):
+ *  - CRITICAL: runAnalysis() now uses the async job flow
+ *    (POST /api/analyze/start -> poll GET /api/analyze/status/<id>)
+ *    instead of the synchronous POST /api/analyze call.
+ *    The synchronous endpoint runs the ENTIRE pipeline (market +
+ *    history x2 + quant + security + stress + Gemini) inside a
+ *    single HTTP request/response cycle, which can take 30-60s+
+ *    worst case. Any reverse proxy / browser / host timeout in
+ *    that window kills the request with no useful error, which
+ *    is why "click Analyze" could look like it does nothing, and
+ *    why reports sometimes came back cut off (client gave up
+ *    mid-request while backend was still working).
+ *  - Progress bar is now driven by REAL backend stage/progress
+ *    values from the job status endpoint instead of a fake
+ *    fixed-duration animation.
+ *  - Added a hard client-side polling timeout + visible error
+ *    if a job gets stuck, instead of polling forever silently.
+ *  - Kept all previously-existing robustness fixes (nested
+ *    response extraction, live market polling, etc.)
  * ============================================================
  */
 
@@ -118,7 +121,13 @@ const CursorPhysics = {
 
 const API = {
     dashboard: "/api/dashboard",
-    analyze: "/api/analyze",
+
+    // FIX: analyze is now the async job-start endpoint, not the
+    // synchronous endpoint. See runAnalysis() below.
+    analyzeStart: "/api/analyze/start",
+    analyzeStatus: (jobId) =>
+        `/api/analyze/status/${encodeURIComponent(jobId)}`,
+
     logout: "/api/auth/logout",
     me: "/api/auth/me",
 
@@ -143,6 +152,51 @@ const STORAGE_KEYS = {
 
 
 /* ============================================================
+   JOB POLLING CONFIG
+   ============================================================ */
+
+const JOB_POLL_INTERVAL_MS = 1500;
+
+// FIX (Bug 7): JOB_POLL_MAX_MS is no longer hardcoded at 340000.
+// It is derived from the backend's real ANALYSIS_JOB_TIMEOUT_SECONDS
+// (exposed via GET /health as "analysis_job_timeout_seconds") plus a
+// 60s headroom, and refreshed at startup by syncJobPollCeiling().
+// The value below is only the fallback for when /health is
+// unreachable (backend default is 150s).
+const JOB_POLL_DEFAULT_TIMEOUT_SECONDS = 150;
+const JOB_POLL_HEADROOM_MS = 60000;
+
+let JOB_POLL_MAX_MS =
+    JOB_POLL_DEFAULT_TIMEOUT_SECONDS * 1000 +
+    JOB_POLL_HEADROOM_MS;
+
+async function syncJobPollCeiling() {
+    try {
+        const payload = await apiRequest("/health");
+
+        const seconds = Number(
+            payload?.analysis_job_timeout_seconds
+        );
+
+        if (Number.isFinite(seconds) && seconds > 0) {
+            JOB_POLL_MAX_MS =
+                seconds * 1000 + JOB_POLL_HEADROOM_MS;
+
+            console.log(
+                "CryptoRisk job poll ceiling synced from /health:",
+                JOB_POLL_MAX_MS + "ms"
+            );
+        }
+    } catch (error) {
+        console.warn(
+            "Could not read /health for job timeout config; using fallback ceiling.",
+            error
+        );
+    }
+}
+
+
+/* ============================================================
    APPLICATION STATE
    ============================================================ */
 
@@ -157,7 +211,17 @@ const state = {
     liveRequestId: 0,
     isLiveRequestInFlight: false,
 
-    isAnalyzing: false
+    // FIX (Bug 3): timestamp of the last live market fetch, used to
+    // avoid an unnecessary immediate request when the tab becomes
+    // visible again within the market cache window.
+    lastLiveMarketFetchAt: 0,
+
+    isAnalyzing: false,
+
+    // Job polling state
+    activeJobId: null,
+    jobPollTimer: null,
+    jobPollStartedAt: 0
 };
 
 
@@ -376,6 +440,7 @@ function getAuthHeaders() {
 function redirectToHome() {
     clearToken();
     stopLivePolling();
+    stopJobPolling();
 
     window.location.href = "/";
 }
@@ -515,6 +580,7 @@ async function apiRequest(url, options = {}) {
     if (response.status === 401) {
         clearToken();
         stopLivePolling();
+        stopJobPolling();
 
         if (
             window.location.pathname !== "/" &&
@@ -583,10 +649,22 @@ async function apiRequest(url, options = {}) {
 
         requestError.payload = payload;
 
+        // FIX (Bug 5/6): surface the backend's error code (e.g.
+        // UNSUPPORTED_ASSET, MARKET_DATA_UNAVAILABLE) on the Error so
+        // the UI can translate it into a friendly message instead of
+        // showing a raw provider error string.
+        requestError.code =
+            payload?.code ||
+            null;
+
         throw requestError;
     }
 
     return payload || {};
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 
@@ -616,6 +694,68 @@ function clearAnalysisError() {
     element.textContent = "";
 
     hide(element);
+}
+
+
+/* ============================================================
+   FRIENDLY ERROR MESSAGES
+   ============================================================
+   FIX (Bug 6): the backend/API layer produces raw error strings
+   like "CoinGecko returned HTTP 429; retry_after=12." — meaningless
+   (and scary) to users who don't know what CoinGecko is. This
+   translator maps known error codes / patterns to user-facing text
+   and falls back to the original message for anything unknown.
+   ============================================================ */
+
+function friendlyErrorMessage(error) {
+    const raw =
+        error instanceof Error
+            ? error.message || ""
+            : String(error || "");
+
+    const code =
+        error && typeof error === "object"
+            ? String(error.code || "")
+            : "";
+
+    const haystack =
+        `${code} ${raw}`.toLowerCase();
+
+    // Unsupported token — a distinct 400 from the backend, or a
+    // failed job whose error mentions an unsupported asset.
+    if (
+        code === "UNSUPPORTED_ASSET" ||
+        haystack.includes("unsupported asset")
+    ) {
+        return "This token isn't supported yet.";
+    }
+
+    // Rate limiting / provider cooldown.
+    if (
+        code === "MARKET_DATA_UNAVAILABLE" ||
+        haystack.includes("429") ||
+        haystack.includes("rate limit") ||
+        haystack.includes("rate-limit") ||
+        haystack.includes("rate-limited") ||
+        haystack.includes("cooldown") ||
+        haystack.includes("cooling down")
+    ) {
+        return "Market data provider is temporarily busy — please retry in about a minute.";
+    }
+
+    // Timed-out / orphaned jobs (server-side activity timeout or
+    // the client-side polling ceiling).
+    if (
+        haystack.includes("timed out") ||
+        haystack.includes("timeout") ||
+        haystack.includes("taking much longer") ||
+        haystack.includes("took too long")
+    ) {
+        return "Analysis took too long and timed out — please try again.";
+    }
+
+    // Unknown — keep the existing message.
+    return raw;
 }
 
 
@@ -668,44 +808,83 @@ function renderUser(user) {
 
 /* ============================================================
    PROGRESS SYSTEM
+   ============================================================
+   FIX: this now maps the backend's real `stage` values
+   (market, history, quant, risk, security, stress, evidence,
+   ai, save, complete — see ANALYSIS_STAGES in app.py) onto a
+   visual progress bar, driven by real polled data instead of
+   a fixed-duration fake animation.
    ============================================================ */
 
 const PROGRESS_STAGES = {
     market: {
-        percent: 20,
+        percent: 15,
         title: "Fetching live market data"
     },
-
-    model: {
-        percent: 45,
+    history: {
+        percent: 30,
+        title: "Loading historical price data"
+    },
+    quant: {
+        percent: 48,
         title: "Running quantitative risk engine"
     },
-
+    risk: {
+        percent: 60,
+        title: "Building composite risk profile"
+    },
+    security: {
+        percent: 68,
+        title: "Checking structural risk signals"
+    },
     stress: {
-        percent: 65,
+        percent: 76,
         title: "Running stress scenarios"
     },
-
-    ai: {
-        percent: 82,
-        title: "Synthesizing evidence"
+    evidence: {
+        percent: 84,
+        title: "Building evidence package"
     },
-
+    ai: {
+        percent: 92,
+        title: "Synthesizing AI intelligence"
+    },
     save: {
-        percent: 96,
+        percent: 97,
         title: "Saving intelligence report"
     },
-
     complete: {
         percent: 100,
         title: "Analysis complete"
+    },
+
+    // Fallback stage names the backend may send early/on error
+    queued: {
+        percent: 5,
+        title: "Queued"
+    },
+    initializing: {
+        percent: 8,
+        title: "Initializing intelligence engine"
+    },
+    error: {
+        percent: 100,
+        title: "Analysis failed"
+    },
+    timeout: {
+        percent: 100,
+        title: "Analysis timed out"
     }
 };
 
 const PROGRESS_ORDER = [
     "market",
-    "model",
+    "history",
+    "quant",
+    "risk",
+    "security",
     "stress",
+    "evidence",
     "ai",
     "save"
 ];
@@ -713,17 +892,10 @@ const PROGRESS_ORDER = [
 let _progressAnim = null;
 let _progressCurrent = 0;
 
-function _stageForPercent(percent) {
-    if (percent >= 96) return "save";
-    if (percent >= 82) return "ai";
-    if (percent >= 65) return "stress";
-    if (percent >= 45) return "model";
-    return "market";
-}
-
 function updateProgressDOM(
     current,
-    stageOverride = null
+    stageName,
+    titleOverride = null
 ) {
     const fill = $("#progress-fill");
     const percentEl =
@@ -733,10 +905,6 @@ function updateProgressDOM(
         0,
         Math.min(100, current)
     );
-
-    const stageName =
-        stageOverride ||
-        _stageForPercent(clamped);
 
     const config =
         PROGRESS_STAGES[stageName] ||
@@ -754,7 +922,7 @@ function updateProgressDOM(
 
     setText(
         "#progress-title",
-        config.title
+        titleOverride || config.title
     );
 
     const currentIndex =
@@ -795,12 +963,20 @@ function updateProgressDOM(
         });
 }
 
-function animateProgress(
-    targetPercent = 100,
-    durationMs = 4500
+/**
+ * Smoothly animates the visible progress bar from its current
+ * value toward a target percent. Used to make discrete backend
+ * poll updates (e.g. jumps from 20% -> 48%) look smooth instead
+ * of snapping instantly.
+ */
+function animateProgressTo(
+    targetPercent,
+    stageName,
+    titleOverride = null,
+    durationMs = 500
 ) {
     const target = Math.max(
-        _progressCurrent,
+        0,
         Math.min(100, targetPercent)
     );
 
@@ -812,107 +988,84 @@ function animateProgress(
         _progressAnim = null;
     }
 
-    const startPercent =
-        _progressCurrent;
+    const startPercent = _progressCurrent;
+    const startTime = performance.now();
 
-    const startTime =
-        performance.now();
+    // If target is behind current (shouldn't normally happen),
+    // just jump — never animate backwards.
+    if (target <= startPercent) {
+        _progressCurrent = target;
+        updateProgressDOM(target, stageName, titleOverride);
+        return;
+    }
 
     function frame(now) {
-        const elapsed =
-            now - startTime;
-
-        const t = Math.min(
-            elapsed / durationMs,
-            1
-        );
-
-        const eased =
-            1 -
-            Math.pow(
-                1 - t,
-                3
-            );
+        const elapsed = now - startTime;
+        const t = Math.min(elapsed / durationMs, 1);
+        const eased = 1 - Math.pow(1 - t, 3);
 
         const current =
-            startPercent +
-            (target - startPercent) *
-                eased;
+            startPercent + (target - startPercent) * eased;
 
-        _progressCurrent =
-            current;
+        _progressCurrent = current;
 
-        updateProgressDOM(
-            current
-        );
+        updateProgressDOM(current, stageName, titleOverride);
 
         if (t < 1) {
-            _progressAnim =
-                requestAnimationFrame(
-                    frame
-                );
+            _progressAnim = requestAnimationFrame(frame);
             return;
         }
 
-        _progressCurrent =
-            target;
-
-        updateProgressDOM(
-            target
-        );
-
+        _progressCurrent = target;
+        updateProgressDOM(target, stageName, titleOverride);
         _progressAnim = null;
     }
 
-    _progressAnim =
-        requestAnimationFrame(
-            frame
-        );
-}
-
-function setProgressStage(stage) {
-    const config =
-        PROGRESS_STAGES[stage] ||
-        PROGRESS_STAGES.market;
-
-    const percent =
-        config.percent;
-
-    _progressCurrent =
-        percent;
-
-    updateProgressDOM(
-        percent,
-        stage
-    );
+    _progressAnim = requestAnimationFrame(frame);
 }
 
 function startProgress() {
     const overlay =
         $("#analysis-progress");
 
-    if (!overlay) return;
+    if (overlay) {
+        show(overlay);
+    }
 
-    show(overlay);
+    _progressCurrent = 0;
 
-    _progressCurrent = 1;
-
-    updateProgressDOM(
-        _progressCurrent,
-        "market"
-    );
-
-    animateProgress(
-        95,
-        4500
-    );
+    updateProgressDOM(1, "queued", "Starting analysis…");
 
     if (
         typeof AnalysisBeam !==
         "undefined"
     ) {
         AnalysisBeam.create();
-        AnalysisBeam.setProgress(95);
+        AnalysisBeam.setProgress(1);
+    }
+}
+
+/**
+ * Called on every successful job-status poll with the real
+ * backend progress/stage/title/message.
+ */
+function applyJobProgress(job) {
+    if (!job) return;
+
+    const percent = Number(job.progress);
+    const stage = job.stage || "market";
+    const title = job.stage_title || job.message || null;
+
+    const safePercent = Number.isFinite(percent)
+        ? percent
+        : (PROGRESS_STAGES[stage]?.percent ?? _progressCurrent);
+
+    animateProgressTo(safePercent, stage, title, 500);
+
+    if (
+        typeof AnalysisBeam !== "undefined"
+    ) {
+        AnalysisBeam.setProgress(safePercent);
     }
 }
 
@@ -920,43 +1073,19 @@ function finishProgress() {
     const overlay =
         $("#analysis-progress");
 
-    if (!overlay) return;
-
-    if (_progressAnim) {
-        cancelAnimationFrame(
-            _progressAnim
-        );
-
-        _progressAnim = null;
-    }
-
-    _progressCurrent = Math.max(
-        _progressCurrent,
-        95
-    );
-
-    animateProgress(
-        100,
-        550
-    );
+    animateProgressTo(100, "complete", "Analysis complete", 400);
 
     if (
         typeof AnalysisBeam !==
         "undefined"
     ) {
-        AnalysisBeam.setProgress(
-            100
-        );
+        AnalysisBeam.setProgress(100);
     }
 
     setTimeout(() => {
-        setProgressStage(
-            "complete"
-        );
-    }, 560);
-
-    setTimeout(() => {
-        hide(overlay);
+        if (overlay) {
+            hide(overlay);
+        }
 
         if (
             typeof AnalysisBeam !==
@@ -964,7 +1093,24 @@ function finishProgress() {
         ) {
             AnalysisBeam.remove();
         }
-    }, 1000);
+    }, 700);
+}
+
+function abortProgress() {
+    const overlay = $("#analysis-progress");
+
+    if (_progressAnim) {
+        cancelAnimationFrame(_progressAnim);
+        _progressAnim = null;
+    }
+
+    if (overlay) {
+        hide(overlay);
+    }
+
+    if (typeof AnalysisBeam !== "undefined") {
+        AnalysisBeam.remove();
+    }
 }
 
 
@@ -1308,6 +1454,9 @@ function getReportFromPayload(
         payload.latest?.analysis,
         payload.latest,
 
+        // Job status payload shape: { job: {...}, latest: {...} }
+        payload.job?.report,
+
         payload.data?.report,
         payload.data?.analysis,
         payload.data?.latest?.report,
@@ -1610,11 +1759,166 @@ async function loadDashboard() {
             error
         );
 
+        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
-            error.message ||
+            friendlyErrorMessage(error) ||
             "Unable to load dashboard."
         );
     }
+}
+
+
+/* ============================================================
+   JOB POLLING (async analyze flow)
+   ============================================================
+   FIX (core bug fix): the backend runs the full pipeline
+   (market fetch, history x2, quant, security, stress, evidence,
+   Gemini) which can legitimately take well over the timeout
+   window of most reverse proxies / browsers when called
+   synchronously via POST /api/analyze. The backend already
+   exposes an async job flow for exactly this reason:
+     POST /api/analyze/start          -> { job_id }
+     GET  /api/analyze/status/<id>    -> { job: { status, progress,
+                                            stage, ... }, latest? }
+   We now use that flow exclusively from the UI.
+   ============================================================ */
+
+function stopJobPolling() {
+    if (state.jobPollTimer) {
+        clearTimeout(state.jobPollTimer);
+        state.jobPollTimer = null;
+    }
+
+    state.activeJobId = null;
+    state.jobPollStartedAt = 0;
+}
+
+/**
+ * Polls /api/analyze/status/<jobId> until the job completes,
+ * fails, times out server-side, or we exceed our own client-side
+ * polling ceiling (JOB_POLL_MAX_MS). Resolves with the completed
+ * report, or throws an Error with a useful message.
+ */
+function pollAnalysisJob(jobId) {
+    return new Promise((resolve, reject) => {
+        state.activeJobId = jobId;
+        state.jobPollStartedAt = Date.now();
+
+        const poll = async () => {
+            // If a newer job superseded this one, or polling was
+            // explicitly stopped, bail out quietly.
+            if (state.activeJobId !== jobId) {
+                return;
+            }
+
+            if (
+                Date.now() - state.jobPollStartedAt >
+                JOB_POLL_MAX_MS
+            ) {
+                stopJobPolling();
+                reject(
+                    new Error(
+                        "Analysis is taking much longer than expected. " +
+                        "It may still finish in the background — check " +
+                        "your history in a minute, or try again."
+                    )
+                );
+                return;
+            }
+
+            let payload;
+
+            try {
+                payload = await apiRequest(
+                    API.analyzeStatus(jobId)
+                );
+            } catch (error) {
+                // Transient poll failure (e.g. one dropped request)
+                // shouldn't kill the whole flow — retry a few times
+                // before giving up, unless it's an auth error (which
+                // apiRequest already redirects on).
+                if (error.code === "AUTH_EXPIRED") {
+                    stopJobPolling();
+                    reject(error);
+                    return;
+                }
+
+                console.warn(
+                    "Job status poll failed, retrying:",
+                    error
+                );
+
+                if (state.activeJobId === jobId) {
+                    state.jobPollTimer = setTimeout(
+                        poll,
+                        JOB_POLL_INTERVAL_MS
+                    );
+                }
+
+                return;
+            }
+
+            if (state.activeJobId !== jobId) {
+                return;
+            }
+
+            const job = payload?.job;
+
+            if (!job) {
+                stopJobPolling();
+                reject(
+                    new Error(
+                        "The backend did not return a valid job status."
+                    )
+                );
+                return;
+            }
+
+            applyJobProgress(job);
+
+            if (job.status === "completed") {
+                stopJobPolling();
+
+                const report = getReportFromPayload(payload);
+
+                if (!report) {
+                    reject(
+                        new Error(
+                            "Analysis completed, but no valid report " +
+                            "was returned."
+                        )
+                    );
+                    return;
+                }
+
+                resolve({ report, payload });
+                return;
+            }
+
+            if (job.status === "failed") {
+                stopJobPolling();
+
+                reject(
+                    new Error(
+                        job.error ||
+                        job.message ||
+                        "Analysis failed."
+                    )
+                );
+                return;
+            }
+
+            // Still queued/running/saving — keep polling.
+            if (state.activeJobId === jobId) {
+                state.jobPollTimer = setTimeout(
+                    poll,
+                    JOB_POLL_INTERVAL_MS
+                );
+            }
+        };
+
+        poll();
+    });
 }
 
 
@@ -1623,7 +1927,8 @@ async function loadDashboard() {
    ============================================================ */
 
 async function runAnalysis(
-    symbol
+    symbol,
+    options = {}
 ) {
     if (state.isAnalyzing) {
         return;
@@ -1643,61 +1948,75 @@ async function runAnalysis(
     state.isAnalyzing = true;
 
     clearAnalysisError();
-    startProgress();
     stopLivePolling();
+    stopJobPolling();
+    startProgress();
 
     try {
-        const payload =
-            await apiRequest(
-                API.analyze,
-                {
-                    method: "POST",
-                    body: {
-                        token_symbol:
-                            normalizedSymbol
-                    }
-                }
-            );
+        // Step 1: start the background job.
+        //
+        // FIX (Bug 2): include the optional contract security fields
+        // when BOTH are provided — the backend runs the GoPlus
+        // structural check only when it receives chain_id AND
+        // contract_address together.
+        const requestBody = {
+            token_symbol: normalizedSymbol
+        };
 
-        console.log(
-            "CryptoRisk analyze payload:",
-            payload
+        const chainId =
+            typeof options.chainId === "string"
+                ? options.chainId.trim()
+                : "";
+
+        const contractAddress =
+            typeof options.contractAddress === "string"
+                ? options.contractAddress.trim()
+                : "";
+
+        if (chainId && contractAddress) {
+            requestBody.chain_id =
+                chainId;
+
+            requestBody.contract_address =
+                contractAddress;
+        }
+
+        const startPayload = await apiRequest(
+            API.analyzeStart,
+            {
+                method: "POST",
+                body: requestBody
+            }
         );
 
-        const report =
-            getReportFromPayload(
-                payload
-            );
+        console.log(
+            "CryptoRisk analyze/start payload:",
+            startPayload
+        );
 
-        if (!report) {
-            console.error(
-                "Analyze response did not contain a recognizable report:",
-                payload
-            );
+        const jobId = firstDefined(
+            startPayload.job_id,
+            startPayload.job?.id,
+            startPayload.data?.job_id
+        );
 
+        if (!jobId) {
             throw new Error(
-                "The backend returned data, but no valid risk report was found."
+                "The backend did not return a job id for this analysis."
             );
         }
 
-        state.latestReport =
-            report;
+        // Step 2: poll until the job completes.
+        const { report, payload } = await pollAnalysisJob(jobId);
+
+        state.latestReport = report;
 
         state.currentReportId =
             firstDefined(
+                payload.analysis?.id,
+                payload.meta?.analysis_id,
                 payload.analysis_id,
                 payload.id,
-
-                payload.analysis?.id,
-                payload.report?.id,
-
-                payload.data?.analysis_id,
-                payload.data?.id,
-                payload.data?.analysis?.id,
-                payload.data?.report?.id,
-
-                payload.latest?.id,
-
                 report.id
             );
 
@@ -1712,30 +2031,20 @@ async function runAnalysis(
             );
 
         if (payload.user) {
-            renderUser(
-                payload.user
-            );
+            renderUser(payload.user);
         }
 
-        renderReport(
-            report
-        );
+        renderReport(report);
 
         const history =
-            Array.isArray(
-                payload.history
-            )
+            Array.isArray(payload.history)
                 ? payload.history
-                : Array.isArray(
-                    payload.data?.history
-                )
+                : Array.isArray(payload.data?.history)
                     ? payload.data.history
                     : null;
 
         if (history) {
-            renderHistory(
-                history
-            );
+            renderHistory(history);
         } else {
             await refreshHistory();
         }
@@ -1743,9 +2052,7 @@ async function runAnalysis(
         finishProgress();
 
         if (state.currentSymbol) {
-            startLivePolling(
-                state.currentSymbol
-            );
+            startLivePolling(state.currentSymbol);
         }
     } catch (error) {
         console.error(
@@ -1753,24 +2060,17 @@ async function runAnalysis(
             error
         );
 
+        // FIX (Bug 6): translate raw provider errors into
+        // user-friendly messages before showing them.
         showAnalysisError(
-            error.message ||
+            friendlyErrorMessage(error) ||
             "Analysis failed."
         );
 
-        hide(
-            $("#analysis-progress")
-        );
-
-        if (
-            typeof AnalysisBeam !==
-            "undefined"
-        ) {
-            AnalysisBeam.remove();
-        }
+        abortProgress();
     } finally {
-        state.isAnalyzing =
-            false;
+        state.isAnalyzing = false;
+        stopJobPolling();
     }
 }
 
@@ -1886,8 +2186,9 @@ async function loadHistoryReport(
             error
         );
 
+        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
-            error.message ||
+            friendlyErrorMessage(error) ||
             "Unable to load report."
         );
     }
@@ -1934,8 +2235,9 @@ async function deleteReport(id) {
             error
         );
 
+        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
-            error.message ||
+            friendlyErrorMessage(error) ||
             "Unable to delete report."
         );
     }
@@ -1974,6 +2276,7 @@ async function logout() {
     } finally {
         clearToken();
         stopLivePolling();
+        stopJobPolling();
 
         window.location.href = "/";
     }
@@ -1983,6 +2286,12 @@ async function logout() {
 /* ============================================================
    LIVE MARKET POLLING
    ============================================================ */
+
+// FIX (Bug 3): raised from 15s to 30s. With CoinGecko free-tier
+// limits, a 15s interval alone could exhaust quota when a dashboard
+// tab was left open, causing later /api/analyze calls to hit the
+// provider cooldown and return available: false.
+const LIVE_MARKET_POLL_INTERVAL_MS = 30000;
 
 function stopLivePolling() {
     if (state.livePollTimer) {
@@ -2013,17 +2322,37 @@ function startLivePolling(symbol) {
         normalizedSymbol;
 
     /*
-     * Immediate refresh.
+     * FIX (Bug 3): immediate refresh — but ONLY when the tab is
+     * visible AND the last market fetch is older than the polling
+     * interval. This avoids an unnecessary request right after the
+     * tab becomes visible again when a fetch already happened within
+     * the backend's MARKET_CACHE_TTL window.
      */
-    refreshLiveMarket(
-        normalizedSymbol
-    );
+    if (!document.hidden) {
+        const sinceLastFetch =
+            Date.now() -
+            (state.lastLiveMarketFetchAt || 0);
+
+        if (sinceLastFetch >= LIVE_MARKET_POLL_INTERVAL_MS) {
+            refreshLiveMarket(
+                normalizedSymbol
+            );
+        }
+    }
 
     /*
-     * Then every 15 seconds.
+     * FIX (Bug 3): then every 30 seconds (was 15s). Never poll while
+     * the tab is hidden — the visibilitychange handler stops the
+     * timer entirely, and this guard also protects against a missed
+     * visibility event.
      */
     state.livePollTimer =
         setInterval(() => {
+
+            if (document.hidden) {
+                return;
+            }
+
             /*
              * Never poll while a previous
              * request is still running.
@@ -2043,7 +2372,7 @@ function startLivePolling(symbol) {
             refreshLiveMarket(
                 state.currentSymbol
             );
-        }, 15000);
+        }, LIVE_MARKET_POLL_INTERVAL_MS);
 }
 
 async function refreshLiveMarket(
@@ -2065,6 +2394,12 @@ async function refreshLiveMarket(
 
     state.isLiveRequestInFlight =
         true;
+
+    // FIX (Bug 3): record when the last market fetch happened so
+    // startLivePolling() can skip the immediate refresh if the tab
+    // becomes visible again within the cache window.
+    state.lastLiveMarketFetchAt =
+        Date.now();
 
     try {
         const payload =
@@ -2643,6 +2978,56 @@ async function handleAnalysisSubmit(
         return;
     }
 
+    // FIX (Bug 2): optional contract security inputs. The backend
+    // runs the GoPlus structural check only when BOTH chain_id and
+    // contract_address are provided; leaving them blank is fine and
+    // is reported as "not applicable" (not a missing signal).
+    const chainIdInput =
+        $("#chain-id");
+
+    const contractAddressInput =
+        $("#contract-address");
+
+    const chainIdValue = chainIdInput
+        ? String(chainIdInput.value || "").trim()
+        : "";
+
+    const contractAddressValue = contractAddressInput
+        ? String(contractAddressInput.value || "").trim()
+        : "";
+
+    if (
+        contractAddressValue &&
+        !/^0x[a-fA-F0-9]{40}$/.test(
+            contractAddressValue
+        )
+    ) {
+        showAnalysisError(
+            "Enter a valid contract address (0x followed by 40 hex characters) or leave it blank."
+        );
+
+        if (contractAddressInput) {
+            contractAddressInput.focus();
+        }
+
+        return;
+    }
+
+    if (
+        contractAddressValue &&
+        !chainIdValue
+    ) {
+        showAnalysisError(
+            "Select a chain for the contract security check, or leave the address blank."
+        );
+
+        if (chainIdInput) {
+            chainIdInput.focus();
+        }
+
+        return;
+    }
+
     const button =
         $("#analyze-button");
 
@@ -2658,7 +3043,11 @@ async function handleAnalysisSubmit(
 
     try {
         await runAnalysis(
-            symbol
+            symbol,
+            {
+                chainId: chainIdValue,
+                contractAddress: contractAddressValue
+            }
         );
     } finally {
         if (button) {
@@ -4741,8 +5130,9 @@ async function handleAuthForm(
         window.location.href =
             "/dashboard";
     } catch (error) {
+        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
-            error.message ||
+            friendlyErrorMessage(error) ||
             "Authentication failed."
         );
     }
@@ -4834,6 +5224,7 @@ window.addEventListener(
     "beforeunload",
     () => {
         stopLivePolling();
+        stopJobPolling();
 
         if (
             typeof CursorPhysics !==
@@ -5575,10 +5966,6 @@ const MoneyMeteor = {
         const isBitcoin =
             Math.random() < 0.5;
 
-        /*
-         * FIX:
-         * Correct Bitcoin Unicode code point.
-         */
         const symbol =
             isBitcoin
                 ? "₿"
@@ -6646,6 +7033,12 @@ document.addEventListener(
         setupKeyboardShortcuts();
 
         setupVisibilityHandling();
+
+        // FIX (Bug 7): sync the job polling ceiling from the
+        // backend's real ANALYSIS_JOB_TIMEOUT_SECONDS (via /health)
+        // instead of hardcoding it. Fire-and-forget — the fallback
+        // ceiling is already valid.
+        syncJobPollCeiling();
 
         if (
             document.querySelector(

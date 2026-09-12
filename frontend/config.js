@@ -21,8 +21,11 @@
         // API request timeout in milliseconds
         API_TIMEOUT: 30000,
 
-        // Live market data refresh interval (15 seconds)
-        LIVE_REFRESH_INTERVAL: 15000,
+        // Live market data refresh interval.
+        // FIX (Bug 3): raised from 15s to 30s so an open dashboard tab
+        // cannot exhaust the CoinGecko free-tier quota by itself.
+        // (script.js uses the same 30s value; kept in sync.)
+        LIVE_REFRESH_INTERVAL: 30000,
 
         // LocalStorage key for JWT auth token
         AUTH_TOKEN_KEY: "cryptorisk_auth_token",

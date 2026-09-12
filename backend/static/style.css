@@ -1581,6 +1581,39 @@ img {
     flex-wrap: wrap;
 }
 
+/* === FIX (Bug 2): optional contract security fields === */
+.optional-token-fields {
+    flex: 1 1 100%;
+    display: flex;
+    gap: 12px;
+    width: 100%;
+}
+
+.optional-token-fields select,
+.optional-token-fields input {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 14px;
+    border-radius: var(--radius-md, 10px);
+    border: 1px solid var(--glass-border-strong, rgba(255, 255, 255, 0.14));
+    background: rgba(0, 0, 0, 0.3);
+    color: inherit;
+    font: inherit;
+    outline: none;
+    transition: all 0.3s var(--ease-out, ease);
+}
+
+.optional-token-fields select:focus,
+.optional-token-fields input:focus {
+    border-color: var(--accent-purple);
+    box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15);
+}
+
+.optional-token-fields option {
+    background: #12141c;
+    color: #ffffff;
+}
+
 .token-input-wrapper {
     flex: 1;
     min-width: 220px;

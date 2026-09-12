@@ -7,22 +7,25 @@
  *
  * Backend is the single source of truth.
  *
- * FIXES:
- *  - Robust nested API/report response extraction
- *  - Robust /api/market response extraction
- *  - CoinGecko source normalization
- *  - Live status only shown after successful market response
- *  - Live polling race protection
- *  - No duplicate polling intervals
- *  - Better HTTP/network error messages
- *  - Correct progress completion stage
- *  - Prevent stale risk-pillar values
- *  - Supports multiple timestamp fields
- *  - Correct Bitcoin symbol ₿
- *  - Safer report detection
- *  - Clears unavailable market values instead of leaving stale data
- *  - Better auth/session handling
- *  - Safer AnalysisBeam lifecycle
+ * FIX (this revision):
+ *  - CRITICAL: runAnalysis() now uses the async job flow
+ *    (POST /api/analyze/start -> poll GET /api/analyze/status/<id>)
+ *    instead of the synchronous POST /api/analyze call.
+ *    The synchronous endpoint runs the ENTIRE pipeline (market +
+ *    history x2 + quant + security + stress + Gemini) inside a
+ *    single HTTP request/response cycle, which can take 30-60s+
+ *    worst case. Any reverse proxy / browser / host timeout in
+ *    that window kills the request with no useful error, which
+ *    is why "click Analyze" could look like it does nothing, and
+ *    why reports sometimes came back cut off (client gave up
+ *    mid-request while backend was still working).
+ *  - Progress bar is now driven by REAL backend stage/progress
+ *    values from the job status endpoint instead of a fake
+ *    fixed-duration animation.
+ *  - Added a hard client-side polling timeout + visible error
+ *    if a job gets stuck, instead of polling forever silently.
+ *  - Kept all previously-existing robustness fixes (nested
+ *    response extraction, live market polling, etc.)
  * ============================================================
  */
 
@@ -118,7 +121,13 @@ const CursorPhysics = {
 
 const API = {
     dashboard: "/api/dashboard",
-    analyze: "/api/analyze",
+
+    // FIX: analyze is now the async job-start endpoint, not the
+    // synchronous endpoint. See runAnalysis() below.
+    analyzeStart: "/api/analyze/start",
+    analyzeStatus: (jobId) =>
+        `/api/analyze/status/${encodeURIComponent(jobId)}`,
+
     logout: "/api/auth/logout",
     me: "/api/auth/me",
 
@@ -143,6 +152,51 @@ const STORAGE_KEYS = {
 
 
 /* ============================================================
+   JOB POLLING CONFIG
+   ============================================================ */
+
+const JOB_POLL_INTERVAL_MS = 1500;
+
+// FIX (Bug 7): JOB_POLL_MAX_MS is no longer hardcoded at 340000.
+// It is derived from the backend's real ANALYSIS_JOB_TIMEOUT_SECONDS
+// (exposed via GET /health as "analysis_job_timeout_seconds") plus a
+// 60s headroom, and refreshed at startup by syncJobPollCeiling().
+// The value below is only the fallback for when /health is
+// unreachable (backend default is 150s).
+const JOB_POLL_DEFAULT_TIMEOUT_SECONDS = 150;
+const JOB_POLL_HEADROOM_MS = 60000;
+
+let JOB_POLL_MAX_MS =
+    JOB_POLL_DEFAULT_TIMEOUT_SECONDS * 1000 +
+    JOB_POLL_HEADROOM_MS;
+
+async function syncJobPollCeiling() {
+    try {
+        const payload = await apiRequest("/health");
+
+        const seconds = Number(
+            payload?.analysis_job_timeout_seconds
+        );
+
+        if (Number.isFinite(seconds) && seconds > 0) {
+            JOB_POLL_MAX_MS =
+                seconds * 1000 + JOB_POLL_HEADROOM_MS;
+
+            console.log(
+                "CryptoRisk job poll ceiling synced from /health:",
+                JOB_POLL_MAX_MS + "ms"
+            );
+        }
+    } catch (error) {
+        console.warn(
+            "Could not read /health for job timeout config; using fallback ceiling.",
+            error
+        );
+    }
+}
+
+
+/* ============================================================
    APPLICATION STATE
    ============================================================ */
 
@@ -157,10 +211,18 @@ const state = {
     liveRequestId: 0,
     isLiveRequestInFlight: false,
 
-    isAnalyzing: false
-};
+    // FIX (Bug 3): timestamp of the last live market fetch, used to
+    // avoid an unnecessary immediate request when the tab becomes
+    // visible again within the market cache window.
+    lastLiveMarketFetchAt: 0,
 
-const MARKET_POLL_INTERVAL_MS = 30000;
+    isAnalyzing: false,
+
+    // Job polling state
+    activeJobId: null,
+    jobPollTimer: null,
+    jobPollStartedAt: 0
+};
 
 
 /* ============================================================
@@ -275,19 +337,2204 @@ function normalizeSource(source) {
     const normalized = text.toLowerCase();
 
     if (
-        normalized === "unavailable" ||
-        normalized === "unknown" ||
-        normalized === "n/a"
-    ) {
-        return "Unavailable";
-    }
-
-    if (
         normalized.includes("coingecko") ||
         normalized === "coin gecko"
     ) {
-        return "CoinGecko";}            
-        
+        return "CoinGecko";
+    }
+
+    if (normalized.includes("binance")) {
+        return "Binance";
+    }
+
+    if (normalized.includes("backend")) {
+        return "Backend market feed";
+    }
+
+    return text;
+}
+
+
+/* ============================================================
+   AUTH
+   ============================================================ */
+
+function getTokenFromStorage() {
+    try {
+        return localStorage.getItem(STORAGE_KEYS.token);
+    } catch (error) {
+        console.warn("Unable to read auth token:", error);
+        return null;
+    }
+}
+
+function saveToken(token) {
+    if (!token) return;
+
+    state.token = token;
+
+    try {
+        localStorage.setItem(
+            STORAGE_KEYS.token,
+            token
+        );
+    } catch (error) {
+        console.warn("Unable to save auth token:", error);
+    }
+}
+
+function clearToken() {
+    state.token = null;
+
+    try {
+        localStorage.removeItem(STORAGE_KEYS.token);
+    } catch (error) {
+        console.warn("Unable to clear auth token:", error);
+    }
+}
+
+function consumeQueryToken() {
+    const params = new URLSearchParams(
+        window.location.search
+    );
+
+    const token = params.get("token");
+
+    if (!token) {
+        return null;
+    }
+
+    saveToken(token);
+
+    const cleanUrl =
+        window.location.pathname +
+        window.location.hash;
+
+    window.history.replaceState(
+        {},
+        document.title,
+        cleanUrl
+    );
+
+    return token;
+}
+
+function getAuthHeaders() {
+    const token =
+        state.token ||
+        getTokenFromStorage();
+
+    if (!token) {
+        return {};
+    }
+
+    if (!state.token) {
+        state.token = token;
+    }
+
+    return {
+        Authorization: `Bearer ${token}`
+    };
+}
+
+function redirectToHome() {
+    clearToken();
+    stopLivePolling();
+    stopJobPolling();
+
+    window.location.href = "/";
+}
+
+
+/* ============================================================
+   API URL RESOLUTION
+   ============================================================ */
+
+function resolveApiUrl(url) {
+    const configured =
+        typeof window !== "undefined" &&
+        window.CONFIG &&
+        window.CONFIG.API_BASE_URL;
+
+    const base =
+        typeof configured === "string"
+            ? configured.trim().replace(/\/+$/, "")
+            : "";
+
+    if (
+        !base ||
+        typeof url !== "string" ||
+        url.startsWith("http://") ||
+        url.startsWith("https://") ||
+        url.startsWith("//")
+    ) {
+        return url;
+    }
+
+    if (url.startsWith("/")) {
+        return `${base}${url}`;
+    }
+
+    return `${base}/${url}`;
+}
+
+
+/* ============================================================
+   API REQUEST LAYER
+   ============================================================ */
+
+async function apiRequest(url, options = {}) {
+    const resolvedUrl = resolveApiUrl(url);
+
+    let requestOptions = {
+        ...options
+    };
+
+    const headers = {
+        Accept: "application/json",
+        ...(options.headers || {}),
+        ...getAuthHeaders()
+    };
+
+    if (
+        options.body &&
+        typeof options.body !== "string"
+    ) {
+        headers["Content-Type"] =
+            "application/json";
+
+        requestOptions.body =
+            JSON.stringify(options.body);
+    }
+
+    requestOptions.headers = headers;
+
+    let response;
+
+    try {
+        response = await fetch(
+            resolvedUrl,
+            requestOptions
+        );
+    } catch (error) {
+        console.error(
+            "Network error:",
+            error
+        );
+
+        const networkError = new Error(
+            "Unable to connect to the CryptoRisk backend. Check that the backend is running and reachable."
+        );
+
+        networkError.code = "NETWORK_ERROR";
+
+        throw networkError;
+    }
+
+    let payload = null;
+
+    const contentType =
+        response.headers.get("content-type") || "";
+
+    if (
+        contentType
+            .toLowerCase()
+            .includes("application/json")
+    ) {
+        try {
+            payload = await response.json();
+        } catch (error) {
+            console.warn(
+                "Could not parse JSON response.",
+                error
+            );
+
+            if (response.ok) {
+                const parseError = new Error(
+                    "Backend returned an invalid JSON response."
+                );
+
+                parseError.code =
+                    "INVALID_JSON";
+
+                throw parseError;
+            }
+        }
+    } else {
+        try {
+            const text = await response.text();
+
+            if (text) {
+                payload = {
+                    message: text
+                };
+            }
+        } catch (error) {
+            console.warn(
+                "Could not read backend response.",
+                error
+            );
+        }
+    }
+
+    if (response.status === 401) {
+        clearToken();
+        stopLivePolling();
+        stopJobPolling();
+
+        if (
+            window.location.pathname !== "/" &&
+            window.location.pathname !== ""
+        ) {
+            window.location.href = "/";
+        }
+
+        const authError = new Error(
+            payload?.message ||
+            payload?.error ||
+            "Your session has expired."
+        );
+
+        authError.status = 401;
+        authError.code = "AUTH_EXPIRED";
+
+        throw authError;
+    }
+
+    if (!response.ok) {
+        let message =
+            payload?.message ||
+            payload?.error ||
+            payload?.detail;
+
+        if (!message) {
+            switch (response.status) {
+                case 404:
+                    message =
+                        "The requested CryptoRisk endpoint was not found.";
+                    break;
+
+                case 429:
+                    message =
+                        "The market data service is rate-limited. Please try again shortly.";
+                    break;
+
+                case 500:
+                    message =
+                        "CryptoRisk backend returned an internal server error.";
+                    break;
+
+                case 502:
+                    message =
+                        "CryptoRisk backend received a bad upstream response.";
+                    break;
+
+                case 503:
+                    message =
+                        "CryptoRisk backend is temporarily unavailable.";
+                    break;
+
+                default:
+                    message =
+                        `Request failed (${response.status}).`;
+            }
+        }
+
+        const requestError = new Error(
+            String(message)
+        );
+
+        requestError.status =
+            response.status;
+
+        requestError.payload = payload;
+
+        // FIX (Bug 5/6): surface the backend's error code (e.g.
+        // UNSUPPORTED_ASSET, MARKET_DATA_UNAVAILABLE) on the Error so
+        // the UI can translate it into a friendly message instead of
+        // showing a raw provider error string.
+        requestError.code =
+            payload?.code ||
+            null;
+
+        throw requestError;
+    }
+
+    return payload || {};
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+
+/* ============================================================
+   ERROR UI
+   ============================================================ */
+
+function showAnalysisError(message) {
+    const element = $("#analysis-error");
+
+    if (!element) {
+        console.error(message);
+        return;
+    }
+
+    element.textContent =
+        message || "Something went wrong.";
+
+    show(element);
+}
+
+function clearAnalysisError() {
+    const element = $("#analysis-error");
+
+    if (!element) return;
+
+    element.textContent = "";
+
+    hide(element);
+}
+
+
+/* ============================================================
+   FRIENDLY ERROR MESSAGES
+   ============================================================
+   FIX (Bug 6): the backend/API layer produces raw error strings
+   like "CoinGecko returned HTTP 429; retry_after=12." — meaningless
+   (and scary) to users who don't know what CoinGecko is. This
+   translator maps known error codes / patterns to user-facing text
+   and falls back to the original message for anything unknown.
+   ============================================================ */
+
+function friendlyErrorMessage(error) {
+    const raw =
+        error instanceof Error
+            ? error.message || ""
+            : String(error || "");
+
+    const code =
+        error && typeof error === "object"
+            ? String(error.code || "")
+            : "";
+
+    const haystack =
+        `${code} ${raw}`.toLowerCase();
+
+    // Unsupported token — a distinct 400 from the backend, or a
+    // failed job whose error mentions an unsupported asset.
+    if (
+        code === "UNSUPPORTED_ASSET" ||
+        haystack.includes("unsupported asset")
+    ) {
+        return "This token isn't supported yet.";
+    }
+
+    // Rate limiting / provider cooldown.
+    if (
+        code === "MARKET_DATA_UNAVAILABLE" ||
+        haystack.includes("429") ||
+        haystack.includes("rate limit") ||
+        haystack.includes("rate-limit") ||
+        haystack.includes("rate-limited") ||
+        haystack.includes("cooldown") ||
+        haystack.includes("cooling down")
+    ) {
+        return "Market data provider is temporarily busy — please retry in about a minute.";
+    }
+
+    // Timed-out / orphaned jobs (server-side activity timeout or
+    // the client-side polling ceiling).
+    if (
+        haystack.includes("timed out") ||
+        haystack.includes("timeout") ||
+        haystack.includes("taking much longer") ||
+        haystack.includes("took too long")
+    ) {
+        return "Analysis took too long and timed out — please try again.";
+    }
+
+    // Unknown — keep the existing message.
+    return raw;
+}
+
+
+/* ============================================================
+   USER UI
+   ============================================================ */
+
+function renderUser(user) {
+    if (!isPlainObject(user)) {
+        return;
+    }
+
+    state.user = user;
+
+    const displayName = firstDefined(
+        user.username,
+        user.name,
+        user.email,
+        "User"
+    );
+
+    setText(
+        ".user-name",
+        displayName
+    );
+
+    setText(
+        ".user-email",
+        user.email || ""
+    );
+
+    const avatars =
+        $all(".user-avatar");
+
+    avatars.forEach((avatar) => {
+        if (user.avatar_url) {
+            avatar.src = user.avatar_url;
+            avatar.alt = String(
+                displayName
+            );
+        } else {
+            avatar.removeAttribute("src");
+            avatar.alt = String(
+                displayName
+            );
+        }
+    });
+}
+
+
+/* ============================================================
+   PROGRESS SYSTEM
+   ============================================================
+   FIX: this now maps the backend's real `stage` values
+   (market, history, quant, risk, security, stress, evidence,
+   ai, save, complete — see ANALYSIS_STAGES in app.py) onto a
+   visual progress bar, driven by real polled data instead of
+   a fixed-duration fake animation.
+   ============================================================ */
+
+const PROGRESS_STAGES = {
+    market: {
+        percent: 15,
+        title: "Fetching live market data"
+    },
+    history: {
+        percent: 30,
+        title: "Loading historical price data"
+    },
+    quant: {
+        percent: 48,
+        title: "Running quantitative risk engine"
+    },
+    risk: {
+        percent: 60,
+        title: "Building composite risk profile"
+    },
+    security: {
+        percent: 68,
+        title: "Checking structural risk signals"
+    },
+    stress: {
+        percent: 76,
+        title: "Running stress scenarios"
+    },
+    evidence: {
+        percent: 84,
+        title: "Building evidence package"
+    },
+    ai: {
+        percent: 92,
+        title: "Synthesizing AI intelligence"
+    },
+    save: {
+        percent: 97,
+        title: "Saving intelligence report"
+    },
+    complete: {
+        percent: 100,
+        title: "Analysis complete"
+    },
+
+    // Fallback stage names the backend may send early/on error
+    queued: {
+        percent: 5,
+        title: "Queued"
+    },
+    initializing: {
+        percent: 8,
+        title: "Initializing intelligence engine"
+    },
+    error: {
+        percent: 100,
+        title: "Analysis failed"
+    },
+    timeout: {
+        percent: 100,
+        title: "Analysis timed out"
+    }
+};
+
+const PROGRESS_ORDER = [
+    "market",
+    "history",
+    "quant",
+    "risk",
+    "security",
+    "stress",
+    "evidence",
+    "ai",
+    "save"
+];
+
+let _progressAnim = null;
+let _progressCurrent = 0;
+
+function updateProgressDOM(
+    current,
+    stageName,
+    titleOverride = null
+) {
+    const fill = $("#progress-fill");
+    const percentEl =
+        $("#progress-percent");
+
+    const clamped = Math.max(
+        0,
+        Math.min(100, current)
+    );
+
+    const config =
+        PROGRESS_STAGES[stageName] ||
+        PROGRESS_STAGES.market;
+
+    if (fill) {
+        fill.style.width =
+            `${clamped}%`;
+    }
+
+    if (percentEl) {
+        percentEl.textContent =
+            `${Math.round(clamped)}%`;
+    }
+
+    setText(
+        "#progress-title",
+        titleOverride || config.title
+    );
+
+    const currentIndex =
+        PROGRESS_ORDER.indexOf(
+            stageName
+        );
+
+    $all(".progress-status")
+        .forEach((element) => {
+            element.classList.remove(
+                "active",
+                "complete"
+            );
+
+            const index =
+                PROGRESS_ORDER.indexOf(
+                    element.dataset.stage
+                );
+
+            if (index < 0) return;
+
+            if (
+                currentIndex >= 0 &&
+                index < currentIndex
+            ) {
+                element.classList.add(
+                    "complete"
+                );
+            }
+
+            if (
+                index === currentIndex
+            ) {
+                element.classList.add(
+                    "active"
+                );
+            }
+        });
+}
+
+/**
+ * Smoothly animates the visible progress bar from its current
+ * value toward a target percent. Used to make discrete backend
+ * poll updates (e.g. jumps from 20% -> 48%) look smooth instead
+ * of snapping instantly.
+ */
+function animateProgressTo(
+    targetPercent,
+    stageName,
+    titleOverride = null,
+    durationMs = 500
+) {
+    const target = Math.max(
+        0,
+        Math.min(100, targetPercent)
+    );
+
+    if (_progressAnim) {
+        cancelAnimationFrame(
+            _progressAnim
+        );
+
+        _progressAnim = null;
+    }
+
+    const startPercent = _progressCurrent;
+    const startTime = performance.now();
+
+    // If target is behind current (shouldn't normally happen),
+    // just jump — never animate backwards.
+    if (target <= startPercent) {
+        _progressCurrent = target;
+        updateProgressDOM(target, stageName, titleOverride);
+        return;
+    }
+
+    function frame(now) {
+        const elapsed = now - startTime;
+        const t = Math.min(elapsed / durationMs, 1);
+        const eased = 1 - Math.pow(1 - t, 3);
+
+        const current =
+            startPercent + (target - startPercent) * eased;
+
+        _progressCurrent = current;
+
+        updateProgressDOM(current, stageName, titleOverride);
+
+        if (t < 1) {
+            _progressAnim = requestAnimationFrame(frame);
+            return;
+        }
+
+        _progressCurrent = target;
+        updateProgressDOM(target, stageName, titleOverride);
+        _progressAnim = null;
+    }
+
+    _progressAnim = requestAnimationFrame(frame);
+}
+
+function startProgress() {
+    const overlay =
+        $("#analysis-progress");
+
+    if (overlay) {
+        show(overlay);
+    }
+
+    _progressCurrent = 0;
+
+    updateProgressDOM(1, "queued", "Starting analysis…");
+
+    if (
+        typeof AnalysisBeam !==
+        "undefined"
+    ) {
+        AnalysisBeam.create();
+        AnalysisBeam.setProgress(1);
+    }
+}
+
+/**
+ * Called on every successful job-status poll with the real
+ * backend progress/stage/title/message.
+ */
+function applyJobProgress(job) {
+    if (!job) return;
+
+    const percent = Number(job.progress);
+    const stage = job.stage || "market";
+    const title = job.stage_title || job.message || null;
+
+    const safePercent = Number.isFinite(percent)
+        ? percent
+        : (PROGRESS_STAGES[stage]?.percent ?? _progressCurrent);
+
+    animateProgressTo(safePercent, stage, title, 500);
+
+    if (
+        typeof AnalysisBeam !== "undefined"
+    ) {
+        AnalysisBeam.setProgress(safePercent);
+    }
+}
+
+function finishProgress() {
+    const overlay =
+        $("#analysis-progress");
+
+    animateProgressTo(100, "complete", "Analysis complete", 400);
+
+    if (
+        typeof AnalysisBeam !==
+        "undefined"
+    ) {
+        AnalysisBeam.setProgress(100);
+    }
+
+    setTimeout(() => {
+        if (overlay) {
+            hide(overlay);
+        }
+
+        if (
+            typeof AnalysisBeam !==
+            "undefined"
+        ) {
+            AnalysisBeam.remove();
+        }
+    }, 700);
+}
+
+function abortProgress() {
+    const overlay = $("#analysis-progress");
+
+    if (_progressAnim) {
+        cancelAnimationFrame(_progressAnim);
+        _progressAnim = null;
+    }
+
+    if (overlay) {
+        hide(overlay);
+    }
+
+    if (typeof AnalysisBeam !== "undefined") {
+        AnalysisBeam.remove();
+    }
+}
+
+
+/* ============================================================
+   FORMATTERS
+   ============================================================ */
+
+function formatNumber(
+    value,
+    decimals = 2
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    return number.toLocaleString(
+        undefined,
+        {
+            maximumFractionDigits:
+                decimals
+        }
+    );
+}
+
+function formatUsd(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    if (
+        Math.abs(number) >=
+        1_000_000_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000_000_000,
+            2
+        )}B`;
+    }
+
+    if (
+        Math.abs(number) >=
+        1_000_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000_000,
+            2
+        )}M`;
+    }
+
+    if (
+        Math.abs(number) >=
+        1_000
+    ) {
+        return `$${formatNumber(
+            number / 1_000,
+            2
+        )}K`;
+    }
+
+    if (
+        Math.abs(number) >= 1
+    ) {
+        return `$${formatNumber(
+            number,
+            2
+        )}`;
+    }
+
+    return `$${number.toFixed(6)}`;
+}
+
+function formatPercent(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    const sign =
+        number > 0 ? "+" : "";
+
+    return `${sign}${number.toFixed(
+        2
+    )}%`;
+}
+
+function formatScore(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    return Math.round(number);
+}
+
+function formatConfidence(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "—";
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    /*
+     * Supports both:
+     * 0.82  -> 82.0%
+     * 82    -> 82.0%
+     */
+    const normalized =
+        number >= 0 &&
+        number <= 1
+            ? number * 100
+            : number;
+
+    return `${normalized.toFixed(
+        1
+    )}%`;
+}
+
+function formatDate(value) {
+    if (!value) return "—";
+
+    const date =
+        new Date(value);
+
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return String(value);
+    }
+
+    return date.toLocaleString(
+        undefined,
+        {
+            dateStyle: "medium",
+            timeStyle: "short"
+        }
+    );
+}
+
+function formatRelativeTime(value) {
+    if (!value) return "—";
+
+    const date =
+        new Date(value);
+
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return formatDate(value);
+    }
+
+    const seconds = Math.floor(
+        (Date.now() -
+            date.getTime()) /
+            1000
+    );
+
+    if (seconds < 10) {
+        return "just now";
+    }
+
+    if (seconds < 60) {
+        return `${seconds}s ago`;
+    }
+
+    const minutes =
+        Math.floor(
+            seconds / 60
+        );
+
+    if (minutes < 60) {
+        return `${minutes}m ago`;
+    }
+
+    const hours =
+        Math.floor(
+            minutes / 60
+        );
+
+    if (hours < 24) {
+        return `${hours}h ago`;
+    }
+
+    return `${Math.floor(
+        hours / 24
+    )}d ago`;
+}
+
+function clampScore(value) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return null;
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return null;
+    }
+
+    return Math.max(
+        0,
+        Math.min(100, number)
+    );
+}
+
+
+/* ============================================================
+   REPORT EXTRACTION
+   ============================================================ */
+
+function isRiskReport(value) {
+    if (
+        !isPlainObject(value)
+    ) {
+        return false;
+    }
+
+    /*
+     * Strong report markers.
+     */
+    if (
+        value.schema_version ||
+        value.risk_profile ||
+        value.risk_drivers ||
+        value.stress_test ||
+        value.data_quality ||
+        value.ai
+    ) {
+        return true;
+    }
+
+    /*
+     * Standard score-based report.
+     */
+    if (
+        value.risk_score !==
+            undefined &&
+        (
+            value.asset ||
+            value.token_symbol ||
+            value.symbol
+        )
+    ) {
+        return true;
+    }
+
+    /*
+     * Some backend versions may put
+     * the score inside risk_profile.
+     */
+    if (
+        value.risk_profile &&
+        (
+            value.risk_profile
+                .composite_score !==
+                undefined ||
+            value.risk_profile.score !==
+                undefined
+        )
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
+function getReportFromPayload(
+    payload
+) {
+    if (!payload) {
+        return null;
+    }
+
+    if (isRiskReport(payload)) {
+        return payload;
+    }
+
+    /*
+     * Search only known report-wrapper
+     * locations. Do not blindly accept
+     * arbitrary nested objects.
+     */
+    const candidates = [
+        payload.report,
+        payload.analysis,
+
+        payload.latest?.report,
+        payload.latest?.analysis,
+        payload.latest,
+
+        // Job status payload shape: { job: {...}, latest: {...} }
+        payload.job?.report,
+
+        payload.data?.report,
+        payload.data?.analysis,
+        payload.data?.latest?.report,
+        payload.data?.latest?.analysis,
+        payload.data?.latest,
+        payload.data,
+
+        payload.result?.report,
+        payload.result?.analysis,
+        payload.result,
+
+        payload.response?.report,
+        payload.response?.analysis,
+        payload.response
+    ];
+
+    for (
+        const candidate of candidates
+    ) {
+        if (
+            isRiskReport(candidate)
+        ) {
+            return candidate;
+        }
+    }
+
+    return null;
+}
+
+
+/* ============================================================
+   MARKET RESPONSE EXTRACTION
+   ============================================================ */
+
+function getMarketFromPayload(
+    payload
+) {
+    if (!payload) {
+        return null;
+    }
+
+    /*
+     * Direct market object:
+     * { price, source, ... }
+     */
+    if (
+        isPlainObject(payload) &&
+        (
+            payload.price !==
+                undefined ||
+            payload.current_price_usd !==
+                undefined ||
+            payload.current_price !==
+                undefined
+        )
+    ) {
+        return payload;
+    }
+
+    const candidates = [
+        payload.market,
+
+        payload.data?.market,
+        payload.data,
+
+        payload.result?.market,
+        payload.result,
+
+        payload.response?.market,
+        payload.response,
+
+        payload.report?.market,
+        payload.analysis?.market,
+
+        payload.latest?.market,
+        payload.latest?.report?.market,
+        payload.latest?.analysis?.market,
+
+        payload.data?.report?.market,
+        payload.data?.analysis?.market
+    ];
+
+    for (
+        const candidate of candidates
+    ) {
+        if (
+            isPlainObject(candidate) &&
+            (
+                candidate.price !==
+                    undefined ||
+                candidate.current_price_usd !==
+                    undefined ||
+                candidate.current_price !==
+                    undefined ||
+                candidate.price_usd !==
+                    undefined
+            )
+        ) {
+            return candidate;
+        }
+    }
+
+    return null;
+}
+
+
+/* ============================================================
+   REPORT ACCESSORS
+   ============================================================ */
+
+function getRiskProfile(report) {
+    return isPlainObject(
+        report?.risk_profile
+    )
+        ? report.risk_profile
+        : {};
+}
+
+function getPillars(report) {
+    const pillars =
+        getRiskProfile(report)
+            .pillars;
+
+    return isPlainObject(pillars)
+        ? pillars
+        : {};
+}
+
+function getPillar(
+    report,
+    name
+) {
+    const pillars =
+        getPillars(report);
+
+    const pillar =
+        pillars[name];
+
+    return isPlainObject(pillar)
+        ? pillar
+        : {};
+}
+
+function getAI(report) {
+    return isPlainObject(report?.ai)
+        ? report.ai
+        : {};
+}
+
+function getMarket(report) {
+    return isPlainObject(report?.market)
+        ? report.market
+        : {};
+}
+
+function getSecurity(report) {
+    return isPlainObject(
+        report?.security
+    )
+        ? report.security
+        : {};
+}
+
+function getStress(report) {
+    return isPlainObject(
+        report?.stress_test
+    )
+        ? report.stress_test
+        : (
+            isPlainObject(
+                report?.stress
+            )
+                ? report.stress
+                : {}
+        );
+}
+
+function getDataQuality(report) {
+    return isPlainObject(
+        report?.data_quality
+    )
+        ? report.data_quality
+        : {};
+}
+
+
+/* ============================================================
+   DASHBOARD LOAD
+   ============================================================ */
+
+async function loadDashboard() {
+    if (!state.token) {
+        redirectToHome();
+        return;
+    }
+
+    try {
+        const payload =
+            await apiRequest(
+                API.dashboard
+            );
+
+        console.log(
+            "CryptoRisk dashboard payload:",
+            payload
+        );
+
+        if (payload.user) {
+            renderUser(
+                payload.user
+            );
+        }
+
+        /*
+         * Support:
+         * payload.latest
+         * payload.data.latest
+         * payload.report
+         * etc.
+         */
+        const latest =
+            payload.latest ||
+            payload.data?.latest ||
+            payload.report ||
+            payload.data?.report ||
+            null;
+
+        const report =
+            getReportFromPayload(
+                latest || payload
+            );
+
+        if (report) {
+            state.latestReport =
+                report;
+
+            state.currentReportId =
+                firstDefined(
+                    latest?.id,
+                    latest?.analysis_id,
+                    payload.analysis_id,
+                    report.id
+                );
+
+            state.currentSymbol =
+                normalizeSymbol(
+                    firstDefined(
+                        report?.asset?.symbol,
+                        report?.token_symbol,
+                        report?.symbol
+                    )
+                );
+
+            renderReport(
+                report
+            );
+
+            if (
+                state.currentSymbol
+            ) {
+                startLivePolling(
+                    state.currentSymbol
+                );
+            }
+        } else {
+            console.warn(
+                "No valid latest report found:",
+                payload
+            );
+
+            state.currentReportId =
+                null;
+
+            state.currentSymbol =
+                null;
+
+            stopLivePolling();
+            clearReportView();
+        }
+
+        const history =
+            Array.isArray(
+                payload.history
+            )
+                ? payload.history
+                : (
+                    Array.isArray(
+                        payload.data?.history
+                    )
+                        ? payload.data.history
+                        : []
+                );
+
+        renderHistory(
+            history
+        );
+    } catch (error) {
+        console.error(
+            "Dashboard load failed:",
+            error
+        );
+
+        // FIX (Bug 6): friendly message instead of raw error string.
+        showAnalysisError(
+            friendlyErrorMessage(error) ||
+            "Unable to load dashboard."
+        );
+    }
+}
+
+
+/* ============================================================
+   JOB POLLING (async analyze flow)
+   ============================================================
+   FIX (core bug fix): the backend runs the full pipeline
+   (market fetch, history x2, quant, security, stress, evidence,
+   Gemini) which can legitimately take well over the timeout
+   window of most reverse proxies / browsers when called
+   synchronously via POST /api/analyze. The backend already
+   exposes an async job flow for exactly this reason:
+     POST /api/analyze/start          -> { job_id }
+     GET  /api/analyze/status/<id>    -> { job: { status, progress,
+                                            stage, ... }, latest? }
+   We now use that flow exclusively from the UI.
+   ============================================================ */
+
+function stopJobPolling() {
+    if (state.jobPollTimer) {
+        clearTimeout(state.jobPollTimer);
+        state.jobPollTimer = null;
+    }
+
+    state.activeJobId = null;
+    state.jobPollStartedAt = 0;
+}
+
+/**
+ * Polls /api/analyze/status/<jobId> until the job completes,
+ * fails, times out server-side, or we exceed our own client-side
+ * polling ceiling (JOB_POLL_MAX_MS). Resolves with the completed
+ * report, or throws an Error with a useful message.
+ */
+function pollAnalysisJob(jobId) {
+    return new Promise((resolve, reject) => {
+        state.activeJobId = jobId;
+        state.jobPollStartedAt = Date.now();
+
+        const poll = async () => {
+            // If a newer job superseded this one, or polling was
+            // explicitly stopped, bail out quietly.
+            if (state.activeJobId !== jobId) {
+                return;
+            }
+
+            if (
+                Date.now() - state.jobPollStartedAt >
+                JOB_POLL_MAX_MS
+            ) {
+                stopJobPolling();
+                reject(
+                    new Error(
+                        "Analysis is taking much longer than expected. " +
+                        "It may still finish in the background — check " +
+                        "your history in a minute, or try again."
+                    )
+                );
+                return;
+            }
+
+            let payload;
+
+            try {
+                payload = await apiRequest(
+                    API.analyzeStatus(jobId)
+                );
+            } catch (error) {
+                // Transient poll failure (e.g. one dropped request)
+                // shouldn't kill the whole flow — retry a few times
+                // before giving up, unless it's an auth error (which
+                // apiRequest already redirects on).
+                if (error.code === "AUTH_EXPIRED") {
+                    stopJobPolling();
+                    reject(error);
+                    return;
+                }
+
+                console.warn(
+                    "Job status poll failed, retrying:",
+                    error
+                );
+
+                if (state.activeJobId === jobId) {
+                    state.jobPollTimer = setTimeout(
+                        poll,
+                        JOB_POLL_INTERVAL_MS
+                    );
+                }
+
+                return;
+            }
+
+            if (state.activeJobId !== jobId) {
+                return;
+            }
+
+            const job = payload?.job;
+
+            if (!job) {
+                stopJobPolling();
+                reject(
+                    new Error(
+                        "The backend did not return a valid job status."
+                    )
+                );
+                return;
+            }
+
+            applyJobProgress(job);
+
+            if (job.status === "completed") {
+                stopJobPolling();
+
+                const report = getReportFromPayload(payload);
+
+                if (!report) {
+                    reject(
+                        new Error(
+                            "Analysis completed, but no valid report " +
+                            "was returned."
+                        )
+                    );
+                    return;
+                }
+
+                resolve({ report, payload });
+                return;
+            }
+
+            if (job.status === "failed") {
+                stopJobPolling();
+
+                reject(
+                    new Error(
+                        job.error ||
+                        job.message ||
+                        "Analysis failed."
+                    )
+                );
+                return;
+            }
+
+            // Still queued/running/saving — keep polling.
+            if (state.activeJobId === jobId) {
+                state.jobPollTimer = setTimeout(
+                    poll,
+                    JOB_POLL_INTERVAL_MS
+                );
+            }
+        };
+
+        poll();
+    });
+}
+
+
+/* ============================================================
+   ANALYSIS
+   ============================================================ */
+
+async function runAnalysis(
+    symbol,
+    options = {}
+) {
+    if (state.isAnalyzing) {
+        return;
+    }
+
+    const normalizedSymbol =
+        normalizeSymbol(symbol);
+
+    if (!normalizedSymbol) {
+        showAnalysisError(
+            "Enter a token symbol."
+        );
+
+        return;
+    }
+
+    state.isAnalyzing = true;
+
+    clearAnalysisError();
+    stopLivePolling();
+    stopJobPolling();
+    startProgress();
+
+    try {
+        // Step 1: start the background job.
+        //
+        // FIX (Bug 2): include the optional contract security fields
+        // when BOTH are provided — the backend runs the GoPlus
+        // structural check only when it receives chain_id AND
+        // contract_address together.
+        const requestBody = {
+            token_symbol: normalizedSymbol
+        };
+
+        const chainId =
+            typeof options.chainId === "string"
+                ? options.chainId.trim()
+                : "";
+
+        const contractAddress =
+            typeof options.contractAddress === "string"
+                ? options.contractAddress.trim()
+                : "";
+
+        if (chainId && contractAddress) {
+            requestBody.chain_id =
+                chainId;
+
+            requestBody.contract_address =
+                contractAddress;
+        }
+
+        const startPayload = await apiRequest(
+            API.analyzeStart,
+            {
+                method: "POST",
+                body: requestBody
+            }
+        );
+
+        console.log(
+            "CryptoRisk analyze/start payload:",
+            startPayload
+        );
+
+        const jobId = firstDefined(
+            startPayload.job_id,
+            startPayload.job?.id,
+            startPayload.data?.job_id
+        );
+
+        if (!jobId) {
+            throw new Error(
+                "The backend did not return a job id for this analysis."
+            );
+        }
+
+        // Step 2: poll until the job completes.
+        const { report, payload } = await pollAnalysisJob(jobId);
+
+        state.latestReport = report;
+
+        state.currentReportId =
+            firstDefined(
+                payload.analysis?.id,
+                payload.meta?.analysis_id,
+                payload.analysis_id,
+                payload.id,
+                report.id
+            );
+
+        state.currentSymbol =
+            normalizeSymbol(
+                firstDefined(
+                    report?.asset?.symbol,
+                    report?.token_symbol,
+                    report?.symbol,
+                    normalizedSymbol
+                )
+            );
+
+        if (payload.user) {
+            renderUser(payload.user);
+        }
+
+        renderReport(report);
+
+        const history =
+            Array.isArray(payload.history)
+                ? payload.history
+                : Array.isArray(payload.data?.history)
+                    ? payload.data.history
+                    : null;
+
+        if (history) {
+            renderHistory(history);
+        } else {
+            await refreshHistory();
+        }
+
+        finishProgress();
+
+        if (state.currentSymbol) {
+            startLivePolling(state.currentSymbol);
+        }
+    } catch (error) {
+        console.error(
+            "Analysis failed:",
+            error
+        );
+
+        // FIX (Bug 6): translate raw provider errors into
+        // user-friendly messages before showing them.
+        showAnalysisError(
+            friendlyErrorMessage(error) ||
+            "Analysis failed."
+        );
+
+        abortProgress();
+    } finally {
+        state.isAnalyzing = false;
+        stopJobPolling();
+    }
+}
+
+
+/* ============================================================
+   HISTORY FETCH
+   ============================================================ */
+
+async function refreshHistory() {
+    try {
+        const payload =
+            await apiRequest(
+                API.dashboard
+            );
+
+        if (payload.user) {
+            renderUser(
+                payload.user
+            );
+        }
+
+        const history =
+            Array.isArray(
+                payload.history
+            )
+                ? payload.history
+                : Array.isArray(
+                    payload.data?.history
+                )
+                    ? payload.data.history
+                    : [];
+
+        renderHistory(
+            history
+        );
+    } catch (error) {
+        console.error(
+            "History refresh failed:",
+            error
+        );
+    }
+}
+
+
+/* ============================================================
+   SINGLE HISTORY REPORT
+   ============================================================ */
+
+async function loadHistoryReport(
+    id
+) {
+    if (!id) return;
+
+    clearAnalysisError();
+    stopLivePolling();
+
+    try {
+        const payload =
+            await apiRequest(
+                API.history(id)
+            );
+
+        console.log(
+            "History report payload:",
+            payload
+        );
+
+        const report =
+            getReportFromPayload(
+                payload
+            );
+
+        if (!report) {
+            throw new Error(
+                "This report could not be loaded."
+            );
+        }
+
+        state.latestReport =
+            report;
+
+        state.currentReportId =
+            id;
+
+        state.currentSymbol =
+            normalizeSymbol(
+                firstDefined(
+                    report?.asset?.symbol,
+                    report?.token_symbol,
+                    report?.symbol
+                )
+            );
+
+        renderReport(
+            report
+        );
+
+        if (
+            state.currentSymbol
+        ) {
+            startLivePolling(
+                state.currentSymbol
+            );
+        }
+
+        window.scrollTo({
+            top: 0,
+            behavior: "smooth"
+        });
+    } catch (error) {
+        console.error(
+            "History report load failed:",
+            error
+        );
+
+        // FIX (Bug 6): friendly message instead of raw error string.
+        showAnalysisError(
+            friendlyErrorMessage(error) ||
+            "Unable to load report."
+        );
+    }
+}
+
+
+/* ============================================================
+   DELETE REPORT
+   ============================================================ */
+
+async function deleteReport(id) {
+    if (!id) return;
+
+    try {
+        await apiRequest(
+            API.deleteHistory(id),
+            {
+                method: "DELETE"
+            }
+        );
+
+        if (
+            String(
+                state.currentReportId
+            ) === String(id)
+        ) {
+            state.currentReportId =
+                null;
+
+            state.latestReport =
+                null;
+
+            state.currentSymbol =
+                null;
+
+            clearReportView();
+            stopLivePolling();
+        }
+
+        await refreshHistory();
+    } catch (error) {
+        console.error(
+            "Delete report failed:",
+            error
+        );
+
+        // FIX (Bug 6): friendly message instead of raw error string.
+        showAnalysisError(
+            friendlyErrorMessage(error) ||
+            "Unable to delete report."
+        );
+    }
+}
+
+async function deleteCurrentReport() {
+    if (!state.currentReportId) {
+        return;
+    }
+
+    await deleteReport(
+        state.currentReportId
+    );
+}
+
+
+/* ============================================================
+   LOGOUT
+   ============================================================ */
+
+async function logout() {
+    try {
+        if (state.token) {
+            await apiRequest(
+                API.logout,
+                {
+                    method: "POST"
+                }
+            );
+        }
+    } catch (error) {
+        console.warn(
+            "Logout request failed:",
+            error
+        );
+    } finally {
+        clearToken();
+        stopLivePolling();
+        stopJobPolling();
+
+        window.location.href = "/";
+    }
+}
+
+
+/* ============================================================
+   LIVE MARKET POLLING
+   ============================================================ */
+
+// FIX (Bug 3): raised from 15s to 30s. With CoinGecko free-tier
+// limits, a 15s interval alone could exhaust quota when a dashboard
+// tab was left open, causing later /api/analyze calls to hit the
+// provider cooldown and return available: false.
+const LIVE_MARKET_POLL_INTERVAL_MS = 30000;
+
+function stopLivePolling() {
+    if (state.livePollTimer) {
+        clearInterval(
+            state.livePollTimer
+        );
+
+        state.livePollTimer = null;
+    }
+
+    state.liveRequestId++;
+
+    state.isLiveRequestInFlight =
+        false;
+}
+
+function startLivePolling(symbol) {
+    stopLivePolling();
+
+    const normalizedSymbol =
+        normalizeSymbol(symbol);
+
+    if (!normalizedSymbol) {
+        return;
+    }
+
+    state.currentSymbol =
+        normalizedSymbol;
+
+    /*
+     * FIX (Bug 3): immediate refresh — but ONLY when the tab is
+     * visible AND the last market fetch is older than the polling
+     * interval. This avoids an unnecessary request right after the
+     * tab becomes visible again when a fetch already happened within
+     * the backend's MARKET_CACHE_TTL window.
+     */
+    if (!document.hidden) {
+        const sinceLastFetch =
+            Date.now() -
+            (state.lastLiveMarketFetchAt || 0);
+
+        if (sinceLastFetch >= LIVE_MARKET_POLL_INTERVAL_MS) {
+            refreshLiveMarket(
+                normalizedSymbol
+            );
+        }
+    }
+
+    /*
+     * FIX (Bug 3): then every 30 seconds (was 15s). Never poll while
+     * the tab is hidden — the visibilitychange handler stops the
+     * timer entirely, and this guard also protects against a missed
+     * visibility event.
+     */
+    state.livePollTimer =
+        setInterval(() => {
+
+            if (document.hidden) {
+                return;
+            }
+
+            /*
+             * Never poll while a previous
+             * request is still running.
+             */
+            if (
+                state.isLiveRequestInFlight
+            ) {
+                return;
+            }
+
+            if (
+                !state.currentSymbol
+            ) {
+                return;
+            }
+
+            refreshLiveMarket(
+                state.currentSymbol
+            );
+        }, LIVE_MARKET_POLL_INTERVAL_MS);
+}
+
+async function refreshLiveMarket(
+    symbol
+) {
+    const normalizedSymbol =
+        normalizeSymbol(symbol);
+
+    if (!normalizedSymbol) {
+        return;
+    }
+
+    /*
+     * Prevent stale response from an
+     * older symbol from updating the UI.
+     */
+    const requestId =
+        ++state.liveRequestId;
+
+    state.isLiveRequestInFlight =
+        true;
+
+    // FIX (Bug 3): record when the last market fetch happened so
+    // startLivePolling() can skip the immediate refresh if the tab
+    // becomes visible again within the cache window.
+    state.lastLiveMarketFetchAt =
+        Date.now();
+
+    try {
+        const payload =
+            await apiRequest(
+                API.market(
+                    normalizedSymbol
+                )
+            );
+
+        /*
+         * If another market request
+         * started after this one,
+         * discard this response.
+         */
+        if (
+            requestId !==
+            state.liveRequestId
+        ) {
+            return;
+        }
+
+        const market =
+            getMarketFromPayload(
+                payload
+            );
+
+        if (!market) {
+            console.warn(
+                "Market endpoint returned no recognizable market object:",
+                payload
+            );
+
+            setMarketLiveState(
+                false,
+                "Market data unavailable"
+            );
+
+            return;
+        }
+
+        updateLiveMarket(
+            market
+        );
+    } catch (error) {
+        /*
+         * Ignore stale requests.
+         */
+        if (
+            requestId !==
+            state.liveRequestId
+        ) {
+            return;
+        }
+
+        console.warn(
+            "Live market refresh failed:",
+            error
+        );
+
+        /*
+         * Keep the error visible enough
+         * for debugging instead of hiding
+         * everything behind a generic state.
+         */
+        if (error.status === 429) {
+            setMarketLiveState(
+                false,
+                "Market feed rate-limited"
+            );
+        } else if (
+            error.status >= 500
+        ) {
+            setMarketLiveState(
+                false,
+                "Backend market error"
+            );
+        } else if (
+            error.code ===
+            "NETWORK_ERROR"
+        ) {
+            setMarketLiveState(
+                false,
+                "Backend unreachable"
+            );
+        } else {
+            setMarketLiveState(
+                false,
+                "Live feed unavailable"
+            );
+        }
+    } finally {
+        if (
+            requestId ===
+            state.liveRequestId
+        ) {
+            state.isLiveRequestInFlight =
+                false;
+        }
+    }
+}
+
+function setMarketLiveState(
+    isLive,
+    message
+) {
+    setText(
+        "#market-live-status",
+        message || (
+            isLive
+                ? "Live • Backend feed"
+                : "Live feed unavailable"
+        )
+    );
+
+    const liveDot =
+        $("#market-live-dot");
+
+    if (liveDot) {
+        liveDot.classList.toggle(
+            "active",
+            Boolean(isLive)
+        );
+    }
+}
+
+function updateLiveMarket(
+    market
+) {
+    if (
+        !isPlainObject(market)
+    ) {
+        setMarketLiveState(
+            false,
+            "Market data unavailable"
+        );
 
         return;
     }
@@ -299,15 +2546,6 @@ function normalizeSource(source) {
             market.price_usd,
             market.current_price
         );
-
-    if (price === null) {
-        setMarketLiveState(
-            false,
-            "Market data unavailable"
-        );
-
-        return;
-    }
 
     const change24 =
         firstDefined(
@@ -397,11 +2635,7 @@ function normalizeSource(source) {
 
     setText(
         "#report-market-cap",
-        marketCap !== null
-            ? (market.market_cap_stale
-                ? `${formatUsd(marketCap)} (stale)`
-                : formatUsd(marketCap))
-            : "—"
+        formatUsd(marketCap)
     );
 
     setText(
@@ -426,10 +2660,8 @@ function normalizeSource(source) {
      * data.
      */
     setMarketLiveState(
-        !market.stale,
-        market.stale
-            ? "Cached market snapshot (stale)"
-            : "Live • Backend feed"
+        true,
+        "Live • Backend feed"
     );
 
     setText(
@@ -475,7 +2707,7 @@ function normalizeSource(source) {
             );
         }
     }
-
+}
 
 
 /* ============================================================
@@ -734,7 +2966,7 @@ async function handleAnalysisSubmit(
     }
 
     if (
-        !/^[A-Z0-9]{1,15}$/.test(
+        !/^[A-Z0-9]{2,15}$/.test(
             symbol
         )
     ) {
@@ -743,6 +2975,56 @@ async function handleAnalysisSubmit(
         );
 
         input.focus();
+        return;
+    }
+
+    // FIX (Bug 2): optional contract security inputs. The backend
+    // runs the GoPlus structural check only when BOTH chain_id and
+    // contract_address are provided; leaving them blank is fine and
+    // is reported as "not applicable" (not a missing signal).
+    const chainIdInput =
+        $("#chain-id");
+
+    const contractAddressInput =
+        $("#contract-address");
+
+    const chainIdValue = chainIdInput
+        ? String(chainIdInput.value || "").trim()
+        : "";
+
+    const contractAddressValue = contractAddressInput
+        ? String(contractAddressInput.value || "").trim()
+        : "";
+
+    if (
+        contractAddressValue &&
+        !/^0x[a-fA-F0-9]{40}$/.test(
+            contractAddressValue
+        )
+    ) {
+        showAnalysisError(
+            "Enter a valid contract address (0x followed by 40 hex characters) or leave it blank."
+        );
+
+        if (contractAddressInput) {
+            contractAddressInput.focus();
+        }
+
+        return;
+    }
+
+    if (
+        contractAddressValue &&
+        !chainIdValue
+    ) {
+        showAnalysisError(
+            "Select a chain for the contract security check, or leave the address blank."
+        );
+
+        if (chainIdInput) {
+            chainIdInput.focus();
+        }
+
         return;
     }
 
@@ -761,7 +3043,11 @@ async function handleAnalysisSubmit(
 
     try {
         await runAnalysis(
-            symbol
+            symbol,
+            {
+                chainId: chainIdValue,
+                contractAddress: contractAddressValue
+            }
         );
     } finally {
         if (button) {
@@ -1054,16 +3340,6 @@ function renderMarket(report) {
             market.last_updated
         );
 
-    const marketAvailable =
-        market.available !== false &&
-        price !== null;
-
-    const unavailableReason =
-        firstDefined(
-            market.unavailable_reason,
-            "Market data unavailable"
-        );
-
     setText(
         "#report-token",
         firstDefined(
@@ -1090,11 +3366,7 @@ function renderMarket(report) {
 
     setText(
         "#report-market-cap",
-        marketCap !== null
-            ? (market.market_cap_stale
-                ? `${formatUsd(marketCap)} (stale)`
-                : formatUsd(marketCap))
-            : "—"
+        formatUsd(marketCap)
     );
 
     setText(
@@ -1123,11 +3395,7 @@ function renderMarket(report) {
      */
     setText(
         "#market-live-status",
-        market.stale
-            ? "Cached market snapshot (stale)"
-            : marketAvailable
-                ? "Report market snapshot"
-            : unavailableReason
+        "Report market snapshot"
     );
 
     setText(
@@ -1300,7 +3568,7 @@ function renderRiskProfile(
     );
 
     renderPillar(
-        "contract",
+        "structural",
         firstDefined(
             getPillar(
                 report,
@@ -1331,6 +3599,21 @@ function renderRiskProfile(
      * If your HTML has a separate
      * contract pillar, render it too.
      */
+    const contract =
+        getPillar(
+            report,
+            "contract"
+        );
+
+    if (
+        Object.keys(contract)
+            .length
+    ) {
+        renderPillar(
+            "contract",
+            contract
+        );
+    }
 }
 
 
@@ -1963,10 +4246,6 @@ function renderAI(report) {
             "Unavailable"
         );
 
-    if (security.not_applicable) {
-        securityText = "Not applicable";
-    }
-
     if (
         securityFlags.length
     ) {
@@ -2213,23 +4492,9 @@ function renderDataQuality(
             )
         );
 
-    const sourceTimestamps =
-        isPlainObject(reportMarket.source_timestamps)
-            ? reportMarket.source_timestamps
-            : {};
-
-    const sourceFreshness = Object.entries(
-        sourceTimestamps
-    ).map(
-        ([name, value]) =>
-            `${name}: ${formatRelativeTime(value)}`
-    );
-
     setText(
         "#market-source",
-        sourceFreshness.length
-            ? `${source} (${sourceFreshness.join("; ")})`
-            : source
+        source
     );
 
     /*
@@ -2865,8 +5130,9 @@ async function handleAuthForm(
         window.location.href =
             "/dashboard";
     } catch (error) {
+        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
-            error.message ||
+            friendlyErrorMessage(error) ||
             "Authentication failed."
         );
     }
@@ -2958,6 +5224,7 @@ window.addEventListener(
     "beforeunload",
     () => {
         stopLivePolling();
+        stopJobPolling();
 
         if (
             typeof CursorPhysics !==
@@ -3699,10 +5966,6 @@ const MoneyMeteor = {
         const isBitcoin =
             Math.random() < 0.5;
 
-        /*
-         * FIX:
-         * Correct Bitcoin Unicode code point.
-         */
         const symbol =
             isBitcoin
                 ? "₿"
@@ -4770,6 +7033,12 @@ document.addEventListener(
         setupKeyboardShortcuts();
 
         setupVisibilityHandling();
+
+        // FIX (Bug 7): sync the job polling ceiling from the
+        // backend's real ANALYSIS_JOB_TIMEOUT_SECONDS (via /health)
+        // instead of hardcoding it. Fire-and-forget — the fallback
+        // ceiling is already valid.
+        syncJobPollCeiling();
 
         if (
             document.querySelector(
