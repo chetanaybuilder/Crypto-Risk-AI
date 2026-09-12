@@ -14,72 +14,62 @@
 ============================================================ */
 
 :root {
-    /* === GOTHIC VOID BACKGROUNDS === */
-    --bg-void: #030408;
-    --bg-deep: #070810;
-    --bg-panel: #0a0c18;
-    --bg-panel-2: #0e1020;
-    --bg-charcoal: #11131f;
-    --bg-ash: #1a1c2e;
+    /* === HEIST NOIR BACKGROUNDS === */
+    --bg-void: #0a0a0a;
+    --bg-deep: #0f1011;
+    --bg-panel: #131517;
+    --bg-panel-2: #181a1d;
+    --bg-charcoal: #1f2125;
+    --bg-ash: #2a2d33;
 
-    /* === GLASS MORPHISM LAYERS === */
-    --glass: rgba(255, 255, 255, 0.025);
+    /* === FROSTED GLASS LAYERS === */
+    --glass: rgba(255, 255, 255, 0.02);
     --glass-strong: rgba(255, 255, 255, 0.05);
-    --glass-border: rgba(139, 92, 246, 0.12);
-    --glass-border-strong: rgba(139, 92, 246, 0.25);
-    --glass-gothic: rgba(10, 8, 20, 0.65);
+    --glass-border: rgba(0, 255, 102, 0.15);
+    --glass-border-strong: rgba(0, 255, 102, 0.35);
+    --glass-gothic: rgba(10, 11, 13, 0.75);
 
-    /* === PHANTOM VIOLETS === */
-    --phantom-violet: #7c3aed;
-    --phantom-violet-light: #a78bfa;
-    --phantom-violet-dark: #4c1d95;
-    --phantom-glow: rgba(124, 58, 237, 0.4);
+    /* === CASH GREEN === */
+    --phantom-violet: #00ff66;
+    --phantom-violet-light: #66ff99;
+    --phantom-violet-dark: #00993d;
+    --phantom-glow: rgba(0, 255, 102, 0.4);
 
-    /* === EMBER ORANGE (FIRE) === */
-    --ember-orange: #ff6b2b;
-    --ember-orange-light: #ff8c42;
-    --ember-orange-dark: #cc4a00;
-    --ember-glow: rgba(255, 107, 43, 0.5);
-    --ember-intense: rgba(255, 107, 43, 0.8);
+    /* === BITCOIN AMBER === */
+    --ember-orange: #ff9900;
+    --ember-orange-light: #ffbb33;
+    --ember-orange-dark: #cc7a00;
+    --ember-glow: rgba(255, 153, 0, 0.5);
+    --ember-intense: rgba(255, 153, 0, 0.8);
 
-    /* === ACID GHOST GREEN === */
+    /* === ACID GHOST GREEN (Keep for legacy / accents) === */
     --acid-green: #39ff14;
-    --acid-green-light: #7fff00;
-    --acid-green-dark: #228b22;
-    --acid-glow: rgba(57, 255, 20, 0.4);
-
-    /* === WEALTH GOLD === */
-    --wealth-gold: #ffd700;
-    --wealth-gold-light: #ffec8b;
-    --wealth-gold-dark: #b8860b;
-    --wealth-glow: rgba(255, 215, 0, 0.4);
-
     /* === TEXT COLORS === */
-    --text-primary: #f0f2f8;
-    --text-secondary: #9b8fa8;
-    --text-muted: #5a4f66;
-    --text-ghost: rgba(155, 143, 168, 0.6);
+    --text-primary: #f5f5f5;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --text-ghost: rgba(148, 163, 184, 0.6);
 
-    /* === RISK COLORS (HALLOWEEN THEMED) === */
-    --risk-low: #39ff14;
-    --risk-moderate: #ffd700;
-    --risk-high: #ff6b2b;
-    --risk-critical: #ff1a4a;
+    /* === RISK COLORS (HEIST THEMED) === */
+    --risk-low: #00ff66;
+    --risk-moderate: #ff9900;
+    --risk-high: #ff5500;
+    --risk-critical: #ff3333;
 
     /* === GRADIENTS === */
-    --gradient-gothic: linear-gradient(135deg, #7c3aed 0%, #ff6b2b 50%, #39ff14 100%);
-    --gradient-fire: linear-gradient(135deg, #ff6b2b 0%, #ffd700 50%, #ff1a4a 100%);
-    --gradient-wealth: linear-gradient(135deg, #ffd700 0%, #ffec8b 50%, #b8860b 100%);
-    --gradient-phantom: linear-gradient(135deg, #4c1d95 0%, #7c3aed 50%, #a78bfa 100%);
-    --gradient-glass: linear-gradient(145deg, rgba(124, 58, 237, 0.08), rgba(255, 107, 43, 0.03));
+    --gradient-gothic: linear-gradient(135deg, #00993d 0%, #00ff66 50%, #39ff14 100%);
+    --gradient-fire: linear-gradient(135deg, #cc7a00 0%, #ff9900 50%, #ffbb33 100%);
+    --gradient-wealth: linear-gradient(135deg, #00993d 0%, #00ff66 50%, #ff9900 100%);
+    --gradient-phantom: linear-gradient(135deg, #0a0a0a 0%, #131517 100%);
+    --gradient-glass: linear-gradient(145deg, rgba(0, 255, 102, 0.08), rgba(255, 153, 0, 0.03));
 
     /* === SHADOWS === */
-    --shadow-soft: 0 10px 40px rgba(0,0,0,0.5);
-    --shadow-deep: 0 30px 80px rgba(0,0,0,0.7);
-    --shadow-glow-phantom: 0 0 60px rgba(124, 58, 237, 0.4);
-    --shadow-glow-ember: 0 0 60px rgba(255, 107, 43, 0.5);
+    --shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.6);
+    --shadow-deep: 0 30px 80px rgba(0, 0, 0, 0.8);
+    --shadow-glow-phantom: 0 0 60px rgba(0, 255, 102, 0.4);
+    --shadow-glow-ember: 0 0 60px rgba(255, 153, 0, 0.5);
     --shadow-glow-acid: 0 0 60px rgba(57, 255, 20, 0.35);
-    --shadow-glow-wealth: 0 0 60px rgba(255, 215, 0, 0.4);
+    --shadow-glow-wealth: 0 0 60px rgba(255, 153, 0, 0.4);
 
     /* === BORDER RADIUS === */
     --radius-sm: 10px;
@@ -195,8 +185,13 @@ img {
 }
 
 @keyframes gridDrift {
-    0% { background-position: 0 0, 0 0; }
-    100% { background-position: 64px 64px, 64px 64px; }
+    0% {
+        background-position: 0 0, 0 0;
+    }
+
+    100% {
+        background-position: 64px 64px, 64px 64px;
+    }
 }
 
 .bg-orb {
@@ -214,7 +209,7 @@ img {
     height: 520px;
     top: -10%;
     left: -8%;
-    background: radial-gradient(circle, rgba(139,92,246,0.55), transparent 70%);
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.55), transparent 70%);
     animation: orbFloat1 22s var(--ease-smooth) infinite;
 }
 
@@ -223,7 +218,7 @@ img {
     height: 460px;
     top: 30%;
     right: -10%;
-    background: radial-gradient(circle, rgba(34,211,238,0.4), transparent 70%);
+    background: radial-gradient(circle, rgba(34, 211, 238, 0.4), transparent 70%);
     animation: orbFloat2 26s var(--ease-smooth) infinite;
 }
 
@@ -232,24 +227,48 @@ img {
     height: 400px;
     bottom: -12%;
     left: 30%;
-    background: radial-gradient(circle, rgba(59,130,246,0.4), transparent 70%);
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.4), transparent 70%);
     animation: orbFloat3 30s var(--ease-smooth) infinite;
 }
 
 @keyframes orbFloat1 {
-    0%, 100% { transform: translate3d(0,0,0) scale(1); }
-    33% { transform: translate3d(60px, 80px, 0) scale(1.15); }
-    66% { transform: translate3d(-40px, 40px, 0) scale(0.9); }
+
+    0%,
+    100% {
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+
+    33% {
+        transform: translate3d(60px, 80px, 0) scale(1.15);
+    }
+
+    66% {
+        transform: translate3d(-40px, 40px, 0) scale(0.9);
+    }
 }
 
 @keyframes orbFloat2 {
-    0%, 100% { transform: translate3d(0,0,0) scale(1); }
-    50% { transform: translate3d(-70px, -50px, 0) scale(1.2); }
+
+    0%,
+    100% {
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+
+    50% {
+        transform: translate3d(-70px, -50px, 0) scale(1.2);
+    }
 }
 
 @keyframes orbFloat3 {
-    0%, 100% { transform: translate3d(0,0,0) scale(1); }
-    50% { transform: translate3d(50px, -60px, 0) scale(1.1); }
+
+    0%,
+    100% {
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+
+    50% {
+        transform: translate3d(50px, -60px, 0) scale(1.1);
+    }
 }
 
 
@@ -270,7 +289,7 @@ img {
     position: absolute;
     font-family: var(--font-display);
     font-weight: 700;
-    color: rgba(255,255,255,0.8);
+    color: rgba(255, 255, 255, 0.8);
     background: var(--glass-gothic);
     border: 1px solid var(--glass-border);
     backdrop-filter: blur(16px);
@@ -278,7 +297,7 @@ img {
     align-items: center;
     justify-content: center;
     border-radius: 50%;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.15);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.15);
     transform-style: preserve-3d;
     transition: transform 0.3s var(--ease-out);
 }
@@ -291,7 +310,7 @@ img {
     left: 8%;
     color: var(--wealth-gold);
     border-color: rgba(255, 215, 0, 0.4);
-    box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 30px var(--wealth-glow);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 30px var(--wealth-glow);
     animation: tokenFloat1 9s var(--ease-smooth) infinite, tokenSpin 18s linear infinite;
 }
 
@@ -303,7 +322,7 @@ img {
     left: 12%;
     color: var(--phantom-violet-light);
     border-color: rgba(124, 58, 237, 0.4);
-    box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 30px var(--phantom-glow);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 30px var(--phantom-glow);
     animation: tokenFloat2 11s var(--ease-smooth) infinite, tokenSpin 22s linear infinite reverse;
 }
 
@@ -315,7 +334,7 @@ img {
     right: 10%;
     color: var(--ember-orange);
     border-color: rgba(255, 107, 43, 0.4);
-    box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 30px var(--ember-glow);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 30px var(--ember-glow);
     animation: tokenFloat3 10s var(--ease-smooth) infinite, tokenSpin 16s linear infinite;
 }
 
@@ -327,32 +346,70 @@ img {
     right: 16%;
     color: var(--acid-green);
     border-color: rgba(57, 255, 20, 0.4);
-    box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 30px var(--acid-glow);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 30px var(--acid-glow);
     animation: tokenFloat1 8s var(--ease-smooth) infinite reverse;
 }
 
 @keyframes tokenFloat1 {
-    0%, 100% { transform: translate3d(0,0,0) rotateZ(0deg); }
-    25% { transform: translate3d(24px, -34px, 40px) rotateZ(8deg); }
-    50% { transform: translate3d(-14px, -60px, 0) rotateZ(-6deg); }
-    75% { transform: translate3d(-30px, -20px, 30px) rotateZ(4deg); }
+
+    0%,
+    100% {
+        transform: translate3d(0, 0, 0) rotateZ(0deg);
+    }
+
+    25% {
+        transform: translate3d(24px, -34px, 40px) rotateZ(8deg);
+    }
+
+    50% {
+        transform: translate3d(-14px, -60px, 0) rotateZ(-6deg);
+    }
+
+    75% {
+        transform: translate3d(-30px, -20px, 30px) rotateZ(4deg);
+    }
 }
 
 @keyframes tokenFloat2 {
-    0%, 100% { transform: translate3d(0,0,0) rotateZ(0deg); }
-    30% { transform: translate3d(-30px, -40px, 20px) rotateZ(-10deg); }
-    60% { transform: translate3d(20px, -70px, 0) rotateZ(6deg); }
+
+    0%,
+    100% {
+        transform: translate3d(0, 0, 0) rotateZ(0deg);
+    }
+
+    30% {
+        transform: translate3d(-30px, -40px, 20px) rotateZ(-10deg);
+    }
+
+    60% {
+        transform: translate3d(20px, -70px, 0) rotateZ(6deg);
+    }
 }
 
 @keyframes tokenFloat3 {
-    0%, 100% { transform: translate3d(0,0,0) rotateZ(0deg); }
-    40% { transform: translate3d(-24px, 44px, 30px) rotateZ(10deg); }
-    70% { transform: translate3d(18px, 20px, 0) rotateZ(-8deg); }
+
+    0%,
+    100% {
+        transform: translate3d(0, 0, 0) rotateZ(0deg);
+    }
+
+    40% {
+        transform: translate3d(-24px, 44px, 30px) rotateZ(10deg);
+    }
+
+    70% {
+        transform: translate3d(18px, 20px, 0) rotateZ(-8deg);
+    }
 }
 
 @keyframes tokenSpin {
-    0% { transform: rotateY(0deg); }
-    100% { transform: rotateY(360deg); }
+    0% {
+        transform: rotateY(0deg);
+    }
+
+    100% {
+        transform: rotateY(360deg);
+    }
 }
 
 
@@ -452,8 +509,17 @@ img {
 }
 
 @keyframes statusPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.5; transform: scale(1.3); }
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.5;
+        transform: scale(1.3);
+    }
 }
 
 .nav-login-button {
@@ -590,7 +656,7 @@ img {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, rgba(255,255,255,0.2) 0%, transparent 50%);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, transparent 50%);
     z-index: 1;
 }
 
@@ -620,7 +686,9 @@ img {
 }
 
 @keyframes rotateGlow {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .button-content {
@@ -686,8 +754,15 @@ img {
 }
 
 @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(24px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(24px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 
@@ -703,23 +778,30 @@ img {
 .terminal-glow {
     position: absolute;
     inset: -60px;
-    background: radial-gradient(circle, rgba(139,92,246,0.35), transparent 65%);
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.35), transparent 65%);
     filter: blur(50px);
     z-index: -1;
     animation: terminalPulse 4s ease-in-out infinite;
 }
 
 @keyframes terminalPulse {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 1; }
+
+    0%,
+    100% {
+        opacity: 0.6;
+    }
+
+    50% {
+        opacity: 1;
+    }
 }
 
 .hero-terminal {
     position: relative;
-    background: linear-gradient(160deg, rgba(20,22,34,0.9), rgba(12,13,20,0.95));
+    background: linear-gradient(160deg, rgba(20, 22, 34, 0.9), rgba(12, 13, 20, 0.95));
     border: 1px solid var(--glass-border-strong);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-deep), inset 0 1px 0 rgba(255,255,255,0.08);
+    box-shadow: var(--shadow-deep), inset 0 1px 0 rgba(255, 255, 255, 0.08);
     backdrop-filter: blur(20px);
     transform: rotateY(-8deg) rotateX(4deg);
     transform-style: preserve-3d;
@@ -732,8 +814,15 @@ img {
 }
 
 @keyframes terminalFloat {
-    0%, 100% { transform: rotateY(-8deg) rotateX(4deg) translateY(0); }
-    50% { transform: rotateY(-8deg) rotateX(4deg) translateY(-14px); }
+
+    0%,
+    100% {
+        transform: rotateY(-8deg) rotateX(4deg) translateY(0);
+    }
+
+    50% {
+        transform: rotateY(-8deg) rotateX(4deg) translateY(-14px);
+    }
 }
 
 .terminal-topbar {
@@ -757,12 +846,20 @@ img {
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: rgba(255,255,255,0.15);
+    background: rgba(255, 255, 255, 0.15);
 }
 
-.terminal-dots span:nth-child(1) { background: #ff5f57; }
-.terminal-dots span:nth-child(2) { background: #febc2e; }
-.terminal-dots span:nth-child(3) { background: #28c840; }
+.terminal-dots span:nth-child(1) {
+    background: #ff5f57;
+}
+
+.terminal-dots span:nth-child(2) {
+    background: #febc2e;
+}
+
+.terminal-dots span:nth-child(3) {
+    background: #28c840;
+}
 
 .terminal-body {
     padding: 24px 22px;
@@ -791,7 +888,9 @@ img {
 }
 
 @keyframes blink {
-    50% { opacity: 0; }
+    50% {
+        opacity: 0;
+    }
 }
 
 .terminal-line {
@@ -887,7 +986,7 @@ img {
 
 .terminal-bar {
     height: 6px;
-    background: rgba(255,255,255,0.06);
+    background: rgba(255, 255, 255, 0.06);
     border-radius: 100px;
     overflow: hidden;
 }
@@ -898,11 +997,13 @@ img {
     background: var(--gradient-primary);
     border-radius: 100px;
     animation: barGrow 1.6s var(--ease-out) both;
-    box-shadow: 0 0 12px rgba(139,92,246,0.6);
+    box-shadow: 0 0 12px rgba(139, 92, 246, 0.6);
 }
 
 @keyframes barGrow {
-    from { width: 0 !important; }
+    from {
+        width: 0 !important;
+    }
 }
 
 .terminal-floating-label {
@@ -1005,8 +1106,8 @@ img {
 }
 
 .feature-card-highlight {
-    background: linear-gradient(160deg, rgba(139,92,246,0.14), rgba(34,211,238,0.05));
-    border-color: rgba(139,92,246,0.35);
+    background: linear-gradient(160deg, rgba(139, 92, 246, 0.14), rgba(34, 211, 238, 0.05));
+    border-color: rgba(139, 92, 246, 0.35);
 }
 
 .feature-number {
@@ -1137,7 +1238,7 @@ img {
     font-size: 40px;
     font-weight: 700;
     color: transparent;
-    -webkit-text-stroke: 1.5px rgba(255,255,255,0.25);
+    -webkit-text-stroke: 1.5px rgba(255, 255, 255, 0.25);
     margin-bottom: 16px;
 }
 
@@ -1191,7 +1292,7 @@ img {
     padding: 90px 48px;
     text-align: center;
     border-radius: var(--radius-xl);
-    background: linear-gradient(160deg, rgba(139,92,246,0.12), rgba(34,211,238,0.05));
+    background: linear-gradient(160deg, rgba(139, 92, 246, 0.12), rgba(34, 211, 238, 0.05));
     border: 1px solid var(--glass-border-strong);
     overflow: hidden;
 }
@@ -1199,7 +1300,7 @@ img {
 .final-cta-glow {
     position: absolute;
     inset: -30%;
-    background: radial-gradient(circle, rgba(139,92,246,0.3), transparent 60%);
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.3), transparent 60%);
     animation: terminalPulse 5s ease-in-out infinite;
     z-index: -1;
 }
@@ -1282,12 +1383,24 @@ img {
     animation: flashIn 0.4s var(--ease-spring) both;
 }
 
-.flash-success { border-color: rgba(34,211,164,0.5); }
-.flash-error { border-color: rgba(255,77,109,0.5); }
+.flash-success {
+    border-color: rgba(34, 211, 164, 0.5);
+}
+
+.flash-error {
+    border-color: rgba(255, 77, 109, 0.5);
+}
 
 @keyframes flashIn {
-    from { opacity: 0; transform: translateX(40px); }
-    to { opacity: 1; transform: translateX(0); }
+    from {
+        opacity: 0;
+        transform: translateX(40px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
 }
 
 
@@ -1325,6 +1438,7 @@ img {
         padding: 60px 20px;
     }
 }
+
 /* ============================================================
    CRYPTORISK AI — ULTRA PREMIUM DESIGN SYSTEM
    PART 2 / 2 — Dashboard / Intelligence Terminal
@@ -1523,7 +1637,7 @@ img {
     content: "";
     position: absolute;
     inset: -2px;
-    background: conic-gradient(from 0deg, transparent, rgba(139,92,246,0.25), transparent 40%);
+    background: conic-gradient(from 0deg, transparent, rgba(139, 92, 246, 0.25), transparent 40%);
     animation: rotateGlow 8s linear infinite;
     z-index: -1;
     opacity: 0.6;
@@ -1620,7 +1734,7 @@ img {
     display: flex;
     align-items: center;
     gap: 10px;
-    background: rgba(0,0,0,0.3);
+    background: rgba(0, 0, 0, 0.3);
     border: 1px solid var(--glass-border-strong);
     border-radius: var(--radius-md);
     padding: 4px 20px;
@@ -1629,7 +1743,7 @@ img {
 
 .token-input-wrapper:focus-within {
     border-color: var(--accent-purple);
-    box-shadow: 0 0 0 4px rgba(139,92,246,0.15), var(--shadow-glow-purple);
+    box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15), var(--shadow-glow-purple);
 }
 
 .token-prefix {
@@ -1669,7 +1783,7 @@ img {
 .button-loader {
     width: 16px;
     height: 16px;
-    border: 2px solid rgba(255,255,255,0.3);
+    border: 2px solid rgba(255, 255, 255, 0.3);
     border-top-color: #fff;
     border-radius: 50%;
     display: none;
@@ -1685,7 +1799,55 @@ img {
 }
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ============================================================
+   ENERGY BEAM ANIMATION (GTA Heist Style)
+   ============================================================ */
+.energy-beam-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.energy-beam {
+    position: absolute;
+    bottom: -10px;
+    left: 0;
+    height: 4px;
+    background: linear-gradient(90deg, transparent, var(--heist-cash-green), #fff);
+    width: 0%;
+    box-shadow: 0 0 10px var(--heist-cash-green), 0 0 20px var(--heist-cash-green);
+    border-radius: 4px;
+    transition: width 0.3s ease-out;
+    opacity: 0;
+}
+
+.energy-beam-glow {
+    position: absolute;
+    bottom: -15px;
+    left: 0;
+    height: 14px;
+    width: 0%;
+    background: radial-gradient(circle at right, var(--heist-cash-green) 0%, transparent 70%);
+    opacity: 0;
+    transition: width 0.3s ease-out;
+}
+
+.energy-beam-wrapper.is-analyzing .energy-beam,
+.energy-beam-wrapper.is-analyzing .energy-beam-glow {
+    opacity: 1;
+}
+
+.energy-beam-wrapper.is-analyzing .analyze-button {
+    pointer-events: none;
+    opacity: 0.8;
+    box-shadow: inset 0 0 20px rgba(0, 255, 102, 0.2);
+    border-color: var(--heist-cash-green);
 }
 
 .analysis-error {
@@ -1743,7 +1905,7 @@ img {
     position: relative;
     height: 14px;
     border-radius: 100px;
-    background: rgba(255,255,255,0.05);
+    background: rgba(255, 255, 255, 0.05);
     overflow: hidden;
     border: 1px solid var(--glass-border);
     margin-bottom: 24px;
@@ -1755,17 +1917,15 @@ img {
     height: 100%;
     width: 0%;
     border-radius: 100px;
-    background: linear-gradient(
-        90deg,
-        #f7931a 0%,
-        #ffb347 40%,
-        #ffd07a 70%,
-        #fff4e0 100%
-    );
+    background: linear-gradient(90deg,
+            #f7931a 0%,
+            #ffb347 40%,
+            #ffd07a 70%,
+            #fff4e0 100%);
     box-shadow:
-        0 0 18px rgba(247,147,26,0.85),
-        0 0 38px rgba(255,179,71,0.55),
-        0 0 64px rgba(255,208,122,0.35);
+        0 0 18px rgba(247, 147, 26, 0.85),
+        0 0 38px rgba(255, 179, 71, 0.55),
+        0 0 64px rgba(255, 208, 122, 0.35);
     transition: width 0.1s linear;
     overflow: visible;
     animation: beamGlow 1.8s ease-in-out infinite;
@@ -1776,17 +1936,20 @@ img {
  * a warm glow that intensifies as it sweeps.
  */
 @keyframes beamGlow {
-    0%, 100% {
+
+    0%,
+    100% {
         box-shadow:
-            0 0 18px rgba(247,147,26,0.75),
-            0 0 38px rgba(255,179,71,0.45),
-            0 0 64px rgba(255,208,122,0.25);
+            0 0 18px rgba(247, 147, 26, 0.75),
+            0 0 38px rgba(255, 179, 71, 0.45),
+            0 0 64px rgba(255, 208, 122, 0.25);
     }
+
     50% {
         box-shadow:
-            0 0 28px rgba(247,147,26,0.95),
-            0 0 56px rgba(255,179,71,0.7),
-            0 0 88px rgba(255,208,122,0.5);
+            0 0 28px rgba(247, 147, 26, 0.95),
+            0 0 56px rgba(255, 179, 71, 0.7),
+            0 0 88px rgba(255, 208, 122, 0.5);
     }
 }
 
@@ -1801,18 +1964,25 @@ img {
     right: 0;
     width: 50px;
     height: 100%;
-    background: linear-gradient(
-        90deg,
-        transparent,
-        rgba(255,255,255,0.98)
-    );
+    background: linear-gradient(90deg,
+            transparent,
+            rgba(255, 255, 255, 0.98));
     filter: blur(5px);
     animation: beamSweep 0.9s ease-in-out infinite;
 }
 
 @keyframes beamSweep {
-    0%, 100% { opacity: 0.5; transform: scaleX(1); }
-    50% { opacity: 1; transform: scaleX(1.5); }
+
+    0%,
+    100% {
+        opacity: 0.5;
+        transform: scaleX(1);
+    }
+
+    50% {
+        opacity: 1;
+        transform: scaleX(1.5);
+    }
 }
 
 /*
@@ -1826,12 +1996,10 @@ img {
     left: 0;
     width: 70px;
     height: 200%;
-    background: radial-gradient(
-        ellipse at center,
-        rgba(255,200,100,0.6),
-        rgba(247,147,26,0.3) 40%,
-        transparent 75%
-    );
+    background: radial-gradient(ellipse at center,
+            rgba(255, 200, 100, 0.6),
+            rgba(247, 147, 26, 0.3) 40%,
+            transparent 75%);
     transform: translateY(-50%);
     animation: beamTravel 2s linear infinite;
     pointer-events: none;
@@ -1839,8 +2007,13 @@ img {
 }
 
 @keyframes beamTravel {
-    0% { left: -10%; }
-    100% { left: 110%; }
+    0% {
+        left: -10%;
+    }
+
+    100% {
+        left: 110%;
+    }
 }
 
 .progress-stages {
@@ -1924,7 +2097,7 @@ img {
 .risk-score-card {
     text-align: center;
     padding: 20px 34px;
-    background: rgba(0,0,0,0.25);
+    background: rgba(0, 0, 0, 0.25);
     border: 1px solid var(--glass-border-strong);
     border-radius: var(--radius-lg);
     transition: transform 0.4s var(--ease-spring);
@@ -1934,7 +2107,7 @@ img {
     transform: translateY(-6px) scale(1.03);
 }
 
-.risk-score-card > span {
+.risk-score-card>span {
     display: block;
     font-family: var(--font-mono);
     font-size: 11px;
@@ -1973,16 +2146,38 @@ img {
    RISK SEVERITY COLOR SYSTEM
 ============================================================ */
 
-.risk-low { color: var(--risk-low) !important; }
-.risk-moderate { color: var(--risk-moderate) !important; }
-.risk-high { color: var(--risk-high) !important; }
-.risk-critical { color: var(--risk-critical) !important; }
+.risk-low {
+    color: var(--risk-low) !important;
+}
+
+.risk-moderate {
+    color: var(--risk-moderate) !important;
+}
+
+.risk-high {
+    color: var(--risk-high) !important;
+}
+
+.risk-critical {
+    color: var(--risk-critical) !important;
+}
 
 .pillar-bar span.risk-low,
-#progress-fill.risk-low { background: linear-gradient(90deg, #22d3a4, #22d3ee) !important; }
-.pillar-bar span.risk-moderate { background: linear-gradient(90deg, #f5c542, #ff8a5c) !important; }
-.pillar-bar span.risk-high { background: linear-gradient(90deg, #ff8a5c, #ff4d6d) !important; }
-.pillar-bar span.risk-critical { background: linear-gradient(90deg, #ff4d6d, #ec4899) !important; }
+#progress-fill.risk-low {
+    background: linear-gradient(90deg, #22d3a4, #22d3ee) !important;
+}
+
+.pillar-bar span.risk-moderate {
+    background: linear-gradient(90deg, #f5c542, #ff8a5c) !important;
+}
+
+.pillar-bar span.risk-high {
+    background: linear-gradient(90deg, #ff8a5c, #ff4d6d) !important;
+}
+
+.pillar-bar span.risk-critical {
+    background: linear-gradient(90deg, #ff4d6d, #ec4899) !important;
+}
 
 .risk-badge {
     padding: 5px 12px;
@@ -2051,7 +2246,7 @@ img {
 }
 
 .market-card {
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 22px;
@@ -2063,7 +2258,7 @@ img {
     transform: translateY(-8px) rotateX(6deg) rotateY(-4deg) scale(1.03);
     border-color: var(--glass-border-strong);
     box-shadow: var(--shadow-glow-cyan);
-    background: rgba(255,255,255,0.055);
+    background: rgba(255, 255, 255, 0.055);
 }
 
 .card-label {
@@ -2083,8 +2278,13 @@ img {
     margin-bottom: 6px;
 }
 
-.market-change.positive { color: var(--risk-low); }
-.market-change.negative { color: var(--risk-critical); }
+.market-change.positive {
+    color: var(--risk-low);
+}
+
+.market-change.negative {
+    color: var(--risk-critical);
+}
 
 .card-muted {
     font-size: 12px;
@@ -2103,7 +2303,7 @@ img {
 }
 
 .risk-pillar {
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 24px;
@@ -2117,8 +2317,8 @@ img {
 }
 
 .composite-pillar {
-    background: linear-gradient(160deg, rgba(139,92,246,0.14), rgba(34,211,238,0.05));
-    border-color: rgba(139,92,246,0.3);
+    background: linear-gradient(160deg, rgba(139, 92, 246, 0.14), rgba(34, 211, 238, 0.05));
+    border-color: rgba(139, 92, 246, 0.3);
 }
 
 .pillar-top {
@@ -2149,7 +2349,7 @@ img {
 
 .pillar-bar {
     height: 8px;
-    background: rgba(255,255,255,0.06);
+    background: rgba(255, 255, 255, 0.06);
     border-radius: 100px;
     overflow: hidden;
     margin-bottom: 14px;
@@ -2162,7 +2362,7 @@ img {
     border-radius: 100px;
     background: var(--gradient-primary);
     transition: width 1s var(--ease-out);
-    box-shadow: 0 0 14px rgba(139,92,246,0.5);
+    box-shadow: 0 0 14px rgba(139, 92, 246, 0.5);
 }
 
 .risk-pillar p {
@@ -2184,7 +2384,7 @@ img {
 
 .forensic-card,
 .risk-driver-card {
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 22px;
@@ -2263,7 +2463,7 @@ img {
 }
 
 .stress-card {
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 22px;
@@ -2288,7 +2488,7 @@ img {
 }
 
 .stress-verdict-card {
-    background: linear-gradient(160deg, rgba(139,92,246,0.1), rgba(34,211,238,0.04));
+    background: linear-gradient(160deg, rgba(139, 92, 246, 0.1), rgba(34, 211, 238, 0.04));
     border: 1px solid var(--glass-border-strong);
     border-radius: var(--radius-md);
     padding: 24px;
@@ -2318,7 +2518,7 @@ img {
 }
 
 .autopsy-summary {
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 24px;
@@ -2436,7 +2636,7 @@ img {
 }
 
 .history-table thead {
-    background: rgba(255,255,255,0.04);
+    background: rgba(255, 255, 255, 0.04);
 }
 
 .history-table th {
@@ -2458,7 +2658,7 @@ img {
 }
 
 .history-table tbody tr:hover {
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255, 0.03);
 }
 
 .empty-history {
@@ -2659,8 +2859,15 @@ img {
 }
 
 @keyframes currencyFloat {
-    0%, 100% { transform: translateY(0) scale(1); }
-    50% { transform: translateY(-8px) scale(1.1); }
+
+    0%,
+    100% {
+        transform: translateY(0) scale(1);
+    }
+
+    50% {
+        transform: translateY(-8px) scale(1.1);
+    }
 }
 
 .beam-status-text {
@@ -2687,9 +2894,17 @@ img {
 }
 
 @keyframes wealthBurst {
-    0% { box-shadow: 0 0 30px rgba(255, 107, 43, 0.5); }
-    50% { box-shadow: 0 0 80px rgba(255, 215, 0, 0.8), 0 0 120px rgba(255, 107, 43, 0.6); }
-    100% { box-shadow: 0 0 30px rgba(255, 107, 43, 0.5); }
+    0% {
+        box-shadow: 0 0 30px rgba(255, 107, 43, 0.5);
+    }
+
+    50% {
+        box-shadow: 0 0 80px rgba(255, 215, 0, 0.8), 0 0 120px rgba(255, 107, 43, 0.6);
+    }
+
+    100% {
+        box-shadow: 0 0 30px rgba(255, 107, 43, 0.5);
+    }
 }
 
 
@@ -2736,40 +2951,663 @@ img {
 
 
 /* CUSTOM SCROLLBAR */
-::-webkit-scrollbar { width: 10px; }
-::-webkit-scrollbar-track { background: var(--bg-void); }
-::-webkit-scrollbar-thumb { background: linear-gradient(180deg, var(--ember-orange) 0%, var(--phantom-violet) 100%); border-radius: 10px; border: 2px solid var(--bg-void); }
-* { scrollbar-width: thin; scrollbar-color: var(--ember-orange) var(--bg-void); }
+::-webkit-scrollbar {
+    width: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-void);
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, var(--ember-orange) 0%, var(--phantom-violet) 100%);
+    border-radius: 10px;
+    border: 2px solid var(--bg-void);
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--ember-orange) var(--bg-void);
+}
 
 
 /* TICKER TAPE */
-.ticker-tape-container { position: relative; z-index: 5; width: 100%; overflow: hidden; background: var(--bg-panel); border-top: 1px solid var(--glass-border); border-bottom: 1px solid var(--glass-border); padding: 12px 0; }
-.ticker-tape { display: flex; animation: tickerScroll 30s linear infinite; white-space: nowrap; }
-@keyframes tickerScroll { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
-.ticker-item { display: inline-flex; align-items: center; gap: 8px; padding: 0 24px; font-family: var(--font-mono); font-size: 13px; }
-.ticker-symbol { color: var(--phantom-violet-light); font-weight: 700; }
-.ticker-price { color: var(--text-primary); font-weight: 600; }
-.ticker-change.positive { color: var(--acid-green); }
-.ticker-change.negative { color: var(--risk-critical); }
+.ticker-tape-container {
+    position: relative;
+    z-index: 5;
+    width: 100%;
+    overflow: hidden;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--glass-border);
+    border-bottom: 1px solid var(--glass-border);
+    padding: 12px 0;
+}
+
+.ticker-tape {
+    display: flex;
+    animation: tickerScroll 30s linear infinite;
+    white-space: nowrap;
+}
+
+@keyframes tickerScroll {
+    0% {
+        transform: translateX(0);
+    }
+
+    100% {
+        transform: translateX(-50%);
+    }
+}
+
+.ticker-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 24px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+
+.ticker-symbol {
+    color: var(--phantom-violet-light);
+    font-weight: 700;
+}
+
+.ticker-price {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.ticker-change.positive {
+    color: var(--acid-green);
+}
+
+.ticker-change.negative {
+    color: var(--risk-critical);
+}
 
 
 
 
 /* WEALTH BEAM ENHANCEMENTS */
-.beam-percentage-display { font-family: var(--font-display); font-size: 48px; font-weight: 700; color: var(--ember-orange); text-shadow: 0 0 30px var(--ember-glow), 0 0 60px var(--ember-intense); margin-bottom: 20px; animation: percentagePulse 1s ease-in-out infinite; }
-@keyframes percentagePulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
-.beam-progress-fill { background: linear-gradient(90deg, #ff6b2b 0%, #ffd700 50%, #ff6b2b 100%); background-size: 200% 100%; animation: fireShimmer 2s linear infinite; }
-@keyframes fireShimmer { 0% { background-position: 0% 0%; } 100% { background-position: 200% 0%; } }
-.beam-currency-symbol { font-size: 28px; color: rgba(255, 215, 0, 0.9); text-shadow: 0 0 25px rgba(255, 215, 0, 0.8), 0 0 50px rgba(255, 107, 43, 0.5); }
-.beam-currency-symbol:nth-child(odd) { color: rgba(255, 107, 43, 0.9); text-shadow: 0 0 25px rgba(255, 107, 43, 0.8), 0 0 50px rgba(255, 215, 0, 0.5); }
+.beam-percentage-display {
+    font-family: var(--font-display);
+    font-size: 48px;
+    font-weight: 700;
+    color: var(--ember-orange);
+    text-shadow: 0 0 30px var(--ember-glow), 0 0 60px var(--ember-intense);
+    margin-bottom: 20px;
+    animation: percentagePulse 1s ease-in-out infinite;
+}
+
+@keyframes percentagePulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.05);
+    }
+}
+
+.beam-progress-fill {
+    background: linear-gradient(90deg, #ff6b2b 0%, #ffd700 50%, #ff6b2b 100%);
+    background-size: 200% 100%;
+    animation: fireShimmer 2s linear infinite;
+}
+
+@keyframes fireShimmer {
+    0% {
+        background-position: 0% 0%;
+    }
+
+    100% {
+        background-position: 200% 0%;
+    }
+}
+
+.beam-currency-symbol {
+    font-size: 28px;
+    color: rgba(255, 215, 0, 0.9);
+    text-shadow: 0 0 25px rgba(255, 215, 0, 0.8), 0 0 50px rgba(255, 107, 43, 0.5);
+}
+
+.beam-currency-symbol:nth-child(odd) {
+    color: rgba(255, 107, 43, 0.9);
+    text-shadow: 0 0 25px rgba(255, 107, 43, 0.8), 0 0 50px rgba(255, 215, 0, 0.5);
+}
+
+
+
+
+.report-identity h2 {
+    font-size: 30px;
+}
+
+
+
+/* ============================================================
+   ANALYSIS BEAM — Dollar-Sign Progress Animation
+   ============================================================ */
+
+.analysis-beam-container {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+
+.analysis-beam-container.active {
+    opacity: 1;
+}
+
+.analysis-beam-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(3, 4, 8, 0.92);
+    backdrop-filter: blur(20px);
+}
+
+.analysis-beam-content {
+    position: relative;
+    z-index: 2;
+    width: 90%;
+    max-width: 600px;
+    text-align: center;
+}
+
+.beam-progress-track {
+    position: relative;
+    height: 60px;
+    background: rgba(124, 58, 237, 0.1);
+    border: 1px solid rgba(124, 58, 237, 0.3);
+    border-radius: 100px;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(124, 58, 237, 0.2), inset 0 0 20px rgba(124, 58, 237, 0.1);
+}
+
+.beam-progress-fill {
+    position: absolute;
+    inset: 0;
+    width: 0%;
+    background: linear-gradient(90deg, #7c3aed 0%, #ff6b2b 50%, #ffd700 100%);
+    border-radius: 100px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 30px rgba(255, 107, 43, 0.5);
+}
+
+.beam-currency-stream {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 20px;
+}
+
+.beam-currency-symbol {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 700;
+    color: rgba(255, 215, 0, 0.8);
+    text-shadow: 0 0 20px rgba(255, 215, 0, 0.6);
+    animation: currencyFloat 2s ease-in-out infinite;
+    opacity: 0.7;
+}
+
+.beam-currency-symbol:nth-child(odd) {
+    color: rgba(255, 107, 43, 0.8);
+    text-shadow: 0 0 20px rgba(255, 107, 43, 0.6);
+}
+
+@keyframes currencyFloat {
+
+    0%,
+    100% {
+        transform: translateY(0) scale(1);
+    }
+
+    50% {
+        transform: translateY(-8px) scale(1.1);
+    }
+}
+
+.beam-status-text {
+    margin-top: 24px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--phantom-violet-light);
+    letter-spacing: 0.05em;
+}
+
+.beam-particles-canvas {
+    position: absolute;
+    inset: -50px;
+    pointer-events: none;
+}
+
+.beam-particle-canvas {
+    width: 100%;
+    height: 100%;
+}
+
+.analysis-beam-container.wealth-burst .beam-progress-fill {
+    animation: wealthBurst 0.6s ease-out;
+}
+
+@keyframes wealthBurst {
+    0% {
+        box-shadow: 0 0 30px rgba(255, 107, 43, 0.5);
+    }
+
+    50% {
+        box-shadow: 0 0 80px rgba(255, 215, 0, 0.8), 0 0 120px rgba(255, 107, 43, 0.6);
+    }
+
+    100% {
+        box-shadow: 0 0 30px rgba(255, 107, 43, 0.5);
+    }
+}
+
+
+/* ============================================================
+   FIRE HOVER EFFECTS
+   ============================================================ */
+
+.fire-hover {
+    position: relative;
+    overflow: hidden;
+}
+
+.fire-hover::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 107, 43, 0.3) 0%, transparent 50%);
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+}
+
+.fire-hover:hover::after {
+    opacity: 1;
+}
+
+@media (max-width: 768px) {
+    .physics-tokens {
+        display: none;
+    }
+
+    .analysis-beam-content {
+        width: 95%;
+    }
+
+    .beam-currency-symbol {
+        font-size: 18px;
+    }
+
+    .beam-status-text {
+        font-size: 12px;
+    }
+}
+
+
+/* CUSTOM SCROLLBAR */
+::-webkit-scrollbar {
+    width: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-void);
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, var(--ember-orange) 0%, var(--phantom-violet) 100%);
+    border-radius: 10px;
+    border: 2px solid var(--bg-void);
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--ember-orange) var(--bg-void);
+}
+
+
+/* TICKER TAPE */
+.ticker-tape-container {
+    position: relative;
+    z-index: 5;
+    width: 100%;
+    overflow: hidden;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--glass-border);
+    border-bottom: 1px solid var(--glass-border);
+    padding: 12px 0;
+}
+
+.ticker-tape {
+    display: flex;
+    animation: tickerScroll 30s linear infinite;
+    white-space: nowrap;
+}
+
+@keyframes tickerScroll {
+    0% {
+        transform: translateX(0);
+    }
+
+    100% {
+        transform: translateX(-50%);
+    }
+}
+
+.ticker-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 24px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+
+.ticker-symbol {
+    color: var(--phantom-violet-light);
+    font-weight: 700;
+}
+
+.ticker-price {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.ticker-change.positive {
+    color: var(--acid-green);
+}
+
+.ticker-change.negative {
+    color: var(--risk-critical);
+}
+
+
+
+
+/* WEALTH BEAM ENHANCEMENTS */
+.beam-percentage-display {
+    font-family: var(--font-display);
+    font-size: 48px;
+    font-weight: 700;
+    color: var(--ember-orange);
+    text-shadow: 0 0 30px var(--ember-glow), 0 0 60px var(--ember-intense);
+    margin-bottom: 20px;
+    animation: percentagePulse 1s ease-in-out infinite;
+}
+
+@keyframes percentagePulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.05);
+    }
+}
+
+.beam-progress-fill {
+    background: linear-gradient(90deg, #ff6b2b 0%, #ffd700 50%, #ff6b2b 100%);
+    background-size: 200% 100%;
+    animation: fireShimmer 2s linear infinite;
+}
+
+@keyframes fireShimmer {
+    0% {
+        background-position: 0% 0%;
+    }
+
+    100% {
+        background-position: 200% 0%;
+    }
+}
+
+.beam-currency-symbol {
+    font-size: 28px;
+    color: rgba(255, 215, 0, 0.9);
+    text-shadow: 0 0 25px rgba(255, 215, 0, 0.8), 0 0 50px rgba(255, 107, 43, 0.5);
+}
+
+.beam-currency-symbol:nth-child(odd) {
+    color: rgba(255, 107, 43, 0.9);
+    text-shadow: 0 0 25px rgba(255, 107, 43, 0.8), 0 0 50px rgba(255, 215, 0, 0.5);
+}
 
 
 /* MOBILE */
 @media (max-width: 768px) {
-    .physics-tokens { display: none; }
-    .analysis-beam-content { width: 95%; }
-    .beam-currency-symbol { font-size: 20px; }
-    .beam-status-text { font-size: 12px; }
-    .beam-percentage-display { font-size: 36px; }
-    .ticker-item { font-size: 11px; padding: 0 16px; }
+    .physics-tokens {
+        display: none;
+    }
+
+    .analysis-beam-content {
+        width: 95%;
+    }
+
+    .beam-currency-symbol {
+        font-size: 20px;
+    }
+
+    .beam-status-text {
+        font-size: 12px;
+    }
+
+    .beam-percentage-display {
+        font-size: 36px;
+    }
+
+    .ticker-item {
+        font-size: 11px;
+        padding: 0 16px;
+    }
 }
+
+/* ============================================================
+   CINEMATIC OVERLAYS & PARALLAX
+============================================================ */
+
+.cinematic-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 9999;
+    /* Vignette gradient */
+    background: radial-gradient(circle at center, transparent 30%, rgba(5, 5, 5, 0.8) 100%);
+}
+
+.cinematic-overlay::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    /* Subtle scanline/grain */
+    background-image: repeating-linear-gradient(0deg,
+            transparent,
+            transparent 2px,
+            rgba(0, 255, 102, 0.02) 2px,
+            rgba(0, 255, 102, 0.02) 4px);
+    opacity: 0.5;
+    mix-blend-mode: overlay;
+}
+
+.parallax-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    overflow: hidden;
+    background: var(--bg-void);
+    perspective: 1000px;
+}
+
+.parallax-layer {
+    position: absolute;
+    top: -10%;
+    left: -10%;
+    width: 120%;
+    height: 120%;
+    will-change: transform;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Individual floating items */
+.float-item {
+    position: absolute;
+    will-change: transform, opacity;
+}
+
+.float-coin {
+    width: 80px;
+    height: 80px;
+    fill: var(--ember-orange);
+    filter: drop-shadow(0 0 15px var(--ember-glow));
+    animation: driftUp 25s infinite linear, spin3D 8s infinite linear;
+}
+
+.float-cash {
+    width: 100px;
+    height: 60px;
+    fill: var(--phantom-violet);
+    filter: drop-shadow(0 0 15px var(--phantom-glow));
+    animation: driftUp 30s infinite linear, sway 10s infinite ease-in-out;
+}
+
+.float-particle {
+    width: 4px;
+    height: 4px;
+    background: var(--phantom-violet);
+    border-radius: 50%;
+    box-shadow: 0 0 10px 2px var(--phantom-glow);
+    animation: driftUp 15s infinite linear;
+}
+
+/* Report Active mode hides the parallax */
+body.report-active .parallax-container {
+    opacity: 0.05;
+    transition: opacity 1.5s var(--ease-out);
+}
+
+@keyframes driftUp {
+    0% {
+        transform: translateY(110vh) rotate(0deg);
+        opacity: 0;
+    }
+
+    10% {
+        opacity: 0.6;
+    }
+
+    90% {
+        opacity: 0.6;
+    }
+
+    100% {
+        transform: translateY(-20vh) rotate(360deg);
+        opacity: 0;
+    }
+}
+
+@keyframes spin3D {
+    from {
+        transform: rotateY(0deg) rotateZ(10deg);
+    }
+
+    to {
+        transform: rotateY(360deg) rotateZ(10deg);
+    }
+}
+
+@keyframes sway {
+
+    0%,
+    100% {
+        transform: rotateZ(-15deg);
+    }
+
+    50% {
+        transform: rotateZ(15deg);
+    }
+}
+
+/* ============================================================
+   CARD GLASSMORPHISM & 3D TILT
+   ============================================================ */
+.market-card, 
+.risk-pillar, 
+.stress-card, 
+.stress-verdict-card, 
+.driver-card {
+    background: var(--glass-gothic) !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+    border: 1px solid var(--glass-border) !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+    transform-style: preserve-3d;
+    transition: transform 0.5s ease;
+}
+
+.market-card:hover, 
+.risk-pillar:hover, 
+.stress-card:hover, 
+.stress-verdict-card:hover, 
+.driver-card:hover {
+    border-color: var(--glass-border-strong) !important;
+    box-shadow: 0 12px 48px rgba(0, 255, 102, 0.1) !important;
+}
+
+/* Ensure inner elements don't block mouse events for the tilt effect */
+.market-card *, 
+.risk-pillar *, 
+.stress-card *, 
+.stress-verdict-card *, 
+.driver-card * {
+    pointer-events: none;
+}
+
+/* ============================================================
+   REPORT ACTIVE MODE (Clean Fintech Terminal)
+   ============================================================ */
+body.report-active .parallax-container {
+    opacity: 0.1 !important;
+    filter: grayscale(100%) blur(4px);
+    transition: opacity 1.5s ease, filter 1.5s ease;
+}
+
+body.report-active .intelligence-report {
+    background: rgba(10, 11, 13, 0.4);
+    box-shadow: 0 0 100px rgba(0, 0, 0, 0.8) inset;
+    padding: 20px;
+    border-radius: 12px;
+}
+
+body.report-active .market-card, 
+body.report-active .risk-pillar, 
+body.report-active .stress-card, 
+body.report-active .stress-verdict-card, 
+body.report-active .driver-card {
+    background: rgba(10, 11, 13, 0.85) !important;
+    border-color: rgba(0, 255, 102, 0.2) !important;
+}

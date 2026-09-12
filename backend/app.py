@@ -5232,7 +5232,7 @@ def calculate_stress_test(
     )
 
     drawdown_percent = (
-        abs(expected_drawdown_pct)
+        expected_drawdown_pct
         if expected_drawdown_pct is not None
         else None
     )
@@ -5597,7 +5597,7 @@ STRICT RULES:
 
 9. Explain what the quantitative numbers mean.
 
-10. Keep the executive summary concise but genuinely useful. The executive summary, risk drivers, what changed, and watch next fields MUST contain highly specific asset data and exact numbers from the evidence packet. Do not use generic boilerplate text. Produce asset-specific reasoning.
+10. AVOID GENERIC TEMPLATES: Do not write sentences like "The strongest available risk signal is volatility" or "Monitor structural security." Instead, write highly specific, data-driven analysis using the exact numbers and asset characteristics from the evidence packet. Your reasoning must be entirely bespoke for the specific asset.
 
 11. Clearly identify the most important weaknesses in the
     current evidence.

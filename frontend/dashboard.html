@@ -28,6 +28,49 @@
 
 <body class="dashboard-page">
 
+    <!-- =========================================================
+         CINEMATIC OVERLAY & PARALLAX BACKGROUND
+    ========================================================== -->
+
+    <div class="cinematic-overlay" aria-hidden="true"></div>
+
+    <div class="parallax-container" id="parallax-bg" aria-hidden="true" style="opacity: 0.4;">
+        <div class="parallax-layer" data-depth="0.1">
+            <div class="float-item float-particle" style="left: 10%; animation-delay: -2s;"></div>
+            <div class="float-item float-particle" style="left: 30%; animation-delay: -7s;"></div>
+            <div class="float-item float-particle" style="left: 60%; animation-delay: -4s;"></div>
+            <div class="float-item float-particle" style="left: 85%; animation-delay: -9s;"></div>
+        </div>
+
+        <div class="parallax-layer" data-depth="0.3">
+            <svg class="float-item float-coin" style="left: 15%; animation-delay: -5s;" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="8"/>
+                <text x="50" y="65" font-family="Arial" font-weight="bold" font-size="40" text-anchor="middle" fill="currentColor">₿</text>
+            </svg>
+            <svg class="float-item float-coin" style="left: 75%; animation-delay: -12s; width: 60px; height: 60px;" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="8"/>
+                <text x="50" y="65" font-family="Arial" font-weight="bold" font-size="40" text-anchor="middle" fill="currentColor">Ξ</text>
+            </svg>
+        </div>
+
+        <div class="parallax-layer" data-depth="0.6">
+            <svg class="float-item float-cash" style="left: 45%; animation-delay: -1s;" viewBox="0 0 120 60">
+                <rect x="10" y="10" width="100" height="40" rx="5" fill="currentColor" opacity="0.8"/>
+                <rect x="20" y="20" width="80" height="20" rx="2" fill="#000" opacity="0.3"/>
+                <circle cx="60" cy="30" r="10" fill="#000" opacity="0.5"/>
+            </svg>
+            <svg class="float-item float-cash" style="left: 85%; animation-delay: -18s; transform: scale(1.2);" viewBox="0 0 120 60">
+                <rect x="10" y="10" width="100" height="40" rx="5" fill="currentColor" opacity="0.8"/>
+                <rect x="20" y="20" width="80" height="20" rx="2" fill="#000" opacity="0.3"/>
+                <circle cx="60" cy="30" r="10" fill="#000" opacity="0.5"/>
+            </svg>
+            <svg class="float-item float-coin" style="left: 30%; animation-delay: -8s; width: 90px; height: 90px;" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="8"/>
+                <text x="50" y="65" font-family="Arial" font-weight="bold" font-size="40" text-anchor="middle" fill="currentColor">S</text>
+            </svg>
+        </div>
+    </div>
+
     <nav class="top-nav">
 
         <a
@@ -210,22 +253,26 @@
 
                 </div>
 
-                <button
-                    type="submit"
-                    id="analyze-button"
-                    class="analyze-button"
-                >
+                <div class="energy-beam-wrapper" id="energy-beam-wrapper">
+                    <div class="energy-beam"></div>
+                    <div class="energy-beam-glow"></div>
+                    <button
+                        type="submit"
+                        id="analyze-button"
+                        class="analyze-button"
+                    >
 
-                    <span class="button-content">
-                        Analyze
-                    </span>
+                        <span class="button-content">
+                            Analyze
+                        </span>
 
-                    <span
-                        id="button-loader"
-                        class="button-loader"
-                    ></span>
+                        <span
+                            id="button-loader"
+                            class="button-loader"
+                        ></span>
 
-                </button>
+                    </button>
+                </div>
 
             </form>
 
@@ -239,71 +286,7 @@
         </section>
 
 
-        <section
-            id="analysis-progress"
-            class="analysis-progress"
-            aria-hidden="true"
-        >
 
-            <div class="progress-header">
-
-                <h3 id="progress-title">
-                    Fetching live market data
-                </h3>
-
-                <span id="progress-percent">
-                    0%
-                </span>
-
-            </div>
-
-            <div class="progress-bar">
-                <div
-                    id="progress-fill"
-                    style="width: 0%"
-                ></div>
-            </div>
-
-            <div class="progress-stages">
-
-                <span
-                    class="progress-status"
-                    data-stage="market"
-                >
-                    MARKET
-                </span>
-
-                <span
-                    class="progress-status"
-                    data-stage="model"
-                >
-                    MODEL
-                </span>
-
-                <span
-                    class="progress-status"
-                    data-stage="stress"
-                >
-                    STRESS
-                </span>
-
-                <span
-                    class="progress-status"
-                    data-stage="ai"
-                >
-                    AI
-                </span>
-
-                <span
-                    class="progress-status"
-                    data-stage="save"
-                >
-                    SAVE
-                </span>
-
-            </div>
-
-        </section>
 
 
         <section

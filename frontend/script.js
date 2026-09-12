@@ -33,83 +33,72 @@
 /* ============================================================
    CURSOR-REPULSION PHYSICS ENGINE
    ============================================================ */
+// ============================================================
+// PARALLAX HEIST EFFECT
+// ============================================================
 
-const CursorPhysics = {
-    cursorX: 0,
-    cursorY: 0,
-    targetX: 0,
-    targetY: 0,
-    tokens: [],
+const ParallaxHeist = {
+    mouseX: 0,
+    mouseY: 0,
+    layers: [],
     isActive: false,
     animationId: null,
-
+    
     init() {
-        this.tokens = document.querySelectorAll(".physics-token");
-
-        if (!this.tokens.length) return;
-
+        const container = document.getElementById('parallax-bg');
+        if (!container) return;
+        
+        this.layers = Array.from(document.querySelectorAll('.parallax-layer'));
+        if (!this.layers.length) return;
+        
         this.isActive = true;
-
-        document.addEventListener("mousemove", (event) => {
-            this.targetX = event.clientX;
-            this.targetY = event.clientY;
+        
+        window.addEventListener('mousemove', (e) => {
+            if (!this.isActive || document.body.classList.contains('report-active')) return;
+            // Normalize mouse position between -1 and 1
+            this.mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+            this.mouseY = (e.clientY / window.innerHeight) * 2 - 1;
         });
-
+        
+        // Handle device orientation for mobile
+        window.addEventListener('deviceorientation', (e) => {
+            if (!this.isActive || document.body.classList.contains('report-active')) return;
+            // Normalize tilt
+            let tiltX = e.gamma; // left-to-right (-90 to 90)
+            let tiltY = e.beta;  // front-to-back (-180 to 180)
+            
+            // Clamp and normalize to -1 to 1
+            if (tiltX > 30) tiltX = 30;
+            if (tiltX < -30) tiltX = -30;
+            if (tiltY > 45) tiltY = 45;
+            if (tiltY < -45) tiltY = -45;
+            
+            this.mouseX = tiltX / 30;
+            this.mouseY = tiltY / 45;
+        });
+        
         this.animate();
     },
-
+    
     animate() {
         if (!this.isActive) return;
-
-        this.cursorX += (this.targetX - this.cursorX) * 0.08;
-        this.cursorY += (this.targetY - this.cursorY) * 0.08;
-
-        this.tokens.forEach((token, index) => {
-            const rect = token.getBoundingClientRect();
-
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-
-            const deltaX = centerX - this.cursorX;
-            const deltaY = centerY - this.cursorY;
-
-            const distance = Math.sqrt(
-                deltaX * deltaX + deltaY * deltaY
-            );
-
-            const repulsionRadius = 250;
-
-            if (distance < repulsionRadius && distance > 0) {
-                const force =
-                    Math.pow(
-                        1 - distance / repulsionRadius,
-                        2
-                    ) * 60;
-
-                const dirX = deltaX / distance;
-                const dirY = deltaY / distance;
-
-                const displacementX = dirX * force;
-                const displacementY = dirY * force;
-                const displacementZ = force * 0.5 + index * 10;
-
-                token.style.transform =
-                    `translate3d(${displacementX}px, ${displacementY}px, ${displacementZ}px) ` +
-                    `rotateZ(${dirX * 5}deg)`;
-            } else {
-                token.style.transform = "";
-            }
+        
+        this.layers.forEach(layer => {
+            const depth = parseFloat(layer.getAttribute('data-depth')) || 0;
+            // X and Y translation based on depth
+            const tx = this.mouseX * depth * 30; 
+            const ty = this.mouseY * depth * 30;
+            
+            layer.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
         });
-
+        
         this.animationId = requestAnimationFrame(() => this.animate());
     },
-
+    
     destroy() {
         this.isActive = false;
-
         if (this.animationId) {
             cancelAnimationFrame(this.animationId);
-            this.animationId = null;
         }
     }
 };
@@ -1030,24 +1019,16 @@ function animateProgressTo(
 }
 
 function startProgress() {
-    const overlay =
-        $("#analysis-progress");
-
-    if (overlay) {
-        show(overlay);
-    }
-
     _progressCurrent = 0;
-
     updateProgressDOM(1, "queued", "Starting analysis…");
 
-    if (
-        typeof AnalysisBeam !==
-        "undefined"
-    ) {
-        AnalysisBeam.create();
-        AnalysisBeam.setProgress(1);
-    }
+    const wrapper = $("#energy-beam-wrapper");
+    const beam = $(".energy-beam");
+    const glow = $(".energy-beam-glow");
+
+    if (wrapper) wrapper.classList.add("is-analyzing");
+    if (beam) beam.style.width = "1%";
+    if (glow) glow.style.width = "1%";
 }
 
 /**
@@ -1067,55 +1048,41 @@ function applyJobProgress(job) {
 
     animateProgressTo(safePercent, stage, title, 500);
 
-    if (
-        typeof AnalysisBeam !== "undefined"
-    ) {
-        AnalysisBeam.setProgress(safePercent);
-    }
+    const beam = $(".energy-beam");
+    const glow = $(".energy-beam-glow");
+    if (beam) beam.style.width = `${safePercent}%`;
+    if (glow) glow.style.width = `${safePercent}%`;
 }
 
 function finishProgress() {
-    const overlay =
-        $("#analysis-progress");
-
     animateProgressTo(100, "complete", "Analysis complete", 400);
 
-    if (
-        typeof AnalysisBeam !==
-        "undefined"
-    ) {
-        AnalysisBeam.setProgress(100);
-    }
+    const beam = $(".energy-beam");
+    const glow = $(".energy-beam-glow");
+    if (beam) beam.style.width = "100%";
+    if (glow) glow.style.width = "100%";
 
     setTimeout(() => {
-        if (overlay) {
-            hide(overlay);
-        }
-
-        if (
-            typeof AnalysisBeam !==
-            "undefined"
-        ) {
-            AnalysisBeam.remove();
-        }
+        const wrapper = $("#energy-beam-wrapper");
+        if (wrapper) wrapper.classList.remove("is-analyzing");
+        if (beam) beam.style.width = "0%";
+        if (glow) glow.style.width = "0%";
     }, 700);
 }
 
 function abortProgress() {
-    const overlay = $("#analysis-progress");
-
     if (_progressAnim) {
         cancelAnimationFrame(_progressAnim);
         _progressAnim = null;
     }
 
-    if (overlay) {
-        hide(overlay);
-    }
-
-    if (typeof AnalysisBeam !== "undefined") {
-        AnalysisBeam.remove();
-    }
+    const wrapper = $("#energy-beam-wrapper");
+    const beam = $(".energy-beam");
+    const glow = $(".energy-beam-glow");
+    
+    if (wrapper) wrapper.classList.remove("is-analyzing");
+    if (beam) beam.style.width = "0%";
+    if (glow) glow.style.width = "0%";
 }
 
 
@@ -2721,6 +2688,7 @@ function updateLiveMarket(
 
 function clearReportView() {
     state.latestReport = null;
+    document.body.classList.remove('report-active');
 
     setText(
         "#report-token",
@@ -4675,6 +4643,7 @@ function renderReport(
         return;
     }
 
+    document.body.classList.add('report-active');
     console.log(
         "Rendering CryptoRisk report:",
         report
@@ -5269,18 +5238,8 @@ window.addEventListener(
         stopLivePolling();
         stopJobPolling();
 
-        if (
-            typeof CursorPhysics !==
-            "undefined"
-        ) {
-            CursorPhysics.destroy();
-        }
-
-        if (
-            typeof MoneyMeteor !==
-            "undefined"
-        ) {
-            MoneyMeteor.destroy();
+        if (typeof ParallaxHeist !== "undefined") {
+            ParallaxHeist.destroy();
         }
     }
 );
@@ -6999,18 +6958,44 @@ const MoneyMeteor = {
    FINAL DOM INITIALIZATION
    ============================================================ */
 
+function initCardTilt() {
+    document.body.addEventListener('mousemove', (e) => {
+        const card = e.target.closest('.market-card, .risk-pillar, .stress-card, .stress-verdict-card, .driver-card');
+        if (!card) return;
+        
+        const rect = card.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        const centerX = rect.width / 2;
+        const centerY = rect.height / 2;
+        
+        const rotateX = ((y - centerY) / centerY) * -10;
+        const rotateY = ((x - centerX) / centerX) * 10;
+        
+        card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`;
+        card.style.transition = 'none';
+        card.style.zIndex = '10';
+    });
+    
+    document.body.addEventListener('mouseout', (e) => {
+        const card = e.target.closest('.market-card, .risk-pillar, .stress-card, .stress-verdict-card, .driver-card');
+        if (!card) return;
+        
+        // Only reset if we actually left the card, not just a child element
+        if (!card.contains(e.relatedTarget)) {
+            card.style.transform = '';
+            card.style.transition = 'transform 0.5s ease';
+            card.style.zIndex = '1';
+        }
+    });
+}
+
 document.addEventListener(
     "DOMContentLoaded",
     () => {
-        CursorPhysics.init();
-
-        if (
-            document.getElementById(
-                "meteor-canvas"
-            )
-        ) {
-            MoneyMeteor.init();
-        }
+        ParallaxHeist.init();
+        initCardTilt();
 
         const analysisForm =
             $("#analysis-form");
