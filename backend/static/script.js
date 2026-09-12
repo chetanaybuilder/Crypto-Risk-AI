@@ -343,9 +343,6 @@ function normalizeSource(source) {
         return "CoinGecko";
     }
 
-    if (normalized.includes("binance")) {
-        return "Binance";
-    }
 
     if (normalized.includes("backend")) {
         return "Backend market feed";

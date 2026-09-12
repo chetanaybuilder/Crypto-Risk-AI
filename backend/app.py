@@ -3838,6 +3838,27 @@ def calculate_liquidity_metrics(
         }
 
 
+def _prices_only(history: list) -> list:
+    """
+    Extract bare price floats from a history list that may contain
+    rich dicts (P2 format) or bare floats.
+    """
+    if not isinstance(history, list):
+        return []
+    
+    prices = []
+    for item in history:
+        if isinstance(item, dict):
+            price = optional_numeric(item.get("price"))
+        else:
+            price = optional_numeric(item)
+            
+        if price is not None:
+            prices.append(price)
+            
+    return prices
+
+
 def calculate_quant_metrics(
     symbol: str,
     market: dict,
