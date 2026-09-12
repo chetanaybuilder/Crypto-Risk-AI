@@ -252,6 +252,10 @@ MARKET_STALE_MAX_AGE = max(
     60,
     int(os.getenv("MARKET_STALE_MAX_AGE", "1800")),
 )
+HISTORY_STALE_MAX_AGE = max(
+    60,
+    int(os.getenv("HISTORY_STALE_MAX_AGE", "86400")),
+)
 # In-function retry budget for CoinGecko calls (market + history).
 # Retries cover connection errors, timeouts, and 5xx responses with
 # short exponential backoff. 429s are NOT retried here — they are
@@ -3314,6 +3318,8 @@ def fetch_price_history(
         )
 
         now = time.time()
+        stale_prices = None
+        cached_at = 0
 
         try:
 
@@ -3327,7 +3333,8 @@ def fetch_price_history(
                 cached,
                 dict,
             ) and cached:
-
+                stale_prices = cached.get("prices", [])
+                
                 cached_at = numeric(
                     cached.get(
                         "_cached_at",
@@ -3341,10 +3348,7 @@ def fetch_price_history(
                     < HISTORY_CACHE_TTL
                 ):
 
-                    cached_prices = cached.get(
-                        "prices",
-                        [],
-                    )
+                    cached_prices = stale_prices
 
                     if isinstance(
                         cached_prices,
@@ -3384,6 +3388,15 @@ def fetch_price_history(
             history_source,
             len(prices),
         )
+
+        if not prices and stale_prices and isinstance(stale_prices, list):
+            if (now - cached_at) < HISTORY_STALE_MAX_AGE:
+                logger.info(
+                    "[HISTORY] symbol=%s source=stale_cache candles=%d",
+                    symbol,
+                    len(stale_prices),
+                )
+                return list(stale_prices)
 
         # Only cache NON-EMPTY results. Caching an empty list would
         # freeze "0 candles" for the full TTL when the provider fails
