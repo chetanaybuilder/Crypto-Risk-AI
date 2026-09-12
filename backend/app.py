@@ -3869,10 +3869,17 @@ def calculate_quant_metrics(
         ):
             btc_history = []
 
+        # FIX (Bug 3): history is now a list of {"timestamp": ..., "price": ...}
+        # dicts (P2 format). Functions like realized_volatility(), max_drawdown(),
+        # and calculate_returns() expect bare floats. Extract prices first.
+        history_prices = _prices_only(history)
+
         volatility = realized_volatility(
-            history
+            history_prices
         )
 
+        # calculate_beta uses _align_series_by_date internally,
+        # which expects the rich P2 format with timestamps.
         beta = calculate_beta(
             history,
             btc_history,
@@ -3883,20 +3890,22 @@ def calculate_quant_metrics(
         )
 
         drawdown = max_drawdown(
-            history
+            history_prices
         )
 
         returns = calculate_returns(
-            history
+            history_prices
         )
 
         current_price = optional_numeric(
             market.get("price")
         )
 
+        # FIX (Bug 4): history[-1] is now a dict, not a float.
+        # Extract the price float from the last entry.
         historical_price = (
-            history[-1]
-            if history
+            history_prices[-1]
+            if history_prices
             else None
         )
 
@@ -7322,6 +7331,14 @@ class _PooledConnection:
         self._pool = pool
         self._conn = conn
 
+    # FIX (Bug 10): support `with get_db_connection() as conn:` usage.
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def cursor(self, *args, **kwargs):
         return self._conn.cursor(*args, **kwargs)
 
@@ -7442,10 +7459,14 @@ def init_db():
             # ANALYSES
             # ------------------------------------------------
 
+            # FIX (Bug 11): add DEFAULT gen_random_uuid() so INSERTs
+            # that omit the id column (like save_analysis) get a UUID
+            # automatically instead of a NOT NULL constraint violation.
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS analyses (
-                    id UUID PRIMARY KEY,
+                    id UUID PRIMARY KEY
+                        DEFAULT gen_random_uuid(),
 
                     user_id INTEGER NOT NULL
                         REFERENCES users(id)
@@ -8941,6 +8962,8 @@ def create_jwt_for_user(
             "Invalid user."
         )
 
+    now = int(time.time())
+
     payload = {
         "sub": str(
             user["id"]
@@ -8948,8 +8971,14 @@ def create_jwt_for_user(
 
         "email": user["email"],
 
-        "iat": int(
-            time.time()
+        "iat": now,
+
+        # FIX (Bug 9): JWTs previously had no expiration.
+        # Uses the same JWT_ACCESS_TOKEN_EXPIRES_DAYS config
+        # as flask-jwt-extended for consistency.
+        "exp": now + (
+            JWT_ACCESS_TOKEN_EXPIRES_DAYS
+            * 86400
         ),
     }
 
