@@ -417,10 +417,47 @@ else:
 # All API calls include timeout and error handling.
 # ============================================================
 
-# CoinGecko — Secondary market-data provider (market cap/history)
-COINGECKO_API_URL = (
-    "https://api.coingecko.com/api/v3"
+# CoinGecko — primary market-data provider (price, market cap,
+# 24h/7d change, high/low). Binance is a last-resort fallback only.
+#
+# FIX (A1): the base URL and auth header now depend on the purchased
+# CoinGecko plan:
+#   - "demo" (default, free Demo plan):
+#       base URL https://api.coingecko.com/api/v3
+#       header   x-cg-demo-api-key
+#   - "pro" (paid Pro plan):
+#       base URL https://pro-api.coingecko.com/api/v3
+#       header   x-cg-pro-api-key
+# Sending a paid Pro key under the Demo header (or to the public
+# host) makes CoinGecko treat it as anonymous traffic — which is a
+# very common cause of "I have a paid key but still get 429'd and
+# the dashboard shows Binance".
+COINGECKO_PLAN = (
+    os.getenv(
+        "COINGECKO_PLAN",
+        "demo",
+    )
+    .strip()
+    .lower()
 )
+
+if COINGECKO_PLAN not in ("demo", "pro"):
+    logger.warning(
+        "Unknown COINGECKO_PLAN '%s' (expected 'demo' or 'pro'); defaulting to 'demo'.",
+        COINGECKO_PLAN,
+    )
+    COINGECKO_PLAN = "demo"
+
+if COINGECKO_PLAN == "pro":
+    COINGECKO_API_URL = (
+        "https://pro-api.coingecko.com/api/v3"
+    )
+    COINGECKO_AUTH_HEADER = "x-cg-pro-api-key"
+else:
+    COINGECKO_API_URL = (
+        "https://api.coingecko.com/api/v3"
+    )
+    COINGECKO_AUTH_HEADER = "x-cg-demo-api-key"
 
 # Binance public spot ticker; no API key is required.
 BINANCE_API_URL = "https://api.binance.com/api/v3"
@@ -433,15 +470,48 @@ COINGECKO_API_KEY = (
     ).strip()
 )
 
+
+def _mask_secret(
+    value: str,
+) -> str:
+    """Return a masked, log-safe representation of a secret."""
+
+    if not value:
+        return "(not set)"
+
+    if len(value) <= 8:
+        return f"***({len(value)} chars)"
+
+    return (
+        f"{value[:4]}…{value[-4:]} "
+        f"({len(value)} chars)"
+    )
+
+
+# FIX (A1/A5): single startup line confirming the CoinGecko plan,
+# key presence (masked), and base URL — makes it obvious from the
+# deploy logs whether the env vars were actually picked up.
+logger.info(
+    "[CONFIG] CoinGecko plan=%s | key=%s | base_url=%s | header=%s",
+    COINGECKO_PLAN,
+    _mask_secret(COINGECKO_API_KEY),
+    COINGECKO_API_URL,
+    COINGECKO_AUTH_HEADER if COINGECKO_API_KEY else "(no auth header sent)",
+)
+
 # Provider cooldown durations (seconds).
-# 429 (rate-limit) gets the longest cooldown so the backend
-# backs off and lets the rate limit window reset before retrying.
+# FIX (A2): with a paid/working CoinGecko key, a transient 429
+# should not lock CoinGecko out of contention for minutes. The 429
+# default is lowered to 15s and the exponential backoff cap reduced
+# to 120s (see _mark_provider_failure) so a single old 429 cannot
+# block CoinGecko (and silently push every request to Binance) for
+# five minutes straight.
 PROVIDER_COOLDOWN_429 = max(
-    10,
+    5,
     int(
         os.getenv(
             "PROVIDER_COOLDOWN_429",
-            "30",
+            "15",
         )
     ),
 )
@@ -686,7 +756,7 @@ def _mark_provider_failure(
             _provider_failure_counts[name] = failures
 
         backoff = min(
-            300,
+            120,
             PROVIDER_COOLDOWN_429 * (2 ** min(failures - 1, 4)),
         )
         seconds = max(
@@ -735,6 +805,72 @@ def _clear_provider_success(
                 None,
             )
         _provider_failure_counts.pop(name, None)
+
+
+# ============================================================
+# COINGECKO CONSECUTIVE-FAILURE TRACKING (A3)
+# ============================================================
+# Binance is the LAST RESORT, not the immediate secondary. A single
+# CoinGecko failure (or a single cold cooldown entry) must not hand
+# the request to Binance. These globals track how many times
+# CoinGecko has failed in a row and when it last succeeded, so
+# fetch_market_data() can:
+#   1. retry CoinGecko live once (bypassing cooldown) when its data
+#      is actually stale (last success older than MARKET_CACHE_TTL),
+#   2. only fall through to Binance after
+#      COINGECKO_FAILURES_BEFORE_BINANCE consecutive failures.
+# ============================================================
+
+_coingecko_failure_streak = 0
+_coingecko_last_success_at = 0.0
+_coingecko_streak_lock = Lock()
+
+# FIX (A3): tunable consecutive-failure threshold. Binance is only
+# used after CoinGecko has failed this many times in a row.
+COINGECKO_FAILURES_BEFORE_BINANCE = max(
+    1,
+    int(os.getenv("COINGECKO_FAILURES_BEFORE_BINANCE", "2")),
+)
+
+
+def _record_coingecko_success() -> None:
+    """Reset the CoinGecko consecutive-failure streak."""
+
+    global _coingecko_failure_streak
+    global _coingecko_last_success_at
+
+    with _coingecko_streak_lock:
+        _coingecko_failure_streak = 0
+        _coingecko_last_success_at = time.time()
+
+
+def _record_coingecko_failure() -> None:
+    """Increment the CoinGecko consecutive-failure streak."""
+
+    global _coingecko_failure_streak
+
+    with _coingecko_streak_lock:
+        _coingecko_failure_streak += 1
+        return _coingecko_failure_streak
+
+
+def _coingecko_failure_count() -> int:
+    with _coingecko_streak_lock:
+        return _coingecko_failure_streak
+
+
+def _coingecko_data_is_stale() -> bool:
+    """
+    True when the last successful CoinGecko call is older than
+    MARKET_CACHE_TTL — i.e. no fresh CoinGecko snapshot exists, so
+    a live retry (bypassing cooldown) is justified before falling
+    back to Binance.
+    """
+
+    with _coingecko_streak_lock:
+        last_success = _coingecko_last_success_at
+
+    return (time.time() - last_success) > MARKET_CACHE_TTL
 
 
 def _get_symbol_fetch_lock(
@@ -1736,8 +1872,13 @@ def http_get(
             "User-Agent": "CryptoRisk-AI/3.0",
         }
 
-        if COINGECKO_API_KEY and "api.coingecko.com" in url:
-            headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
+        # FIX (A1): header name + host now follow the configured
+        # CoinGecko plan (demo -> x-cg-demo-api-key on
+        # api.coingecko.com; pro -> x-cg-pro-api-key on
+        # pro-api.coingecko.com). Matching "coingecko.com" covers
+        # both hosts (pro-api.coingecko.com contains the string).
+        if COINGECKO_API_KEY and "coingecko.com" in url:
+            headers[COINGECKO_AUTH_HEADER] = COINGECKO_API_KEY
 
         response = requests.get(
             url,
@@ -1796,8 +1937,10 @@ def _http_get_market(
             "User-Agent": "CryptoRisk-AI/3.0",
         }
 
-        if COINGECKO_API_KEY and "api.coingecko.com" in url:
-            headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
+        # FIX (A1): header name + host now follow the configured
+        # CoinGecko plan (see COINGECKO_PLAN above).
+        if COINGECKO_API_KEY and "coingecko.com" in url:
+            headers[COINGECKO_AUTH_HEADER] = COINGECKO_API_KEY
 
         response = requests.get(
             url,
@@ -2053,6 +2196,7 @@ def resolve_coin_id(
 
 def fetch_coingecko_market(
     symbol: str,
+    bypass_cooldown: bool = False,
 ) -> dict:
     """
     Fetch current market snapshot from CoinGecko (/coins/markets).
@@ -2068,7 +2212,9 @@ def fetch_coingecko_market(
         return empty_market_data(symbol)
 
     # Skip if currently on cooldown
-    if _provider_is_cooling("CoinGecko"):
+    # (bypass_cooldown=True is used by fetch_market_data's live
+    # one-shot retry — see A3.)
+    if not bypass_cooldown and _provider_is_cooling("CoinGecko"):
         market = empty_market_data(symbol)
         market["unavailable_reason"] = "CoinGecko is temporarily cooling down after a provider failure."
         return market
@@ -2494,20 +2640,59 @@ def fetch_market_data(
             # =====================================================
             # PRIMARY: CoinGecko — returns the complete snapshot
             # (price, volume, market cap, high/low, 7d change) in a
-            # single call. If CoinGecko is on cooldown we skip it
-            # immediately and go to Binance so the dashboard never
-            # waits for a predictable 429 failure.
+            # single call.
+            #
+            # FIX (A3): CoinGecko is ALWAYS tried first. Binance is
+            # the true last resort, not the immediate secondary:
+            #   - A single CoinGecko failure must NOT hand the
+            #     request to Binance.
+            #   - A cold cooldown entry does not "give up" either:
+            #     when no fresh CoinGecko snapshot exists (last
+            #     success older than MARKET_CACHE_TTL), CoinGecko is
+            #     retried live ONCE, bypassing the cooldown.
+            #   - Binance is only used after
+            #     COINGECKO_FAILURES_BEFORE_BINANCE (default 2)
+            #     consecutive CoinGecko failures.
             # =====================================================
-            coingecko_primary_skipped = _provider_is_cooling("CoinGecko")
+            coingecko_on_cooldown = _provider_is_cooling("CoinGecko")
 
-            if coingecko_primary_skipped:
-                logger.info(
-                    "[MARKET] %s CoinGecko primary skipped (cooling down); using Binance",
-                    symbol,
-                )
-            else:
+            coingecko_attempted = not coingecko_on_cooldown
+
+            if coingecko_on_cooldown:
+
+                if _coingecko_data_is_stale():
+                    # FIX (A3): don't treat a single cold cooldown
+                    # entry as "give up" — retry CoinGecko live once
+                    # (bypassing cooldown) before considering Binance.
+                    coingecko_attempted = True
+                    logger.info(
+                        "[MARKET] %s CoinGecko on cooldown but no fresh "
+                        "snapshot exists; retrying CoinGecko live once "
+                        "(bypassing cooldown)",
+                        symbol,
+                    )
+                else:
+                    logger.info(
+                        "[MARKET] %s CoinGecko on cooldown; a successful "
+                        "CoinGecko fetch happened within the last %ss — "
+                        "skipping the provider attempt for this request",
+                        symbol,
+                        MARKET_CACHE_TTL,
+                    )
+
+            if coingecko_attempted:
                 try:
-                    market = fetch_coingecko_market(symbol)
+                    market = fetch_coingecko_market(
+                        symbol,
+                        # FIX (A3): when this is the live one-shot
+                        # retry that bypasses cooldown, make sure the
+                        # provider function does not re-check the
+                        # cooldown and bail out immediately.
+                        bypass_cooldown=(
+                            coingecko_on_cooldown
+                            and _coingecko_data_is_stale()
+                        ),
+                    )
 
                     # CoinGecko's snapshot includes market cap for
                     # free. Cache it here so later Binance fallback
@@ -2534,6 +2719,13 @@ def fetch_market_data(
                                 "cached_at": time.time(),
                             }
 
+                except UnsupportedAssetError:
+                    # FIX (Bug 5, previous round): propagate so the
+                    # API layer can return a distinct 400
+                    # UNSUPPORTED_ASSET. Not a provider failure —
+                    # do not touch the failure streak.
+                    raise
+
                 except Exception as exc:
                     logger.exception(
                         "[MARKET] CoinGecko primary failed for %s: %s",
@@ -2545,25 +2737,72 @@ def fetch_market_data(
                         f"CoinGecko primary request failed unexpectedly: {exc}."
                     )
 
+                if (
+                    isinstance(market, dict)
+                    and market.get("available")
+                ):
+                    _record_coingecko_success()
+                else:
+                    _record_coingecko_failure()
+            else:
+                market = empty_market_data(symbol)
+                market["unavailable_reason"] = (
+                    "CoinGecko is temporarily cooling down after a recent "
+                    "provider failure; no fresh snapshot is available."
+                )
+
             # =====================================================
-            # FALLBACK: Binance — unlimited public ticker via the
-            # data-api.binance.vision mirror. Binance does not
-            # return market cap, so enrich from the CoinGecko
-            # market-cap cache (serving stale values past the TTL
-            # when CoinGecko is rate-limited).
+            # LAST-RESORT FALLBACK: Binance — unlimited public
+            # ticker via the data-api.binance.vision mirror.
+            #
+            # FIX (A3): Binance is used ONLY after CoinGecko has
+            # failed COINGECKO_FAILURES_BEFORE_BINANCE times in a
+            # row. After a single failure the request returns an
+            # unavailable market (the frontend keeps serving the
+            # last-known snapshot / live-state indicator) instead of
+            # silently switching sources.
+            #
+            # Binance does not return market cap, so the enrichment
+            # below uses the CoinGecko market-cap cache (serving
+            # stale values past the TTL when CoinGecko is
+            # rate-limited) — it NEVER makes a live CoinGecko call
+            # from inside this fallback path (see Bug 1 fix).
             # =====================================================
             if not market.get("available"):
-                try:
-                    market = get_binance_price(symbol)
-                except Exception as exc:
-                    logger.exception(
-                        "[MARKET] Binance fallback failed for %s: %s",
+
+                if (
+                    _coingecko_failure_count()
+                    >= COINGECKO_FAILURES_BEFORE_BINANCE
+                ):
+                    logger.info(
+                        "[MARKET] %s CoinGecko failed %s times in a row "
+                        "(threshold: %s); using Binance as last resort",
                         symbol,
-                        exc,
+                        _coingecko_failure_count(),
+                        COINGECKO_FAILURES_BEFORE_BINANCE,
                     )
-                    market = empty_market_data(symbol)
-                    market["unavailable_reason"] = (
-                        f"Binance fallback failed unexpectedly: {exc}."
+
+                    try:
+                        market = get_binance_price(symbol)
+                    except Exception as exc:
+                        logger.exception(
+                            "[MARKET] Binance fallback failed for %s: %s",
+                            symbol,
+                            exc,
+                        )
+                        market = empty_market_data(symbol)
+                        market["unavailable_reason"] = (
+                            f"Binance fallback failed unexpectedly: {exc}."
+                        )
+
+                else:
+                    logger.info(
+                        "[MARKET] %s CoinGecko unavailable (consecutive "
+                        "failures: %s/%s); Binance NOT used — keeping "
+                        "CoinGecko as the primary source",
+                        symbol,
+                        _coingecko_failure_count(),
+                        COINGECKO_FAILURES_BEFORE_BINANCE,
                     )
 
             # Binance does not provide circulating supply or market cap.
@@ -6309,6 +6548,66 @@ def run_gemini_interpretation(
 # STRUCTURED REPORT
 # ============================================================
 
+# ============================================================
+# FIELD LABEL NORMALIZATION (B2)
+# ============================================================
+# Maps raw internal provider keys (as used in market["field_errors"])
+# to the exact human-readable labels used in
+# build_structured_report's field_checks, so a single missing field
+# can never appear twice in the UI ("Market cap" AND "market_cap").
+# ============================================================
+
+FIELD_LABELS = {
+    "price": "Live price",
+    "current_price": "Live price",
+    "priceChangePercent": "24h change",
+    "price_change_24h_pct": "24h change",
+    "price_change_percentage_24h": "24h change",
+    "price_change_percentage_24h_in_currency": "24h change",
+    "price_change_7d_pct": "7d change",
+    "price_change_percentage_7d_in_currency": "7d change",
+    "volume_24h": "24h volume",
+    "volume_24h_usd": "24h volume",
+    "total_volume": "24h volume",
+    "quoteVolume": "24h volume",
+    "market_cap": "Market cap",
+    "market_cap_usd": "Market cap",
+    "high_24h": "24h high",
+    "low_24h": "24h low",
+    "history_observations": "Price history",
+    "btc_history_observations": "BTC benchmark history",
+    "contract_security": "Contract security",
+}
+
+
+def _field_error_label(
+    error_field,
+) -> str:
+    """
+    Translate a raw internal field key into the same human-readable
+    label used by field_checks (B2). Unknown keys are normalized to
+    readable text (snake_case/camelCase split + title case) so no raw
+    internal identifier ever reaches the UI.
+    """
+
+    key = str(error_field)
+
+    known = FIELD_LABELS.get(key)
+
+    if known:
+        return known
+
+    readable = re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])",
+        " ",
+        key,
+    ).replace("_", " ")
+
+    readable = readable.strip().title()
+
+    return readable or key
+
+
 def build_structured_report(
     symbol,
     market,
@@ -6418,14 +6717,33 @@ def build_structured_report(
     # Also surface any field-level parse errors reported by providers
     # (e.g., priceChangePercent, quoteVolume parse failures) even when
     # the final top-level field appears non-None from another source.
+    #
+    # FIX (B2): field_checks uses human-readable labels ("Market cap")
+    # while field_errors historically used raw internal provider keys
+    # ("market_cap"), so the SAME missing field was shown twice with
+    # different casing ("Market cap" AND "market_cap"). Every
+    # field_errors key is now translated through FIELD_LABELS to the
+    # exact same display name used in field_checks, and the merged
+    # list is deduplicated while preserving order.
     field_errors = dict(
         market.get("field_errors")
         if isinstance(market.get("field_errors"), dict)
         else {}
     )
     for error_field in field_errors:
-        if error_field not in missing_signals:
-            missing_signals.append(error_field)
+        error_label = _field_error_label(error_field)
+
+        if error_label not in missing_signals:
+            missing_signals.append(error_label)
+
+    # Final dedup (order-preserving) so no field can ever appear
+    # twice in the UI under any name.
+    deduped_missing_signals = []
+    for signal_name in missing_signals:
+        if signal_name not in deduped_missing_signals:
+            deduped_missing_signals.append(signal_name)
+    missing_signals = deduped_missing_signals
+
     dq["available_fields"] = available_fields
     dq["field_errors"] = field_errors
     dq["source_timestamps"] = dict(
@@ -8936,6 +9254,22 @@ def health():
         # the real backend job timeout instead of hardcoding it.
         "analysis_job_timeout_seconds": (
             ANALYSIS_JOB_TIMEOUT_SECONDS
+        ),
+
+        # FIX (A5): makes it verifiable from the browser that the
+        # deployed instance actually picked up the CoinGecko env
+        # vars after a redeploy (a very common cause of "I added the
+        # key but nothing changed").
+        "coingecko_plan": (
+            COINGECKO_PLAN
+        ),
+
+        "coingecko_key_configured": (
+            bool(COINGECKO_API_KEY)
+        ),
+
+        "coingecko_base_url": (
+            COINGECKO_API_URL
         ),
     })
 

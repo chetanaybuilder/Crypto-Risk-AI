@@ -3480,12 +3480,16 @@ function renderRiskProfile(
             report.risk_confidence
         );
 
+    // FIX (B1): the HTML template already renders a static "/ 100"
+    // label next to #report-risk-score, so appending "/100" here
+    // produced "39/100 /100". Set ONLY the number and let the static
+    // label render once.
     setText(
         "#report-risk-score",
         compositeScore !== null
-            ? `${formatScore(
+            ? formatScore(
                 compositeScore
-            )}/100`
+            )
             : "—"
     );
 
@@ -3567,8 +3571,25 @@ function renderRiskProfile(
         marketSensitivity || {}
     );
 
+    /*
+     * FIX (B3): the "Contract" card the user actually sees uses the
+     * #pillar-contract-value / #pillar-contract-bar /
+     * #pillar-contract-detail DOM elements, while the backend
+     * returns the security/structural pillar under the key
+     * "structural" in risk_profile.pillars. Previously the data was
+     * written to #pillar-structural-* elements (which don't exist in
+     * the served template), so the visible Contract card never
+     * updated and always showed its placeholder. The structural
+     * pillar is now rendered directly into the contract elements,
+     * and the dead "contract"-key lookup block was removed.
+     *
+     * Native assets (BTC/ETH/…) return a not-applicable security
+     * object, which buildPillarDetail() renders as
+     * "Not applicable — native assets have no smart contract to
+     * analyze" instead of a bare "—".
+     */
     renderPillar(
-        "structural",
+        "contract",
         firstDefined(
             getPillar(
                 report,
@@ -3594,26 +3615,6 @@ function renderRiskProfile(
                 "Combined evidence-based risk score."
         }
     );
-
-    /*
-     * If your HTML has a separate
-     * contract pillar, render it too.
-     */
-    const contract =
-        getPillar(
-            report,
-            "contract"
-        );
-
-    if (
-        Object.keys(contract)
-            .length
-    ) {
-        renderPillar(
-            "contract",
-            contract
-        );
-    }
 }
 
 
@@ -3761,6 +3762,33 @@ function buildPillarDetail(
             pillar.interpretation
         );
 
+    /*
+     * FIX (B3): native assets (BTC/ETH/…) have no smart contract, so
+     * the security/structural pillar is "not applicable". That must
+     * never render as a bare "—" (which reads as "broken/unknown").
+     * A not-applicable signal is shown as an explanation instead.
+     */
+    if (pillar.not_applicable === true) {
+        return (
+            "Not applicable — native assets (e.g. BTC/ETH) have " +
+            "no smart contract to analyze."
+        );
+    }
+
+    if (
+        detail !== null &&
+        /not[\s-]?applicable/i.test(
+            String(detail)
+        )
+    ) {
+        return (
+            `${String(detail)
+                .replace(/\.$/, "")
+                .trim()} — native assets (e.g. BTC/ETH) have no ` +
+            "smart contract to analyze."
+        );
+    }
+
     if (detail !== null) {
         return String(detail);
     }
@@ -3834,10 +3862,10 @@ function generatePillarFallbackDetail(
             "Volatility signal unavailable — insufficient price history.",
 
         structural:
-            "Structural signal unavailable — no contract/security data.",
+            "Structural/contract security signal unavailable — no contract security data.",
 
         contract:
-            "Contract/security signal unavailable — no contract/security data."
+            "Contract/security signal unavailable — no contract security data."
     };
 
     if (
