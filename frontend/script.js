@@ -4064,15 +4064,17 @@ function getExpectedDrawdown(
                 base.drawdown_pct
             );
 
-        const numericMove =
-            Number(move);
+        if (move !== null) {
+            const numericMove =
+                Number(move);
 
-        if (
-            Number.isFinite(
-                numericMove
-            )
-        ) {
-            return numericMove;
+            if (
+                Number.isFinite(
+                    numericMove
+                )
+            ) {
+                return numericMove;
+            }
         }
     }
 
@@ -4110,21 +4112,23 @@ function getResilienceLabel(
             stressObj.resilience_score
         );
 
-    const score =
-        Number(rawScore);
+    if (rawScore !== null) {
+        const score =
+            Number(rawScore);
 
-    if (
-        Number.isFinite(score)
-    ) {
-        if (score >= 65) {
-            return "Resilient";
+        if (
+            Number.isFinite(score)
+        ) {
+            if (score >= 65) {
+                return "Resilient";
+            }
+
+            if (score >= 40) {
+                return "Moderate";
+            }
+
+            return "Fragile";
         }
-
-        if (score >= 40) {
-            return "Moderate";
-        }
-
-        return "Fragile";
     }
 
     return null;

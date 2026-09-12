@@ -4522,9 +4522,11 @@ def calculate_composite_risk(
     is_partial = weight_sum < 0.5
 
     return (
-        round(
-            composite,
-            1,
+        int(
+            round(
+                composite,
+                0,
+            )
         ),
         confidence,
         is_partial,
@@ -5094,7 +5096,7 @@ def calculate_stress_test(
             "scenarios": [],
             "expected_downside_pct": None,
             "resilience_score": None,
-            "verdict": "Unavailable",
+            "verdict": "Unavailable — no BTC benchmark history",
             "confidence": None,
         })
 
@@ -5581,7 +5583,7 @@ STRICT RULES:
 
 9. Explain what the quantitative numbers mean.
 
-10. Keep the executive summary concise but genuinely useful.
+10. Keep the executive summary concise but genuinely useful. The executive summary, risk drivers, what changed, and watch next fields MUST contain highly specific asset data and exact numbers from the evidence packet. Do not use generic boilerplate text. Produce asset-specific reasoning.
 
 11. Clearly identify the most important weaknesses in the
     current evidence.
@@ -5749,22 +5751,18 @@ def fallback_ai_report(
         ],
 
         "what_changed": (
-            "The current report reflects the latest available "
-            "market and quantitative inputs."
+            "Insufficient data to dynamically determine what changed."
         ),
 
         "what_matters_now": (
-            "The most important consideration is whether "
-            "the dominant quantitative risk signal remains elevated."
+            f"Monitor structural security and "
+            f"track changes to the {primary_driver.replace('_', ' ')}."
         ),
 
-        "watch_next": (
-            "Monitor volatility, liquidity, BTC sensitivity "
-            "and any newly available structural security data."
-        ),
+        "watch_next": "Upcoming market liquidity shifts and beta recalibration.",
 
         "risk_mitigating_factors": [
-            "Multiple quantitative signals are evaluated together.",
+            "Quantitative data is continually reassessed.",
             "Stress scenarios provide additional downside context.",
         ],
 
@@ -5778,19 +5776,15 @@ def fallback_ai_report(
         ),
 
         "bull_case": (
-            "A more favorable risk profile would require "
-            "improving quantitative conditions."
+            "Quantitative model shows strength in mitigating factors."
         ),
 
         "base_case": (
-            "The current evidence supports interpreting "
-            "the asset according to its present quantitative "
-            "risk regime."
+            f"Market forces align with a {label.lower()} profile."
         ),
 
         "bear_case": (
-            "A deterioration in volatility, liquidity or "
-            "market sensitivity could increase downside risk."
+            f"Shocks to {primary_driver.replace('_', ' ')} could destabilize the asset."
         ),
 
         "stress_interpretation": (
@@ -6633,8 +6627,12 @@ def build_structured_report(
         if (is_native_asset or security_not_applicable)
         else []
     )
+    base_confidence = len(available_fields) / len(field_checks) * 100
     dq["confidence"] = round(
-        len(available_fields) / len(field_checks) * 100,
+        min(
+            base_confidence,
+            risk_profile.get("confidence", 100)
+        ),
         1,
     )
 
