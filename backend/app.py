@@ -209,13 +209,13 @@ GEMINI_MODEL = os.getenv(
 ).strip()
 
 GEMINI_TIMEOUT_MS = min(
-    15000,
+    25000,
     max(
         5000,
         int(
             os.getenv(
                 "GEMINI_TIMEOUT_MS",
-                "12000",
+                "18000",
             )
         ),
     ),
@@ -3079,9 +3079,10 @@ def fetch_market_data(
                         default=0,
                     )
 
+                    effective_ttl = 86400 if symbol.upper() == "BTC" else MARKET_CACHE_TTL
                     if (
                         cached.get("available")
-                        and (now - cached_at) < MARKET_CACHE_TTL
+                        and (now - cached_at) < effective_ttl
                     ):
                         result = dict(cached)
                         result.pop("_cached_at", None)
@@ -3117,9 +3118,10 @@ def fetch_market_data(
                             default=0,
                         )
 
+                        effective_ttl = 86400 if symbol.upper() == "BTC" else MARKET_CACHE_TTL
                         if (
                             cached.get("available")
-                            and (now - cached_at) < MARKET_CACHE_TTL
+                            and (now - cached_at) < effective_ttl
                         ):
                             result = dict(cached)
                             result.pop("_cached_at", None)
