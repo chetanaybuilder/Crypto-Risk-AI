@@ -2031,6 +2031,15 @@ async function runAnalysis(
         finishProgress();
 
         if (state.currentSymbol) {
+            // FIX (Problem 1): Use the fresh market data from the newly completed 
+            // analysis report to update the live UI immediately. This avoids a 
+            // redundant /api/market call right after a job finishes.
+            const jobMarket = getMarket(report);
+            if (jobMarket && Object.keys(jobMarket).length > 0) {
+                updateLiveMarket(jobMarket);
+                state.lastLiveMarketFetchAt = Date.now();
+            }
+
             startLivePolling(state.currentSymbol);
         }
     } catch (error) {
