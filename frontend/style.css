@@ -451,10 +451,10 @@ img {
     align-items: center;
     justify-content: space-between;
     padding: 14px 48px;
-    background: rgba(5, 5, 5, 0.82);
+    background: linear-gradient(180deg, rgba(15, 15, 15, 0.95) 0%, rgba(5, 5, 5, 0.82) 100%);
     backdrop-filter: blur(28px) saturate(200%);
-    border-bottom: 1px solid rgba(204,0,0,0.25);
-    box-shadow: 0 1px 0 rgba(204,0,0,0.12), 0 8px 32px rgba(0,0,0,0.5);
+    border-bottom: 2px solid rgba(255, 30, 30, 0.35);
+    box-shadow: 0 4px 0 rgba(100, 0, 0, 0.4), 0 12px 36px rgba(0,0,0,0.7), inset 0 -1px 4px rgba(255,0,0,0.2);
 }
 
 /* === BRAND LOGO BADGE === */
@@ -600,13 +600,14 @@ img {
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: #fff;
-    background: linear-gradient(180deg, #b30000 0%, #7a0000 100%);
-    border: 1px solid #ff3333;
+    background: linear-gradient(180deg, #c20000 0%, #7a0000 100%);
+    border: 1px solid rgba(255,80,80,0.8);
+    box-shadow: 0 4px 0 #400000, 0 6px 12px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,100,100,0.5);
+    transform-style: preserve-3d;
+    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
     cursor: pointer;
     position: relative;
     overflow: hidden;
-    transform-style: preserve-3d;
-    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
     animation: logoutGlow 1.8s ease-in-out infinite alternate;
     text-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
@@ -855,10 +856,10 @@ img {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 10px 20px;
+    padding: 8px 18px;
     border-radius: 100px;
     font-weight: 800;
-    font-size: 13px;
+    font-size: 12px;
     color: #fff;
     background: linear-gradient(180deg, #b30000 0%, #7a0000 100%);
     border: 1px solid #ff3333;
@@ -898,20 +899,21 @@ img {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 8px 18px;
+    padding: 6px 16px;
     border-radius: 100px;
     font-weight: 800;
-    font-size: 12px;
+    font-size: 11px;
     color: #fff;
-    background: linear-gradient(180deg, #c20000 0%, #7a0000 100%);
-    border: 1px solid rgba(255,80,80,0.8);
+    background: linear-gradient(180deg, #e60000 0%, #990000 100%);
+    border: 1px solid rgba(255,100,100,0.9);
     overflow: hidden;
     transform-style: preserve-3d;
     transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
     gap: 6px;
+    box-shadow: 0 0 15px rgba(255, 50, 50, 0.6), 0 4px 0 #660000;
     animation: signInPulse 1.4s ease-in-out infinite alternate;
     white-space: nowrap;
 }
@@ -951,7 +953,17 @@ img {
     animation: rotateGlow 2s linear infinite;
     z-index: -1;
     opacity: 0;
-    transition: opacity 0.3s;
+    transition: opacity 0.2s;
+}
+
+.logout-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 5px 0 #400000, 0 8px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,120,120,0.6);
+}
+
+.logout-button:active {
+    transform: translateY(4px);
+    box-shadow: 0 0 0 #400000, 0 2px 4px rgba(0,0,0,0.4), inset 0 2px 4px rgba(0,0,0,0.3);
 }
 
 .hero-primary-button:hover .button-glow {

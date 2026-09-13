@@ -1693,6 +1693,9 @@ async function loadDashboard() {
             if (
                 state.currentSymbol
             ) {
+                // The dashboard payload already contains fresh market data.
+                // Prevent startLivePolling from instantly firing a redundant request.
+                setLastFetchTime(state.currentSymbol, Date.now());
                 startLivePolling(
                     state.currentSymbol
                 );
@@ -2156,6 +2159,9 @@ async function loadHistoryReport(
         if (
             state.currentSymbol
         ) {
+            // The history payload already contains market data.
+            // Prevent startLivePolling from instantly firing a redundant request.
+            setLastFetchTime(state.currentSymbol, Date.now());
             startLivePolling(
                 state.currentSymbol
             );
