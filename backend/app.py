@@ -4014,9 +4014,12 @@ def fetch_price_history(
                     default=0,
                 )
 
+                # BTC history is a global benchmark that updates daily; cache it for 24h
+                effective_ttl = 86400 if symbol.upper() == "BTC" else HISTORY_CACHE_TTL
+
                 if (
                     now - cached_at
-                    < HISTORY_CACHE_TTL
+                    < effective_ttl
                 ):
 
                     cached_prices = stale_prices
@@ -8117,6 +8120,11 @@ class _PooledConnection:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            try:
+                self.rollback()
+            except Exception:
+                pass
         self.close()
         return False
 
@@ -8169,8 +8177,7 @@ def get_db_connection():
             # is fine, it just handed back a bad connection.
             if conn.closed:
                 pool.putconn(conn, close=True)
-                # On stale connection, retry immediately without
-                # consuming an attempt or sleeping.
+                # Retry, allowing the loop to consume an attempt
                 continue
 
             return _PooledConnection(pool, conn)
