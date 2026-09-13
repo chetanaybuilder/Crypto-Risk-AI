@@ -3540,23 +3540,39 @@ def fetch_coingecko_history(
         last_error_reason = error_reason
 
         retryable = False
+        smart_wait = None
         if response is None:
             retryable = True
         elif status_code is not None and status_code >= 500:
             retryable = True
+        elif status_code == 429:
+            match = re.search(r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or ""))
+            if match:
+                retry_after_val = float(match.group(1))
+                if retry_after_val <= 65.0:
+                    retryable = True
+                    smart_wait = retry_after_val + 1.0
 
         if not retryable or attempt >= COINGECKO_MAX_RETRIES:
             break
 
-        backoff = 0.5 * (2 ** (attempt - 1))
-        logger.info(
-            "[HISTORY] CoinGecko attempt %d/%d for %s after %s, retrying in %.1fs",
-            attempt,
-            COINGECKO_MAX_RETRIES,
-            symbol,
-            error_reason or f"HTTP {status_code}",
-            backoff,
-        )
+        if smart_wait is not None:
+            backoff = smart_wait
+            logger.info(
+                "[HISTORY] CoinGecko rate limited (429) for %s. Smart waiting %.1fs before retry...",
+                symbol,
+                backoff,
+            )
+        else:
+            backoff = 0.5 * (2 ** (attempt - 1))
+            logger.info(
+                "[HISTORY] CoinGecko attempt %d/%d for %s after %s, retrying in %.1fs",
+                attempt,
+                COINGECKO_MAX_RETRIES,
+                symbol,
+                error_reason or f"HTTP {status_code}",
+                backoff,
+            )
         time.sleep(backoff)
 
     if response is None:
@@ -3826,6 +3842,78 @@ def fetch_cmc_history(
         return []
 
 
+# ============================================================
+# BINANCE HISTORY
+# ============================================================
+
+def fetch_binance_history(
+    symbol: str,
+    days: int = SUPPORTED_HISTORY_DAYS,
+) -> list:
+    """
+    Fetch historical daily closing prices from Binance (/v3/klines).
+    
+    Returns a list of {"timestamp": <UNIX ms int>, "price": <float>}.
+    """
+    symbol = normalize_symbol(symbol)
+    if not symbol:
+        return []
+
+    try:
+        binance_symbol = f"{symbol.upper()}USDT"
+        response, status_code, error_reason = _http_get_market(
+            "https://api.binance.com/api/v3/klines",
+            params={
+                "symbol": binance_symbol,
+                "interval": "1d",
+                "limit": _safe_lookback(days, default=SUPPORTED_HISTORY_DAYS),
+            },
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if response is None or (status_code is not None and status_code >= 400):
+            logger.info(
+                "[HISTORY] Binance unavailable for %s: %s",
+                symbol,
+                error_reason or f"HTTP {status_code}",
+            )
+            return []
+
+        payload = response.json()
+        if not isinstance(payload, list):
+            return []
+
+        result = []
+        for item in payload:
+            if not isinstance(item, list) or len(item) < 5:
+                continue
+
+            timestamp_ms = optional_numeric(item[0])
+            price = optional_numeric(item[4])
+
+            if price is None or price <= 0:
+                continue
+
+            if timestamp_ms is None:
+                timestamp_ms = 0
+
+            result.append({
+                "timestamp": int(timestamp_ms),
+                "price": price,
+            })
+
+        logger.info(
+            "[HISTORY] Binance SUCCESS candles=%d for %s",
+            len(result),
+            symbol,
+        )
+        return result
+
+    except Exception as exc:
+        logger.warning("[HISTORY] Binance history failed unexpectedly: %s", exc)
+        return []
+
+
 def _safe_lookback(
     value,
     default: int = 7,
@@ -3980,6 +4068,23 @@ def fetch_price_history(
                     len(stale_prices),
                 )
                 return list(stale_prices)
+
+        # --------------------------------------------------------
+        # Binance history fallback
+        # --------------------------------------------------------
+        if not prices:
+            try:
+                binance_prices = fetch_binance_history(symbol, days)
+                if isinstance(binance_prices, list) and len(binance_prices) > 0:
+                    prices = binance_prices
+                    history_source = "Binance"
+                    logger.info(
+                        "[HISTORY] %s served by fallback provider Binance (%d candles)",
+                        symbol,
+                        len(prices),
+                    )
+            except Exception as exc:
+                logger.warning("[HISTORY] Binance history fallback failed for %s: %s", symbol, exc)
 
         # --------------------------------------------------------
         # CoinMarketCap history fallback
