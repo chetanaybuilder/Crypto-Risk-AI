@@ -14,36 +14,36 @@
 ============================================================ */
 
 :root {
-    /* === HEIST NOIR BACKGROUNDS === */
-    --bg-void: #0a0a0a;
-    --bg-deep: #0f1011;
-    --bg-panel: #131517;
-    --bg-panel-2: #181a1d;
-    --bg-charcoal: #1f2125;
-    --bg-ash: #2a2d33;
+    /* === HORROR-MEETS-CRYPTO THEME === */
+    --bg-void: #050505;
+    --bg-deep: #080808;
+    --bg-panel: rgba(15, 15, 15, 0.8);
+    --bg-panel-2: rgba(20, 20, 20, 0.85);
+    --bg-charcoal: #151515;
+    --bg-ash: #1a1a1a;
 
     /* === FROSTED GLASS LAYERS === */
     --glass: rgba(255, 255, 255, 0.02);
     --glass-strong: rgba(255, 255, 255, 0.05);
-    --glass-border: rgba(0, 255, 102, 0.15);
-    --glass-border-strong: rgba(0, 255, 102, 0.35);
-    --glass-gothic: rgba(10, 11, 13, 0.75);
+    --glass-border: rgba(204, 0, 0, 0.15);
+    --glass-border-strong: rgba(204, 0, 0, 0.4);
+    --glass-gothic: rgba(5, 5, 5, 0.85);
 
-    /* === CASH GREEN === */
-    --phantom-violet: #00ff66;
-    --phantom-violet-light: #66ff99;
-    --phantom-violet-dark: #00993d;
-    --phantom-glow: rgba(0, 255, 102, 0.4);
+    /* === BLOOD RED === */
+    --phantom-violet: #ff3333;
+    --phantom-violet-light: #ff6666;
+    --phantom-violet-dark: #cc0000;
+    --phantom-glow: rgba(204, 0, 0, 0.6);
 
-    /* === BITCOIN AMBER === */
-    --ember-orange: #ff9900;
-    --ember-orange-light: #ffbb33;
-    --ember-orange-dark: #cc7a00;
-    --ember-glow: rgba(255, 153, 0, 0.5);
-    --ember-intense: rgba(255, 153, 0, 0.8);
+    /* === SICKLY GREEN / YELLOW === */
+    --ember-orange: #aacc00;
+    --ember-orange-light: #ccff33;
+    --ember-orange-dark: #779900;
+    --ember-glow: rgba(170, 204, 0, 0.5);
+    --ember-intense: rgba(170, 204, 0, 0.8);
 
-    /* === ACID GHOST GREEN (Keep for legacy / accents) === */
-    --acid-green: #39ff14;
+    /* === ACCENT === */
+    --acid-green: #880000;
     /* === TEXT COLORS === */
     --text-primary: #f5f5f5;
     --text-secondary: #94a3b8;
@@ -57,19 +57,19 @@
     --risk-critical: #ff3333;
 
     /* === GRADIENTS === */
-    --gradient-gothic: linear-gradient(135deg, #00993d 0%, #00ff66 50%, #39ff14 100%);
-    --gradient-fire: linear-gradient(135deg, #cc7a00 0%, #ff9900 50%, #ffbb33 100%);
-    --gradient-wealth: linear-gradient(135deg, #00993d 0%, #00ff66 50%, #ff9900 100%);
-    --gradient-phantom: linear-gradient(135deg, #0a0a0a 0%, #131517 100%);
-    --gradient-glass: linear-gradient(145deg, rgba(0, 255, 102, 0.08), rgba(255, 153, 0, 0.03));
+    --gradient-gothic: linear-gradient(135deg, #cc0000 0%, #ff3333 50%, #880000 100%);
+    --gradient-fire: linear-gradient(135deg, #779900 0%, #aacc00 50%, #ccff33 100%);
+    --gradient-wealth: linear-gradient(135deg, #cc0000 0%, #ff3333 50%, #aacc00 100%);
+    --gradient-phantom: linear-gradient(135deg, #050505 0%, #151515 100%);
+    --gradient-glass: linear-gradient(145deg, rgba(204, 0, 0, 0.1), rgba(170, 204, 0, 0.05));
 
     /* === SHADOWS === */
-    --shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.6);
-    --shadow-deep: 0 30px 80px rgba(0, 0, 0, 0.8);
-    --shadow-glow-phantom: 0 0 60px rgba(0, 255, 102, 0.4);
-    --shadow-glow-ember: 0 0 60px rgba(255, 153, 0, 0.5);
-    --shadow-glow-acid: 0 0 60px rgba(57, 255, 20, 0.35);
-    --shadow-glow-wealth: 0 0 60px rgba(255, 153, 0, 0.4);
+    --shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.8);
+    --shadow-deep: 0 30px 80px rgba(0, 0, 0, 0.95);
+    --shadow-glow-phantom: 0 0 60px rgba(204, 0, 0, 0.5);
+    --shadow-glow-ember: 0 0 60px rgba(170, 204, 0, 0.5);
+    --shadow-glow-acid: 0 0 60px rgba(136, 0, 0, 0.4);
+    --shadow-glow-wealth: 0 0 60px rgba(255, 51, 51, 0.4);
 
     /* === BORDER RADIUS === */
     --radius-sm: 10px;
@@ -522,39 +522,169 @@ img {
     }
 }
 
-.nav-login-button {
+.nav-login-button,
+.logout-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-weight: 500;
+    font-size: 14px;
+    color: var(--text-primary);
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    transition: all 0.3s var(--ease-out);
+}
+
+.nav-login-button:hover,
+.logout-button:hover {
+    background: var(--glass-strong);
+    border-color: var(--phantom-violet);
+    box-shadow: 0 0 15px var(--phantom-glow);
+    color: #fff;
+}
+
+/* ============================================================
+   HORROR & METEOR EFFECTS
+============================================================ */
+
+.horror-monster-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: bottom center;
+    opacity: 0.85;
+    animation: monsterSway 12s ease-in-out infinite alternate;
+    filter: drop-shadow(0 0 20px var(--phantom-glow));
+}
+
+@keyframes monsterSway {
+    0% { transform: rotate(-1deg) scale(1.02); }
+    100% { transform: rotate(1deg) scale(1.05); }
+}
+
+.fog-layer {
+    position: absolute;
+    bottom: -10%;
+    left: -10%;
+    width: 120%;
+    height: 60%;
+    pointer-events: none;
+    z-index: 2;
+    display: flex;
+    align-items: flex-end;
+}
+
+.fog-shape {
+    position: absolute;
+    bottom: 0;
+    width: 150%;
+    height: 100%;
+    background: linear-gradient(to top, var(--bg-void) 0%, rgba(20,0,0,0.4) 40%, transparent 100%);
+    filter: blur(40px);
+    opacity: 0.7;
+    animation: fogDrift 20s linear infinite;
+}
+
+.fog-1 { left: -20%; animation-duration: 25s; }
+.fog-2 { left: -10%; animation-duration: 35s; animation-direction: reverse; background: linear-gradient(to top, transparent 0%, rgba(10,30,0,0.2) 50%, transparent 100%); }
+.fog-3 { left: -5%; animation-duration: 30s; }
+
+@keyframes fogDrift {
+    0% { transform: translateX(0); }
+    50% { transform: translateX(5%); }
+    100% { transform: translateX(0); }
+}
+
+.meteor-layer {
+    position: absolute;
+    top: 20%;
+    left: 10%;
+    width: 300px;
+    height: 300px;
+    z-index: 3;
+    pointer-events: none;
+}
+
+.bitcoin-meteor {
+    position: relative;
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 11px 22px;
-    border-radius: 100px;
-    font-weight: 600;
-    font-size: 14px;
-    background: var(--glass-strong);
-    border: 1px solid var(--glass-border-strong);
-    transition: all 0.35s var(--ease-out);
-    position: relative;
-    overflow: hidden;
+    justify-content: center;
+    animation: meteorFloat 6s ease-in-out infinite;
 }
 
-.nav-login-button::before {
-    content: '';
+.meteor-coin {
+    font-family: var(--font-display);
+    font-size: 80px;
+    font-weight: bold;
+    color: var(--ember-orange-light);
+    text-shadow: 0 0 40px var(--ember-intense);
+    animation: meteorSpin 8s linear infinite;
+    z-index: 2;
+}
+
+.meteor-trail {
     position: absolute;
-    inset: 0;
-    background: var(--gradient-fire);
+    top: 50%;
+    left: 50%;
+    width: 400px;
+    height: 60px;
+    background: linear-gradient(90deg, transparent, var(--ember-intense) 80%, #fff 100%);
+    filter: blur(20px);
+    transform-origin: right center;
+    transform: translate(-100%, -50%) rotate(-30deg);
+    opacity: 0.6;
+}
+
+.meteor-particles {
+    position: absolute;
+    width: 200px;
+    height: 200px;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1;
+}
+
+.energy-line {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 140px;
+    height: 2px;
+    background: var(--phantom-violet-light);
+    box-shadow: 0 0 10px var(--phantom-glow);
+    transform-origin: left center;
     opacity: 0;
-    transition: opacity 0.3s;
-    z-index: -1;
+    animation: lightningCrackle 4s infinite;
 }
 
-.nav-login-button:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-glow-ember);
-    border-color: var(--ember-orange);
+.line-1 { transform: rotate(0deg); animation-delay: 0s; }
+.line-2 { transform: rotate(72deg); animation-delay: 1s; }
+.line-3 { transform: rotate(144deg); animation-delay: 2s; }
+.line-4 { transform: rotate(216deg); animation-delay: 3s; }
+
+@keyframes lightningCrackle {
+    0%, 90% { opacity: 0; transform: scaleX(0); }
+    92% { opacity: 1; transform: scaleX(1); }
+    94% { opacity: 0; transform: scaleX(0); }
+    96% { opacity: 0.8; transform: scaleX(0.8); }
+    98%, 100% { opacity: 0; transform: scaleX(0); }
 }
 
-.nav-login-button:hover::before {
-    opacity: 1;
+@keyframes meteorSpin {
+    from { transform: rotateY(0deg); }
+    to { transform: rotateY(360deg); }
+}
+
+@keyframes meteorFloat {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-20px); }
 }
 
 
@@ -3598,7 +3728,7 @@ body.report-active .parallax-container {
 
 body.report-active .intelligence-report {
     background: rgba(10, 11, 13, 0.4);
-    box-shadow: 0 0 100px rgba(0, 0, 0, 0.8) inset;
+    box-shadow: inset 0 0 100px rgba(204, 0, 0, 0.1);
     padding: 20px;
     border-radius: 12px;
 }
@@ -3609,5 +3739,114 @@ body.report-active .stress-card,
 body.report-active .stress-verdict-card, 
 body.report-active .driver-card {
     background: rgba(10, 11, 13, 0.85) !important;
-    border-color: rgba(0, 255, 102, 0.2) !important;
+    border-color: rgba(204, 0, 0, 0.2) !important;
+}
+
+/* ============================================================
+   PREMIUM CARD HOVER EFFECTS (Desktop)
+============================================================ */
+@media (min-width: 981px) {
+    .search-card,
+    .market-card,
+    .risk-pillar,
+    .stress-card,
+    .process-step {
+        transition: transform 0.4s var(--ease-spring), box-shadow 0.4s var(--ease-out), border-color 0.4s var(--ease-out);
+        backdrop-filter: blur(16px);
+    }
+
+    .search-card:hover,
+    .market-card:hover,
+    .risk-pillar:hover,
+    .stress-card:hover,
+    .process-step:hover {
+        transform: perspective(1000px) rotateX(2deg) rotateY(-2deg) scale(1.02);
+        box-shadow: 0 15px 40px rgba(204, 0, 0, 0.15), 0 0 20px rgba(170, 204, 0, 0.1);
+        border-color: var(--phantom-violet-dark) !important;
+    }
+}
+
+/* ============================================================
+   ENERGY BEAM LOADER
+============================================================ */
+.energy-beam-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.energy-beam {
+    position: absolute;
+    inset: -4px;
+    border-radius: 104px;
+    background: transparent;
+    z-index: 0;
+    opacity: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.energy-beam::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: -100%;
+    width: 200%;
+    height: 4px;
+    background: linear-gradient(90deg, transparent, var(--ember-orange-light), transparent);
+    transform: translateY(-50%);
+    box-shadow: 0 0 15px var(--ember-intense);
+    opacity: 0;
+}
+
+.energy-beam-glow {
+    position: absolute;
+    inset: -10px;
+    border-radius: 110px;
+    background: radial-gradient(circle, var(--ember-intense) 0%, transparent 60%);
+    opacity: 0;
+    z-index: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+}
+
+.is-analyzing .energy-beam {
+    opacity: 1;
+}
+
+.is-analyzing .energy-beam::before {
+    opacity: 1;
+    animation: beamCharge 2s cubic-bezier(0.8, 0, 0.2, 1) infinite;
+}
+
+.is-analyzing .energy-beam-glow {
+    animation: beamPulse 2s cubic-bezier(0.8, 0, 0.2, 1) infinite;
+}
+
+@keyframes beamCharge {
+    0% { left: -100%; }
+    50% { left: 0%; }
+    100% { left: 100%; }
+}
+
+@keyframes beamPulse {
+    0%, 100% { opacity: 0; transform: scale(0.9); }
+    50% { opacity: 0.6; transform: scale(1.1); }
+}
+
+.is-analyzing .button-content {
+    opacity: 0;
+}
+
+.analyze-button.complete .energy-beam-glow {
+    background: radial-gradient(circle, var(--phantom-violet-light) 0%, transparent 80%);
+    opacity: 1;
+    animation: beamFlash 0.5s ease-out forwards;
+}
+
+@keyframes beamFlash {
+    0% { opacity: 0; transform: scale(0.9); }
+    30% { opacity: 1; transform: scale(1.2); }
+    100% { opacity: 0; transform: scale(1.4); }
 }

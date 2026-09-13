@@ -104,20 +104,31 @@
             </svg>
         </div>
         
-        <!-- Central Heist Character Silhouette -->
-        <div class="parallax-layer" data-depth="0.15" style="align-items: flex-end; justify-content: flex-end; padding-right: 10%;">
-            <svg width="400" height="500" viewBox="0 0 400 500" style="opacity: 0.9; filter: drop-shadow(0 0 20px rgba(0,255,102,0.2));">
-                <!-- Hoodie/Shoulders Silhouette -->
-                <path d="M 100,500 Q 150,300 200,250 Q 250,200 250,150 Q 250,80 200,50 Q 150,80 150,150 Q 150,200 100,250 Q 50,300 0,500 Z" fill="#050505" stroke="var(--phantom-violet-dark)" stroke-width="2"/>
-                <!-- Cigarette Cherry -->
-                <circle cx="180" cy="180" r="3" fill="#ff3333" filter="blur(2px)"/>
-                <circle cx="180" cy="180" r="1" fill="#fff"/>
-                <!-- Smoke wisp (CSS animation can be applied here) -->
-                <path d="M 180,175 Q 170,150 190,120 Q 210,90 180,60" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="6" filter="blur(4px)" class="smoke-wisp"/>
-                <!-- Cash in hand -->
-                <rect x="250" y="380" width="80" height="40" rx="5" fill="var(--phantom-violet-dark)" transform="rotate(-15 250 380)"/>
-                <rect x="240" y="390" width="80" height="40" rx="5" fill="var(--phantom-violet)" transform="rotate(-20 240 390)"/>
-            </svg>
+        <!-- Horror Monster Background -->
+        <div class="parallax-layer" data-depth="0.15" style="align-items: flex-end; justify-content: center; width: 100%; height: 100%;">
+            <img src="horror-monster.jpg" alt="Horror Crypto Monster" class="horror-monster-img">
+        </div>
+
+        <!-- Fog Layer -->
+        <div class="parallax-layer fog-layer" data-depth="0.2">
+            <div class="fog-shape fog-1"></div>
+            <div class="fog-shape fog-2"></div>
+            <div class="fog-shape fog-3"></div>
+        </div>
+
+        <!-- Bitcoin Meteor -->
+        <div class="parallax-layer meteor-layer" data-depth="0.4">
+            <div class="bitcoin-meteor">
+                <div class="meteor-trail"></div>
+                <div class="meteor-coin">₿</div>
+                <div class="meteor-particles">
+                    <!-- Particle energy lines -->
+                    <div class="energy-line line-1"></div>
+                    <div class="energy-line line-2"></div>
+                    <div class="energy-line line-3"></div>
+                    <div class="energy-line line-4"></div>
+                </div>
+            </div>
         </div>
     </div>
 
