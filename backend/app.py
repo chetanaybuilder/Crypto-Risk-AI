@@ -242,6 +242,15 @@ GEMINI_MAX_RETRIES = min(
 # NETWORK CONFIG
 # ============================================================
 
+# FIX: Binance blocks Render's IP ranges with HTTP 451 (geoblock, not
+# rate-limiting) — permanently, not intermittently. Default this off
+# so failed requests don't add latency for zero chance of success.
+# Set ENABLE_BINANCE_FALLBACK=true only if you migrate off a host
+# Binance blocks.
+ENABLE_BINANCE_FALLBACK = (
+    os.getenv("ENABLE_BINANCE_FALLBACK", "false").strip().lower() == "true"
+)
+
 MARKET_TIMEOUT = max(3, int(os.getenv("MARKET_TIMEOUT", "12")))
 HISTORY_CACHE_TTL = max(15, int(os.getenv("HISTORY_CACHE_TTL", "60")))
 MARKET_CACHE_TTL = max(5, int(os.getenv("MARKET_CACHE_TTL", "90")))
@@ -3203,8 +3212,15 @@ def fetch_market_data(
             #   2. Stale cache is missing or too old.
             # The entire market dict is replaced — fields from two
             # providers are never mixed within one report.
+            #
+            # FIX: Binance is geoblocked (HTTP 451) from Render's IP
+            # ranges — this is a permanent network-level block, not a
+            # transient failure, so calling it on every CoinGecko
+            # failure only adds latency and log noise with zero chance
+            # of success. Gated behind ENABLE_BINANCE_FALLBACK (default
+            # off); re-enable if you move to a host Binance doesn't block.
             # --------------------------------------------------------
-            if not market.get("available"):
+            if not market.get("available") and ENABLE_BINANCE_FALLBACK:
                 try:
                     binance_market = fetch_binance_market(symbol)
                     if isinstance(binance_market, dict) and binance_market.get("available"):
@@ -4055,7 +4071,20 @@ def fetch_price_history(
         # (symbol, days) with HISTORY_CACHE_TTL. The same resolved
         # coin_id is used here as in fetch_coingecko_market() so the
         # historical series and the live snapshot come from one dataset.
-        prices = fetch_coingecko_history(symbol, days)
+        #
+        # FIX: skip the live call entirely if CoinGecko is already on
+        # cooldown (e.g. the market fetch just got 429'd). Firing a
+        # second request into the same rate-limit window wastes a call
+        # against a quota that will fail anyway, and delays falling
+        # through to the stale cache / fallback providers below.
+        if _provider_is_cooling("CoinGecko"):
+            logger.info(
+                "[HISTORY] symbol=%s CoinGecko cooling down — skipping live call",
+                symbol,
+            )
+            prices = []
+        else:
+            prices = fetch_coingecko_history(symbol, days)
         history_source = "CoinGecko"
 
         if not isinstance(
@@ -4083,7 +4112,11 @@ def fetch_price_history(
         # --------------------------------------------------------
         # Binance history fallback
         # --------------------------------------------------------
-        if not prices:
+        # FIX: gated off by default — see ENABLE_BINANCE_FALLBACK note
+        # in fetch_market_data(). Binance returns HTTP 451 (geoblocked)
+        # on Render, so this call never succeeds there; it only adds
+        # latency to the failure path.
+        if not prices and ENABLE_BINANCE_FALLBACK:
             try:
                 binance_prices = fetch_binance_history(symbol, days)
                 if isinstance(binance_prices, list) and len(binance_prices) > 0:
