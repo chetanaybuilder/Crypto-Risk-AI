@@ -200,11 +200,6 @@ const state = {
     liveRequestId: 0,
     isLiveRequestInFlight: false,
 
-    // FIX (Bug 3): timestamp of the last live market fetch, used to
-    // avoid an unnecessary immediate request when the tab becomes
-    // visible again within the market cache window.
-    lastLiveMarketFetchAt: 0,
-
     isAnalyzing: false,
 
     // Job polling state
@@ -2037,7 +2032,7 @@ async function runAnalysis(
             const jobMarket = getMarket(report);
             if (jobMarket && Object.keys(jobMarket).length > 0) {
                 updateLiveMarket(jobMarket);
-                state.lastLiveMarketFetchAt = Date.now();
+                setLastFetchTime(state.currentSymbol, Date.now());
             }
 
             startLivePolling(state.currentSymbol);
@@ -2281,6 +2276,39 @@ async function logout() {
 // provider cooldown and return available: false.
 const LIVE_MARKET_POLL_INTERVAL_MS = 30000;
 
+let marketBackoffUntil = 0;
+
+function getLastFetchTime(symbol) {
+    try {
+        return Number(localStorage.getItem(`marketFetchGate:${symbol}`)) || 0;
+    } catch (error) {
+        return 0;
+    }
+}
+
+function setLastFetchTime(symbol, timestamp) {
+    try {
+        localStorage.setItem(`marketFetchGate:${symbol}`, timestamp);
+    } catch (error) {
+        // ignore
+    }
+}
+
+function canFetchMarketNow(symbol) {
+    const now = Date.now();
+    
+    if (now < marketBackoffUntil) {
+        return false;
+    }
+    
+    const sinceLastFetch = now - getLastFetchTime(symbol);
+    if (sinceLastFetch < LIVE_MARKET_POLL_INTERVAL_MS) {
+        return false;
+    }
+    
+    return true;
+}
+
 function stopLivePolling() {
     if (state.livePollTimer) {
         clearInterval(
@@ -2316,16 +2344,10 @@ function startLivePolling(symbol) {
      * tab becomes visible again when a fetch already happened within
      * the backend's MARKET_CACHE_TTL window.
      */
-    if (!document.hidden) {
-        const sinceLastFetch =
-            Date.now() -
-            (state.lastLiveMarketFetchAt || 0);
-
-        if (sinceLastFetch >= LIVE_MARKET_POLL_INTERVAL_MS) {
-            refreshLiveMarket(
-                normalizedSymbol
-            );
-        }
+    if (!document.hidden && canFetchMarketNow(normalizedSymbol)) {
+        refreshLiveMarket(
+            normalizedSymbol
+        );
     }
 
     /*
@@ -2348,6 +2370,10 @@ function startLivePolling(symbol) {
             if (
                 state.isLiveRequestInFlight
             ) {
+                return;
+            }
+
+            if (!canFetchMarketNow(state.currentSymbol)) {
                 return;
             }
 
@@ -2386,8 +2412,7 @@ async function refreshLiveMarket(
     // FIX (Bug 3): record when the last market fetch happened so
     // startLivePolling() can skip the immediate refresh if the tab
     // becomes visible again within the cache window.
-    state.lastLiveMarketFetchAt =
-        Date.now();
+    setLastFetchTime(normalizedSymbol, Date.now());
 
     try {
         const payload =
@@ -2453,6 +2478,7 @@ async function refreshLiveMarket(
          * everything behind a generic state.
          */
         if (error.status === 429) {
+            marketBackoffUntil = Date.now() + LIVE_MARKET_POLL_INTERVAL_MS;
             setMarketLiveState(
                 false,
                 "Market feed rate-limited"
