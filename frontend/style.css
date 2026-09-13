@@ -446,6 +446,10 @@ img {
     display: flex;
     align-items: center;
     gap: 12px;
+    border: 1px solid rgba(255, 0, 0, 0.6);
+    box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
+    border-radius: 8px;
+    padding: 4px 8px;
 }
 
 .brand-mark {
@@ -769,10 +773,10 @@ img {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 17px 30px;
+    padding: 12px 24px;
     border-radius: 100px;
     font-weight: 800;
-    font-size: 15px;
+    font-size: 14px;
     color: #fff;
     background: linear-gradient(180deg, #b30000 0%, #7a0000 100%);
     border: 1px solid #ff3333;
@@ -784,6 +788,15 @@ img {
     letter-spacing: 0.05em;
     text-shadow: 0 2px 4px rgba(0,0,0,0.5);
     gap: 10px;
+}
+
+@keyframes signInPulse {
+    0% { box-shadow: 0 6px 0 #400000, 0 15px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,100,100,0.6), 0 0 5px rgba(255, 0, 0, 0.2); }
+    100% { box-shadow: 0 6px 0 #400000, 0 15px 20px rgba(0,0,0,0.4), inset 0 0 8px rgba(255, 100, 100, 0.5), 0 0 15px rgba(255, 0, 0, 0.8); }
+}
+
+.nav-login-button {
+    animation: signInPulse 1.5s infinite alternate;
 }
 
 .hero-primary-button::before,
@@ -853,11 +866,12 @@ img {
 .hero-secondary-button {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 17px 26px;
+    gap: 10px;
+    padding: 12px 24px;
     border-radius: 100px;
     font-weight: 600;
-    font-size: 15px;
+    font-size: 14px;
+    color: var(--text-primary);
     background: var(--glass-gothic);
     border: 1px solid var(--glass-border);
     transition: all 0.35s var(--ease-out);
@@ -1555,6 +1569,19 @@ img {
     .hero-section {
         grid-template-columns: 1fr;
         padding: 80px 24px;
+        overflow-x: hidden;
+    }
+
+    .hero-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+
+    .hero-description {
+        margin-left: auto;
+        margin-right: auto;
     }
     
     .horror-monster-img {
