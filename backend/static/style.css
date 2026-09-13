@@ -428,6 +428,20 @@ img {
    NAVBAR — Gothic Halloween Theme
 ============================================================ */
 
+/* ============================================================
+   NAVBAR BRAND GLOW ANIMATION
+============================================================ */
+@keyframes brandBorderSpin {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+@keyframes brandPulse {
+    0%, 100% { box-shadow: 0 0 12px rgba(204,0,0,0.5), 0 4px 20px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,100,100,0.2); }
+    50%       { box-shadow: 0 0 28px rgba(204,0,0,0.9), 0 4px 24px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,100,100,0.3); }
+}
+
 .landing-navbar,
 .top-nav {
     position: sticky;
@@ -436,69 +450,120 @@ img {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 18px 48px;
-    background: rgba(7, 8, 16, 0.7);
-    backdrop-filter: blur(24px) saturate(180%);
-    border-bottom: 1px solid var(--glass-border);
+    padding: 14px 48px;
+    background: rgba(5, 5, 5, 0.82);
+    backdrop-filter: blur(28px) saturate(200%);
+    border-bottom: 1px solid rgba(204,0,0,0.25);
+    box-shadow: 0 1px 0 rgba(204,0,0,0.12), 0 8px 32px rgba(0,0,0,0.5);
 }
 
+/* === BRAND LOGO BADGE === */
 .brand {
     display: flex;
     align-items: center;
     gap: 12px;
-    border: 1px solid rgba(255, 0, 0, 0.6);
-    box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
-    border-radius: 8px;
-    padding: 4px 8px;
+    position: relative;
+    padding: 6px 14px 6px 6px;
+    border-radius: 14px;
+    background: rgba(10,10,10,0.9);
+    border: 1.5px solid transparent;
+    background-clip: padding-box;
+    transition: transform 0.3s var(--ease-spring), box-shadow 0.3s ease;
+    animation: brandPulse 3s ease-in-out infinite;
+    text-decoration: none;
 }
 
+/* Gradient animated border via pseudo-element */
+.brand::before {
+    content: '';
+    position: absolute;
+    inset: -1.5px;
+    border-radius: 15px;
+    background: linear-gradient(270deg, #cc0000, #ff3333, #aacc00, #ff3333, #cc0000);
+    background-size: 400% 400%;
+    animation: brandBorderSpin 4s linear infinite;
+    z-index: -1;
+    opacity: 0.8;
+}
+
+.brand:hover {
+    transform: translateY(-2px) scale(1.03);
+    box-shadow: 0 0 40px rgba(204,0,0,0.6), 0 8px 30px rgba(0,0,0,0.7);
+}
+
+/* === BRAND ICON (3D Cube) === */
 .brand-mark {
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-family: var(--font-display);
-    font-weight: 700;
-    font-size: 15px;
-    background: var(--gradient-phantom);
-    box-shadow: var(--shadow-glow-phantom);
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: -0.5px;
+    color: #fff;
+    background: linear-gradient(145deg, #cc0000 0%, #880000 60%, #550000 100%);
+    box-shadow:
+        0 6px 0 #330000,
+        0 8px 16px rgba(0,0,0,0.6),
+        inset 0 1px 0 rgba(255,120,120,0.5);
     transform-style: preserve-3d;
-    transition: transform 0.4s var(--ease-spring);
+    transition: transform 0.4s var(--ease-spring), box-shadow 0.3s ease;
+    flex-shrink: 0;
 }
 
 .brand:hover .brand-mark {
-    transform: rotateY(180deg) scale(1.05);
+    transform: rotateY(15deg) rotateX(-5deg) scale(1.1) translateY(-2px);
+    box-shadow:
+        0 10px 0 #330000,
+        0 14px 24px rgba(0,0,0,0.7),
+        inset 0 1px 0 rgba(255,120,120,0.7),
+        0 0 20px rgba(204,0,0,0.6);
 }
 
+/* === BRAND TEXT === */
 .brand-name,
 .brand-copy {
     font-family: var(--font-display);
-    font-weight: 600;
-    font-size: 18px;
-    letter-spacing: -0.02em;
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
 }
 
-.brand-name span,
 .brand-ai {
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-top: 1px;
     background: var(--gradient-gothic);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
 }
 
+.brand-name span {
+    background: var(--gradient-gothic);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+/* === STATUS PILL === */
 .landing-nav-status,
 .terminal-status {
     display: flex;
     align-items: center;
     gap: 8px;
     font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.08em;
+    font-size: 10px;
+    letter-spacing: 0.1em;
     color: var(--text-secondary);
-    padding: 8px 16px;
-    background: var(--glass-gothic);
+    padding: 6px 14px;
+    background: rgba(5,5,5,0.8);
     border: 1px solid var(--glass-border);
     border-radius: 100px;
 }
@@ -507,45 +572,63 @@ img {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--acid-green);
-    box-shadow: 0 0 12px var(--acid-glow);
+    background: #00ff66;
+    box-shadow: 0 0 10px rgba(0,255,102,0.8);
     animation: statusPulse 2s ease-in-out infinite;
 }
 
 @keyframes statusPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(1.35); }
+}
 
-    0%,
-    100% {
-        opacity: 1;
-        transform: scale(1);
-    }
-
-    50% {
-        opacity: 0.5;
-        transform: scale(1.3);
-    }
+/* === DASHBOARD LOGOUT BUTTON (3D Premium) === */
+@keyframes logoutGlow {
+    0%  { box-shadow: 0 4px 0 #400000, 0 8px 16px rgba(0,0,0,0.5), 0 0 8px rgba(204,0,0,0.3), inset 0 1px 0 rgba(255,100,100,0.4); }
+    100%{ box-shadow: 0 4px 0 #400000, 0 8px 20px rgba(0,0,0,0.5), 0 0 20px rgba(204,0,0,0.7), inset 0 1px 0 rgba(255,120,120,0.6); }
 }
 
 .logout-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 8px 18px;
-    border-radius: 8px;
-    font-weight: 500;
-    font-size: 14px;
-    color: var(--text-primary);
-    background: transparent;
-    border: 1px solid var(--glass-border);
-    transition: all 0.3s var(--ease-out);
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: 100px;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #fff;
+    background: linear-gradient(180deg, #b30000 0%, #7a0000 100%);
+    border: 1px solid #ff3333;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transform-style: preserve-3d;
+    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+    animation: logoutGlow 1.8s ease-in-out infinite alternate;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.logout-button::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, transparent 50%);
+    border-radius: inherit;
+    pointer-events: none;
 }
 
 .logout-button:hover {
-    background: var(--glass-strong);
-    border-color: var(--phantom-violet);
-    box-shadow: 0 0 15px var(--phantom-glow);
-    color: #fff;
+    transform: translateY(2px);
+    box-shadow: 0 2px 0 #400000, 0 6px 12px rgba(0,0,0,0.5), 0 0 14px rgba(204,0,0,0.5), inset 0 1px 0 rgba(255,100,100,0.4);
+    background: linear-gradient(180deg, #cc0000 0%, #880000 100%);
+}
+
+.logout-button:active {
+    transform: translateY(4px);
+    box-shadow: 0 0 0 #400000, 0 2px 6px rgba(0,0,0,0.5), inset 0 2px 6px rgba(0,0,0,0.5);
 }
 
 /* ============================================================
@@ -767,36 +850,70 @@ img {
 /* === ELITE 3D RED BUTTONS === */
 .hero-primary-button,
 .analyze-button,
-.nav-login-button,
 .final-button {
     position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 12px 24px;
+    padding: 10px 20px;
     border-radius: 100px;
     font-weight: 800;
-    font-size: 14px;
+    font-size: 13px;
     color: #fff;
     background: linear-gradient(180deg, #b30000 0%, #7a0000 100%);
     border: 1px solid #ff3333;
     overflow: hidden;
     transform-style: preserve-3d;
     transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
-    box-shadow: 0 6px 0 #400000, 0 15px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,100,100,0.6);
+    box-shadow: 0 5px 0 #400000, 0 12px 18px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,100,100,0.6);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     text-shadow: 0 2px 4px rgba(0,0,0,0.5);
-    gap: 10px;
+    gap: 8px;
 }
 
+/* Nav Sign In — smaller with intense multi-layer glow */
 @keyframes signInPulse {
-    0% { box-shadow: 0 6px 0 #400000, 0 15px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,100,100,0.6), 0 0 5px rgba(255, 0, 0, 0.2); }
-    100% { box-shadow: 0 6px 0 #400000, 0 15px 20px rgba(0,0,0,0.4), inset 0 0 8px rgba(255, 100, 100, 0.5), 0 0 15px rgba(255, 0, 0, 0.8); }
+    0% {
+        box-shadow:
+            0 4px 0 #400000,
+            0 8px 16px rgba(0,0,0,0.5),
+            inset 0 1px 0 rgba(255,100,100,0.5),
+            0 0 8px rgba(255,0,0,0.4),
+            0 0 20px rgba(255,0,0,0.15);
+    }
+    100% {
+        box-shadow:
+            0 4px 0 #400000,
+            0 8px 20px rgba(0,0,0,0.5),
+            inset 0 1px 0 rgba(255,120,120,0.7),
+            0 0 20px rgba(255,30,30,0.9),
+            0 0 45px rgba(200,0,0,0.5),
+            0 0 80px rgba(150,0,0,0.25);
+    }
 }
 
 .nav-login-button {
-    animation: signInPulse 1.5s infinite alternate;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 18px;
+    border-radius: 100px;
+    font-weight: 800;
+    font-size: 12px;
+    color: #fff;
+    background: linear-gradient(180deg, #c20000 0%, #7a0000 100%);
+    border: 1px solid rgba(255,80,80,0.8);
+    overflow: hidden;
+    transform-style: preserve-3d;
+    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    gap: 6px;
+    animation: signInPulse 1.4s ease-in-out infinite alternate;
+    white-space: nowrap;
 }
 
 .hero-primary-button::before,
@@ -1710,21 +1827,7 @@ img {
     box-shadow: 0 0 30px rgba(255, 107, 43, 0.5), inset 0 0 15px rgba(124, 58, 237, 0.3);
 }
 
-.logout-button {
-    padding: 9px 18px;
-    border-radius: 100px;
-    font-size: 13px;
-    font-weight: 600;
-    background: var(--glass);
-    border: 1px solid var(--glass-border);
-    transition: all 0.3s var(--ease-out);
-}
-
-.logout-button:hover {
-    background: rgba(255, 77, 109, 0.15);
-    border-color: rgba(255, 77, 109, 0.4);
-    color: var(--risk-critical);
-}
+/* Dashboard-specific logout override — handled in the shared rule above */
 
 .dashboard-container {
     position: relative;
@@ -3006,13 +3109,27 @@ img {
 
     .top-nav {
         flex-wrap: wrap;
-        gap: 14px;
+        gap: 10px;
+        padding: 12px 16px;
     }
 
     .nav-center {
         order: 3;
         width: 100%;
         justify-content: center;
+    }
+
+    .nav-user {
+        gap: 8px;
+    }
+
+    .user-info {
+        display: none; /* hide text on mobile, keep avatar */
+    }
+
+    .logout-button {
+        padding: 7px 12px;
+        font-size: 11px;
     }
 
     .report-header {
@@ -3034,6 +3151,36 @@ img {
 
     .progress-stages {
         justify-content: flex-start;
+    }
+}
+
+@media (max-width: 480px) {
+    .top-nav {
+        padding: 10px 12px;
+        gap: 8px;
+    }
+
+    .brand-mark {
+        width: 34px;
+        height: 34px;
+        font-size: 12px;
+    }
+
+    .brand-name, .brand-copy {
+        font-size: 14px;
+    }
+
+    .brand-ai {
+        font-size: 8px;
+    }
+
+    .logout-button {
+        padding: 6px 10px;
+        font-size: 10px;
+    }
+
+    .nav-center {
+        display: none; /* hide "LIVE INTELLIGENCE TERMINAL" pill on very small screens */
     }
 }
 

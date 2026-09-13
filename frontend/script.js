@@ -2260,7 +2260,7 @@ async function logout() {
         stopLivePolling();
         stopJobPolling();
 
-        window.location.href = "/";
+        window.location.href = "https://crypto-risk-ai.vercel.app/";
     }
 }
 
