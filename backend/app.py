@@ -2548,26 +2548,42 @@ def fetch_coingecko_market(
 
         # Decide whether this failure is retryable.
         retryable = False
+        smart_wait = None
         if response is None:
             # No response at all: timeout, connection error, DNS, etc.
             retryable = True
         elif status_code is not None and status_code >= 500:
             # Server-side failure — worth retrying.
             retryable = True
-        # 429 / 403 / 451 / 4xx — NOT retryable.
+        elif status_code == 429:
+            # Check if we can wait out the cooldown within the job timeout
+            match = re.search(r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or ""))
+            if match:
+                retry_after_val = float(match.group(1))
+                if retry_after_val <= 65.0:
+                    retryable = True
+                    smart_wait = retry_after_val + 1.0
 
         if not retryable or attempt >= COINGECKO_MAX_RETRIES:
             break
 
-        backoff = 0.5 * (2 ** (attempt - 1))
-        logger.info(
-            "[MARKET] CoinGecko attempt %d/%d for %s after %s, retrying in %.1fs",
-            attempt,
-            COINGECKO_MAX_RETRIES,
-            symbol,
-            error_reason or f"HTTP {status_code}",
-            backoff,
-        )
+        if smart_wait is not None:
+            backoff = smart_wait
+            logger.info(
+                "[MARKET] CoinGecko rate limited (429) for %s. Smart waiting %.1fs before retry...",
+                symbol,
+                backoff,
+            )
+        else:
+            backoff = 0.5 * (2 ** (attempt - 1))
+            logger.info(
+                "[MARKET] CoinGecko attempt %d/%d for %s after %s, retrying in %.1fs",
+                attempt,
+                COINGECKO_MAX_RETRIES,
+                symbol,
+                error_reason or f"HTTP {status_code}",
+                backoff,
+            )
         time.sleep(backoff)
 
     if response is None:
@@ -2884,6 +2900,103 @@ def fetch_cmc_market(
         return market
 
 
+# ============================================================
+# BINANCE MARKET FALLBACK
+# ============================================================
+
+def fetch_binance_market(
+    symbol: str,
+) -> dict:
+    """
+    Fetch current market snapshot from Binance API (/v3/ticker/24hr).
+    """
+    symbol = normalize_symbol(symbol)
+    if not symbol:
+        return empty_market_data(symbol)
+
+    if _provider_is_cooling("Binance"):
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = "Binance is temporarily cooling down."
+        return market
+
+    try:
+        binance_symbol = f"{symbol.upper()}USDT"
+        response, status_code, error_reason = _http_get_market(
+            "https://api.binance.com/api/v3/ticker/24hr",
+            params={"symbol": binance_symbol},
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if response is None:
+            _mark_provider_failure("Binance", status_code, error_reason or "no_response")
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = f"Binance request failed: {error_reason or 'no response'}."
+            return market
+
+        if status_code is not None and status_code >= 400:
+            _mark_provider_failure("Binance", status_code, error_reason or f"HTTP {status_code}")
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = f"Binance returned {error_reason or f'HTTP {status_code}'}."
+            return market
+
+        payload = response.json()
+        if not isinstance(payload, dict):
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = "Binance returned invalid response."
+            return market
+
+        field_errors = {}
+        price = _read_market_number(payload, "lastPrice", "Binance", field_errors)
+        volume = _read_market_number(payload, "quoteVolume", "Binance", field_errors)
+        change_24h = _read_market_number(payload, "priceChangePercent", "Binance", field_errors)
+        high_24h = _read_market_number(payload, "highPrice", "Binance", field_errors)
+        low_24h = _read_market_number(payload, "lowPrice", "Binance", field_errors)
+
+        if price is None:
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = "Binance returned no usable price."
+            return market
+
+        # Fallback for market cap: use cached market cap from primary provider if available
+        market_cap = None
+        with _cache_lock:
+            cached_cap = _market_cap_cache.get(symbol)
+            if cached_cap and (time.time() - cached_cap.get("cached_at", 0)) < 86400:
+                market_cap = cached_cap.get("value")
+
+        _clear_provider_success("Binance")
+        
+        timestamp = utc_now_iso()
+        logger.info(
+            "[MARKET] Binance SUCCESS price=%.4f source=Binance",
+            price,
+        )
+
+        return json_safe({
+            "symbol": symbol,
+            "coin_id": symbol.lower(),
+            "price": price,
+            "price_change_24h_pct": change_24h,
+            "price_change_7d_pct": None,
+            "volume_24h": volume,
+            "market_cap": market_cap,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+            "source": "Binance",
+            "timestamp": timestamp,
+            "source_timestamps": {
+                "Binance": timestamp,
+            },
+            "available": True,
+            "field_errors": field_errors,
+        })
+    except Exception as exc:
+        logger.warning("[MARKET] Binance failed unexpectedly: %s", exc)
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = f"Binance request failed unexpectedly: {exc}"
+        return market
+
+
 def _read_market_number(
     payload: dict,
     key: str,
@@ -3075,7 +3188,7 @@ def fetch_market_data(
                         )
 
             # --------------------------------------------------------
-            # CoinMarketCap fallback
+            # Binance / CoinMarketCap fallback
             # --------------------------------------------------------
             # Only reached when:
             #   1. CoinGecko live call returned unavailable, AND
@@ -3083,6 +3196,19 @@ def fetch_market_data(
             # The entire market dict is replaced — fields from two
             # providers are never mixed within one report.
             # --------------------------------------------------------
+            if not market.get("available"):
+                try:
+                    binance_market = fetch_binance_market(symbol)
+                    if isinstance(binance_market, dict) and binance_market.get("available"):
+                        market = binance_market
+                        market["is_fallback_provider"] = True
+                        logger.info(
+                            "[MARKET] %s served by fallback provider Binance",
+                            symbol,
+                        )
+                except Exception as exc:
+                    logger.warning("[MARKET] Binance fallback failed for %s: %s", symbol, exc)
+
             if not market.get("available") and CMC_API_KEY:
                 try:
                     cmc_market = fetch_cmc_market(symbol)
