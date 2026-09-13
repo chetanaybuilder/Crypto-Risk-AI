@@ -458,6 +458,8 @@ CLEANUP_INTERVAL_SECONDS = max(
     int(os.getenv("CLEANUP_INTERVAL_SECONDS", "600")),
 )
 
+_cache_lock = Lock()
+
 
 def _periodic_cache_cleanup() -> None:
     """Purge expired entries from every in-process cache dict."""
@@ -950,7 +952,7 @@ _market_cap_cache = {}
 _history_cache = {}
 _coin_resolution_cache = {}
 
-_cache_lock = Lock()
+_history_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
 
 
 # ============================================================
@@ -2560,7 +2562,7 @@ def fetch_coingecko_market(
             match = re.search(r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or ""))
             if match:
                 retry_after_val = float(match.group(1))
-                if retry_after_val <= 65.0:
+                if retry_after_val <= 2.0:
                     retryable = True
                     smart_wait = retry_after_val + 1.0
 
@@ -2933,6 +2935,11 @@ def fetch_binance_market(
             market["unavailable_reason"] = f"Binance request failed: {error_reason or 'no response'}."
             return market
 
+        if status_code == 451:
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = "Binance is unavailable in this region (HTTP 451)."
+            return market
+
         if status_code is not None and status_code >= 400:
             _mark_provider_failure("Binance", status_code, error_reason or f"HTTP {status_code}")
             market = empty_market_data(symbol)
@@ -3009,11 +3016,12 @@ def _read_market_number(
         value = optional_numeric(payload.get(key))
         if value is None:
             field_errors[key] = f"{source} returned no usable {key}."
+            return 0
         return value
     except Exception as exc:
         field_errors[key] = f"{source} {key} parsing failed: {exc}."
         logger.exception("[MARKET] %s field %s failed", source, key)
-        return None
+        return 0
 
 # ============================================================
 # UNIFIED MARKET FETCH
@@ -3549,7 +3557,7 @@ def fetch_coingecko_history(
             match = re.search(r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or ""))
             if match:
                 retry_after_val = float(match.group(1))
-                if retry_after_val <= 65.0:
+                if retry_after_val <= 2.0:
                     retryable = True
                     smart_wait = retry_after_val + 1.0
 
@@ -6471,6 +6479,8 @@ def fallback_ai_report(
               "market, volatility, liquidity and stress "
               "signals."
         ),
+
+        "synthesis": "Gemini AI interpretation is temporarily unavailable. This report contains only deterministic quantitative signals.",
 
         "risk_regime": label,
 
@@ -10497,25 +10507,20 @@ def market_api(
             force_refresh=force_refresh,
         )
 
-        if isinstance(market, dict) and market.get("available"):
+        # FIX: Even if market.get("available") is false, we return 200 OK.
+        # This allows the frontend to gracefully render missing values
+        # instead of throwing a fatal 502 error and blanking the screen.
+        if isinstance(market, dict):
             return jsonify({
                 "success": True,
                 "symbol": symbol,
                 "market": market,
             })
 
+        # Should never hit here since fetch_market_data returns dict
         return jsonify({
             "success": False,
-            "symbol": symbol,
-            "market": market,
-            "error": {
-                "code": "MARKET_DATA_UNAVAILABLE",
-                "message": market.get(
-                    "unavailable_reason",
-                    "CoinGecko is temporarily unavailable. Live data will appear "
-                    "automatically when the provider recovers.",
-                ),
-            },
+            "error": "Failed to fetch market data",
         }), 502
 
     except UnsupportedAssetError as exc:
