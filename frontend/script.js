@@ -340,6 +340,13 @@ function normalizeSource(source) {
         return "CoinGecko";
     }
 
+    if (
+        normalized.includes("coinmarketcap") ||
+        normalized === "cmc"
+    ) {
+        return "CoinMarketCap";
+    }
+
 
     if (normalized.includes("backend")) {
         return "Backend market feed";
@@ -2566,7 +2573,7 @@ function updateLiveMarket(
             market.market_cap_usd
         );
 
-    const source =
+    let source =
         normalizeSource(
             firstDefined(
                 market.source,
@@ -2574,6 +2581,10 @@ function updateLiveMarket(
                 market.data_source
             )
         );
+
+    if (market.is_fallback_provider) {
+        source += " (Fallback)";
+    }
 
     const timestamp =
         firstDefined(
@@ -3296,7 +3307,7 @@ function renderMarket(report) {
             market.market_cap_usd
         );
 
-    const source =
+    let source =
         normalizeSource(
             firstDefined(
                 market.source,
@@ -3304,6 +3315,10 @@ function renderMarket(report) {
                 market.data_source
             )
         );
+
+    if (report?.data_quality?.is_fallback_provider || market?.is_fallback_provider) {
+        source += " (Fallback)";
+    }
 
     const timestamp =
         firstDefined(
@@ -4493,7 +4508,7 @@ function renderDataQuality(
     const reportMarket =
         getMarket(reportObj);
 
-    const source =
+    let source =
         normalizeSource(
             firstDefined(
                 reportMarket.source,
@@ -4501,6 +4516,10 @@ function renderDataQuality(
                 quality.source
             )
         );
+
+    if (quality.is_fallback_provider || reportMarket?.is_fallback_provider) {
+        source += " (Fallback)";
+    }
 
     setText(
         "#market-source",

@@ -766,11 +766,27 @@ def _mask_secret(
 # key presence (masked), and base URL — makes it obvious from the
 # deploy logs whether the env vars were actually picked up.
 logger.info(
-    "[CONFIG] CoinGecko plan=%s | key=%s | base_url=%s | header=%s | mode=exclusive (no fallback provider)",
+    "[CONFIG] CoinGecko plan=%s | key=%s | base_url=%s | header=%s | mode=primary",
     COINGECKO_PLAN,
     _mask_secret(COINGECKO_API_KEY),
     COINGECKO_API_URL,
     COINGECKO_AUTH_HEADER if COINGECKO_API_KEY else "(no auth header sent)",
+)
+
+# CoinMarketCap — secondary fallback provider.
+# Activated ONLY when CoinGecko's live call AND its stale-cache
+# fallback have both failed.  Never mixed with CoinGecko data
+# within a single report.
+CMC_API_KEY = os.getenv("CMC_API_KEY", "").strip()
+CMC_API_URL = os.getenv(
+    "CMC_API_URL",
+    "https://pro-api.coinmarketcap.com",
+).strip().rstrip("/")
+
+logger.info(
+    "[CONFIG] CoinMarketCap key=%s | base_url=%s | mode=fallback (CoinGecko-first)",
+    _mask_secret(CMC_API_KEY),
+    CMC_API_URL,
 )
 
 # Provider cooldown durations (seconds).
@@ -2203,6 +2219,74 @@ def _http_get_market(
 
 
 # ============================================================
+# COINMARKETCAP HTTP HELPER
+# ============================================================
+
+def _http_get_cmc(
+    url: str,
+    params: Optional[dict] = None,
+    timeout: Optional[int] = None,
+):
+    """
+    HTTP GET for CoinMarketCap API with CMC auth header.
+
+    Returns the same (response, status_code, error_reason) tuple
+    as _http_get_market() so callers can apply the existing provider
+    cooldown/backoff logic without changes.
+    """
+    try:
+        headers = {
+            "User-Agent": "CryptoRisk-AI/3.0",
+            "Accept": "application/json",
+        }
+
+        if CMC_API_KEY:
+            headers["X-CMC_PRO_API_KEY"] = CMC_API_KEY
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=(
+                timeout
+                or MARKET_TIMEOUT
+            ),
+            headers=headers,
+        )
+
+        if response.ok:
+            return response, response.status_code, None
+
+        retry_after = response.headers.get("Retry-After")
+
+        if retry_after:
+            try:
+                retry_after = str(max(0, float(retry_after)))
+            except (TypeError, ValueError):
+                retry_after = None
+        retry_suffix = (
+            f"; retry_after={retry_after}"
+            if retry_after
+            else ""
+        )
+
+        return response, response.status_code, (
+            f"HTTP {response.status_code}{retry_suffix}"
+        )
+
+    except requests.exceptions.Timeout:
+        return None, None, "timeout"
+
+    except requests.exceptions.ConnectionError:
+        return None, None, "connection_error"
+
+    except requests.RequestException as exc:
+        return None, None, str(exc)
+
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+# ============================================================
 # COINGECKO RESOLUTION
 # ============================================================
 
@@ -2619,6 +2703,187 @@ def fetch_coingecko_market(
         return market
 
 
+# ============================================================
+# COINMARKETCAP MARKET
+# ============================================================
+# Fallback market data provider — activated ONLY when CoinGecko
+# live call + stale cache have both failed.  Returns the same
+# dict shape as fetch_coingecko_market() so fetch_market_data()
+# can substitute it transparently.
+# ============================================================
+
+def fetch_cmc_market(
+    symbol: str,
+) -> dict:
+    """
+    Fetch current market snapshot from CoinMarketCap (/v2/cryptocurrency/quotes/latest).
+
+    Returns the same dict shape as fetch_coingecko_market() with
+    ``source: "CoinMarketCap"`` so it is always distinguishable.
+
+    Only called as a fallback — never as the primary provider.
+    """
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return empty_market_data(symbol)
+
+    if not CMC_API_KEY:
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = "CoinMarketCap API key is not configured."
+        return market
+
+    # Skip if currently on cooldown.
+    if _provider_is_cooling("CoinMarketCap"):
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = "CoinMarketCap is temporarily cooling down after a provider failure."
+        return market
+
+    try:
+        response, status_code, error_reason = _http_get_cmc(
+            f"{CMC_API_URL}/v2/cryptocurrency/quotes/latest",
+            params={
+                "symbol": symbol,
+                "convert": "USD",
+            },
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if response is None:
+            _mark_provider_failure(
+                "CoinMarketCap",
+                status_code,
+                error_reason or "no_response",
+            )
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                f"CoinMarketCap request failed: {error_reason or 'no response'}."
+            )
+            return market
+
+        if status_code is not None and status_code >= 400:
+            _mark_provider_failure(
+                "CoinMarketCap",
+                status_code,
+                error_reason or f"HTTP {status_code}",
+            )
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = (
+                f"CoinMarketCap returned {error_reason or f'HTTP {status_code}'}."
+            )
+            return market
+
+        payload = response.json()
+
+        if not isinstance(payload, dict):
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = "CoinMarketCap returned a malformed response."
+            return market
+
+        # CMC wraps results in {"data": {"SYMBOL": [...]}}.
+        data_block = payload.get("data", {})
+        if not isinstance(data_block, dict):
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = "CoinMarketCap returned no data block."
+            return market
+
+        # CMC may return results under the symbol key; it's a list of
+        # coins sharing that ticker — take the first (highest market cap).
+        coin_list = data_block.get(symbol, data_block.get(symbol.upper(), []))
+        if not isinstance(coin_list, list) or not coin_list:
+            # Some CMC responses nest as a single dict rather than a list.
+            if isinstance(coin_list, dict):
+                coin_list = [coin_list]
+            else:
+                market = empty_market_data(symbol)
+                market["unavailable_reason"] = (
+                    f"CoinMarketCap returned no data for symbol {symbol}."
+                )
+                return market
+
+        coin = coin_list[0]
+        if not isinstance(coin, dict):
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = "CoinMarketCap returned an invalid coin record."
+            return market
+
+        quote = coin.get("quote", {}).get("USD", {})
+        if not isinstance(quote, dict):
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = "CoinMarketCap returned no USD quote."
+            return market
+
+        field_errors = {}
+        price = _read_market_number(quote, "price", "CoinMarketCap", field_errors)
+        volume = _read_market_number(quote, "volume_24h", "CoinMarketCap", field_errors)
+        market_cap = _read_market_number(quote, "market_cap", "CoinMarketCap", field_errors)
+        change_24h = _read_market_number(
+            quote, "percent_change_24h", "CoinMarketCap", field_errors
+        )
+        change_7d = _read_market_number(
+            quote, "percent_change_7d", "CoinMarketCap", field_errors
+        )
+        # CMC /quotes/latest does not provide intraday high/low.
+        high_24h = None
+        low_24h = None
+
+        if price is None:
+            market = empty_market_data(symbol)
+            market["unavailable_reason"] = "CoinMarketCap returned no usable price."
+            return market
+
+        _clear_provider_success("CoinMarketCap")
+
+        timestamp = utc_now_iso()
+        last_updated = quote.get("last_updated")
+        if last_updated:
+            try:
+                timestamp = datetime.fromisoformat(
+                    str(last_updated).replace("Z", "+00:00")
+                ).isoformat()
+            except (TypeError, ValueError):
+                pass
+
+        logger.info(
+            "[MARKET] CoinMarketCap SUCCESS price=%.4f source=CoinMarketCap",
+            price,
+        )
+
+        return json_safe({
+            "symbol": symbol,
+            "price": price,
+            "price_change_24h_pct": change_24h,
+            "price_change_7d_pct": change_7d,
+            "volume_24h": volume,
+            "market_cap": market_cap,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+            "source": "CoinMarketCap",
+            "timestamp": timestamp,
+            "source_timestamps": {
+                "CoinMarketCap": timestamp,
+            },
+            "available": True,
+            "field_errors": field_errors,
+        })
+
+    except UnsupportedAssetError:
+        raise
+
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.warning("[MARKET] CoinMarketCap parse failed: %s", exc)
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = f"CoinMarketCap response parsing failed: {exc}."
+        return market
+
+    except Exception as exc:
+        logger.warning("[MARKET] CoinMarketCap failed unexpectedly: %s", exc)
+        market = empty_market_data(symbol)
+        market["unavailable_reason"] = f"CoinMarketCap request failed unexpectedly: {exc}."
+        return market
+
+
 def _read_market_number(
     payload: dict,
     key: str,
@@ -2808,6 +3073,32 @@ def fetch_market_data(
                             "CoinGecko is temporarily unavailable; "
                             "serving the last known snapshot."
                         )
+
+            # --------------------------------------------------------
+            # CoinMarketCap fallback
+            # --------------------------------------------------------
+            # Only reached when:
+            #   1. CoinGecko live call returned unavailable, AND
+            #   2. Stale cache is missing or too old.
+            # The entire market dict is replaced — fields from two
+            # providers are never mixed within one report.
+            # --------------------------------------------------------
+            if not market.get("available") and CMC_API_KEY:
+                try:
+                    cmc_market = fetch_cmc_market(symbol)
+                    if isinstance(cmc_market, dict) and cmc_market.get("available"):
+                        market = cmc_market
+                        market["is_fallback_provider"] = True
+                        logger.info(
+                            "[MARKET] %s served by fallback provider CoinMarketCap",
+                            symbol,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "[MARKET] CMC fallback failed for %s: %s",
+                        symbol,
+                        exc,
+                    )
 
             market.setdefault("source_timestamps", {})
             if market.get("source") and market.get("timestamp"):
@@ -3243,6 +3534,172 @@ def fetch_coingecko_history(
         return []
 
 
+# ============================================================
+# COINMARKETCAP HISTORY
+# ============================================================
+# Fallback historical data provider.  Calls CMC's
+# /v2/cryptocurrency/quotes/historical endpoint.  Only returns
+# data if the FULL requested window can be sourced entirely from
+# CMC — partial results are discarded so CoinGecko history is
+# never spliced with CMC history.
+# ============================================================
+
+def fetch_cmc_history(
+    symbol: str,
+    days: int = SUPPORTED_HISTORY_DAYS,
+) -> list:
+    """
+    Fetch historical daily prices from CoinMarketCap.
+
+    Returns a list of {"timestamp": <UNIX ms>, "price": <float>}
+    dicts — the same shape as fetch_coingecko_history().
+
+    Only returns data when the full ``days`` window is available.
+    Returns [] if the window is incomplete (constraint: never
+    splice partial histories from different providers).
+    """
+
+    symbol = normalize_symbol(symbol)
+
+    if not symbol:
+        return []
+
+    if not CMC_API_KEY:
+        return []
+
+    if _provider_is_cooling("CoinMarketCap"):
+        return []
+
+    try:
+        now_dt = datetime.now(timezone.utc)
+        start_dt = now_dt - timedelta(days=days)
+
+        response, status_code, error_reason = _http_get_cmc(
+            f"{CMC_API_URL}/v2/cryptocurrency/quotes/historical",
+            params={
+                "symbol": symbol,
+                "convert": "USD",
+                "time_start": start_dt.strftime("%Y-%m-%dT00:00:00Z"),
+                "time_end": now_dt.strftime("%Y-%m-%dT00:00:00Z"),
+                "interval": "daily",
+                "count": days + 1,
+            },
+            timeout=MARKET_TIMEOUT,
+        )
+
+        if response is None:
+            _mark_provider_failure(
+                "CoinMarketCap",
+                status_code,
+                error_reason or "no_response",
+            )
+            return []
+
+        if status_code is not None and status_code >= 400:
+            _mark_provider_failure(
+                "CoinMarketCap",
+                status_code,
+                error_reason or f"HTTP {status_code}",
+            )
+            return []
+
+        payload = response.json()
+
+        if not isinstance(payload, dict):
+            return []
+
+        data_block = payload.get("data", {})
+        if not isinstance(data_block, dict):
+            return []
+
+        # CMC wraps as {"data": {"SYMBOL": [{"quotes": [...]}]}}
+        coin_list = data_block.get(symbol, data_block.get(symbol.upper(), []))
+        if isinstance(coin_list, dict):
+            coin_list = [coin_list]
+        if not isinstance(coin_list, list) or not coin_list:
+            return []
+
+        coin = coin_list[0]
+        if not isinstance(coin, dict):
+            return []
+
+        quotes = coin.get("quotes", [])
+        if not isinstance(quotes, list):
+            return []
+
+        result = []
+        seen_dates = set()
+
+        for entry in quotes:
+            if not isinstance(entry, dict):
+                continue
+
+            quote = entry.get("quote", {}).get("USD", {})
+            if not isinstance(quote, dict):
+                continue
+
+            price = optional_numeric(quote.get("price"))
+            if price is None or price <= 0:
+                continue
+
+            ts_str = entry.get("timestamp") or quote.get("timestamp")
+            if not ts_str:
+                continue
+
+            try:
+                dt = datetime.fromisoformat(
+                    str(ts_str).replace("Z", "+00:00")
+                )
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                day = dt.date()
+            except (TypeError, ValueError):
+                continue
+
+            # Keep one data point per calendar day (the latest).
+            if day in seen_dates:
+                continue
+            seen_dates.add(day)
+
+            timestamp_ms = int(dt.timestamp() * 1000)
+            result.append({
+                "timestamp": timestamp_ms,
+                "price": price,
+            })
+
+        # Sort by timestamp ascending.
+        result.sort(key=lambda x: x["timestamp"])
+
+        # Only return if we have the full window — never splice
+        # partial CMC history with partial CoinGecko history.
+        if len(result) < days:
+            logger.info(
+                "[HISTORY] CMC returned %d/%d candles for %s — discarding partial window",
+                len(result),
+                days,
+                symbol,
+            )
+            return []
+
+        _clear_provider_success("CoinMarketCap")
+
+        logger.info(
+            "[HISTORY] CoinMarketCap SUCCESS candles=%d for %s",
+            len(result),
+            symbol,
+        )
+
+        return result
+
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.warning("[HISTORY] CoinMarketCap history parsing failed: %s", exc)
+        return []
+
+    except Exception as exc:
+        logger.warning("[HISTORY] CoinMarketCap history failed unexpectedly: %s", exc)
+        return []
+
+
 def _safe_lookback(
     value,
     default: int = 7,
@@ -3397,6 +3854,31 @@ def fetch_price_history(
                     len(stale_prices),
                 )
                 return list(stale_prices)
+
+        # --------------------------------------------------------
+        # CoinMarketCap history fallback
+        # --------------------------------------------------------
+        # Only reached when CoinGecko history AND stale cache both
+        # failed. The full window must be available from CMC — partial
+        # results are discarded to prevent splicing two providers.
+        # --------------------------------------------------------
+        if not prices and CMC_API_KEY:
+            try:
+                cmc_prices = fetch_cmc_history(symbol, days)
+                if isinstance(cmc_prices, list) and len(cmc_prices) >= days:
+                    prices = cmc_prices
+                    history_source = "CoinMarketCap"
+                    logger.info(
+                        "[HISTORY] %s served by fallback provider CoinMarketCap (%d candles)",
+                        symbol,
+                        len(prices),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[HISTORY] CMC history fallback failed for %s: %s",
+                    symbol,
+                    exc,
+                )
 
         # Only cache NON-EMPTY results. Caching an empty list would
         # freeze "0 candles" for the full TTL when the provider fails
@@ -6655,6 +7137,12 @@ def build_structured_report(
             "source"
         ),
         "Backend market feed",
+    )
+
+    # Pass through the fallback-provider flag so the frontend can
+    # show a "via CoinMarketCap" label when CMC data is used.
+    dq["is_fallback_provider"] = bool(
+        market.get("is_fallback_provider", False)
     )
 
     report = {
