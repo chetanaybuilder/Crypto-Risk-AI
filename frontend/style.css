@@ -1565,9 +1565,21 @@ img {
     }
 
     .landing-navbar {
-        flex-direction: column;
-        gap: 16px;
-        padding: 16px;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 20px;
+    }
+
+    .landing-navbar .nav-login-button {
+        padding: 10px 18px;
+        font-size: 12px;
+        box-shadow: 0 4px 0 #400000, 0 5px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,100,100,0.6);
+    }
+    
+    .landing-navbar .nav-login-button:active {
+        transform: translateY(4px);
+        box-shadow: 0 0 0 #400000, 0 2px 5px rgba(0,0,0,0.4), inset 0 2px 5px rgba(0,0,0,0.5);
     }
 
     .landing-nav-status {
