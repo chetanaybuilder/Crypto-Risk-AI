@@ -4334,25 +4334,9 @@ def calculate_liquidity_metrics(
         }
 
 
-def _prices_only(history: list) -> list:
-    """
-    Extract bare price floats from a history list that may contain
-    rich dicts (P2 format) or bare floats.
-    """
-    if not isinstance(history, list):
-        return []
-    
-    prices = []
-    for item in history:
-        if isinstance(item, dict):
-            price = optional_numeric(item.get("price"))
-        else:
-            price = optional_numeric(item)
-            
-        if price is not None:
-            prices.append(price)
-            
-    return prices
+# NOTE: _prices_only is defined above (line ~3725). This duplicate
+# definition was removed during the audit to avoid the second
+# definition silently shadowing the first.
 
 
 def calculate_quant_metrics(
@@ -5295,14 +5279,17 @@ def fetch_token_security(
 
     try:
 
-        # PART 1 already contains the complete
-        # /token_security endpoint.
+        # FIX: replaced bare requests.get() + raise_for_status() with
+        # the status-aware _http_get_market() helper so HTTP errors are
+        # properly categorised (4xx vs 5xx vs timeout) and logged without
+        # triggering the generic except-Exception handler for valid HTTP
+        # error responses.
         url = (
             f"{GOPLUS_API_URL}/"
             f"{quote(str(chain_id))}"
         )
 
-        response = requests.get(
+        response, status_code, error_reason = _http_get_market(
             url,
             params={
                 "contract_addresses": address,
@@ -5310,7 +5297,24 @@ def fetch_token_security(
             timeout=MARKET_TIMEOUT,
         )
 
-        response.raise_for_status()
+        if response is None or (status_code is not None and status_code >= 400):
+            logger.warning(
+                "GoPlus security lookup failed for chain=%s addr=%s: %s",
+                chain_id,
+                address,
+                error_reason or f"HTTP {status_code}",
+            )
+            return {
+                "status": "Unavailable",
+                "confidence": 0,
+                "flags": [
+                    "Contract security provider unavailable."
+                ],
+                "red_flags": [],
+                "source": "GoPlus",
+                "timestamp": utc_now_iso(),
+                "available": False,
+            }
 
         payload = response.json()
 
@@ -10285,8 +10289,10 @@ def market_api(
 
     except Exception as exc:
 
-        traceback.print_exc()
-
+        # FIX: removed traceback.print_exc() — it was printing raw stack
+        # traces to stdout, bypassing the structured logger and leaking
+        # internals in production. logger.exception() already captures
+        # the full traceback in the structured log stream.
         logger.exception(
             "Market API failed: %s",
             exc,
@@ -10294,7 +10300,7 @@ def market_api(
 
         return jsonify({
             "success": False,
-            "error": str(exc) or "Market data unavailable.",
+            "error": "Market data unavailable.",
         }), 502
 
 
