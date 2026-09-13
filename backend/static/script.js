@@ -33,26 +33,48 @@
 /* ============================================================
    CURSOR-REPULSION PHYSICS ENGINE
    ============================================================ */
+// ============================================================
+// PARALLAX HEIST EFFECT
+// ============================================================
 
-const CursorPhysics = {
-    cursorX: 0,
-    cursorY: 0,
-    targetX: 0,
-    targetY: 0,
-    tokens: [],
+const ParallaxHeist = {
+    mouseX: 0,
+    mouseY: 0,
+    layers: [],
     isActive: false,
     animationId: null,
 
     init() {
-        this.tokens = document.querySelectorAll(".physics-token");
+        const container = document.getElementById('parallax-bg');
+        if (!container) return;
 
-        if (!this.tokens.length) return;
+        this.layers = Array.from(document.querySelectorAll('.parallax-layer'));
+        if (!this.layers.length) return;
 
         this.isActive = true;
 
-        document.addEventListener("mousemove", (event) => {
-            this.targetX = event.clientX;
-            this.targetY = event.clientY;
+        window.addEventListener('mousemove', (e) => {
+            if (!this.isActive || document.body.classList.contains('report-active')) return;
+            // Normalize mouse position between -1 and 1
+            this.mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+            this.mouseY = (e.clientY / window.innerHeight) * 2 - 1;
+        });
+
+        // Handle device orientation for mobile
+        window.addEventListener('deviceorientation', (e) => {
+            if (!this.isActive || document.body.classList.contains('report-active')) return;
+            // Normalize tilt
+            let tiltX = e.gamma; // left-to-right (-90 to 90)
+            let tiltY = e.beta;  // front-to-back (-180 to 180)
+
+            // Clamp and normalize to -1 to 1
+            if (tiltX > 30) tiltX = 30;
+            if (tiltX < -30) tiltX = -30;
+            if (tiltY > 45) tiltY = 45;
+            if (tiltY < -45) tiltY = -45;
+
+            this.mouseX = tiltX / 30;
+            this.mouseY = tiltY / 45;
         });
 
         this.animate();
@@ -61,44 +83,13 @@ const CursorPhysics = {
     animate() {
         if (!this.isActive) return;
 
-        this.cursorX += (this.targetX - this.cursorX) * 0.08;
-        this.cursorY += (this.targetY - this.cursorY) * 0.08;
+        this.layers.forEach(layer => {
+            const depth = parseFloat(layer.getAttribute('data-depth')) || 0;
+            // X and Y translation based on depth
+            const tx = this.mouseX * depth * 30;
+            const ty = this.mouseY * depth * 30;
 
-        this.tokens.forEach((token, index) => {
-            const rect = token.getBoundingClientRect();
-
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-
-            const deltaX = centerX - this.cursorX;
-            const deltaY = centerY - this.cursorY;
-
-            const distance = Math.sqrt(
-                deltaX * deltaX + deltaY * deltaY
-            );
-
-            const repulsionRadius = 250;
-
-            if (distance < repulsionRadius && distance > 0) {
-                const force =
-                    Math.pow(
-                        1 - distance / repulsionRadius,
-                        2
-                    ) * 60;
-
-                const dirX = deltaX / distance;
-                const dirY = deltaY / distance;
-
-                const displacementX = dirX * force;
-                const displacementY = dirY * force;
-                const displacementZ = force * 0.5 + index * 10;
-
-                token.style.transform =
-                    `translate3d(${displacementX}px, ${displacementY}px, ${displacementZ}px) ` +
-                    `rotateZ(${dirX * 5}deg)`;
-            } else {
-                token.style.transform = "";
-            }
+            layer.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
         });
 
         this.animationId = requestAnimationFrame(() => this.animate());
@@ -106,10 +97,8 @@ const CursorPhysics = {
 
     destroy() {
         this.isActive = false;
-
         if (this.animationId) {
             cancelAnimationFrame(this.animationId);
-            this.animationId = null;
         }
     }
 };
@@ -211,19 +200,13 @@ const state = {
     liveRequestId: 0,
     isLiveRequestInFlight: false,
 
-    // FIX (Bug 3): timestamp of the last live market fetch, used to
-    // avoid an unnecessary immediate request when the tab becomes
-    // visible again within the market cache window.
-    lastLiveMarketFetchAt: 0,
-
     isAnalyzing: false,
 
     // Job polling state
     activeJobId: null,
     jobPollTimer: null,
     jobPollStartedAt: 0
-};
-
+}
 
 /* ============================================================
    DOM HELPERS
@@ -242,16 +225,24 @@ function setText(selector, value, fallback = "—") {
 
     if (!element) return;
 
+    let finalValue = value;
+
     if (
         value === null ||
         value === undefined ||
         value === ""
     ) {
-        element.textContent = fallback;
-        return;
+        finalValue = fallback;
     }
 
-    element.textContent = String(value);
+    const strValue = String(finalValue);
+    element.textContent = strValue;
+
+    if (strValue === "N/A" || strValue === "—" || strValue === "-") {
+        element.style.opacity = "0.5";
+    } else {
+        element.style.opacity = "1";
+    }
 }
 
 function setHTML(selector, html) {
@@ -341,6 +332,13 @@ function normalizeSource(source) {
         normalized === "coin gecko"
     ) {
         return "CoinGecko";
+    }
+
+    if (
+        normalized.includes("coinmarketcap") ||
+        normalized === "cmc"
+    ) {
+        return "CoinMarketCap";
     }
 
 
@@ -1022,24 +1020,16 @@ function animateProgressTo(
 }
 
 function startProgress() {
-    const overlay =
-        $("#analysis-progress");
-
-    if (overlay) {
-        show(overlay);
-    }
-
     _progressCurrent = 0;
-
     updateProgressDOM(1, "queued", "Starting analysis…");
 
-    if (
-        typeof AnalysisBeam !==
-        "undefined"
-    ) {
-        AnalysisBeam.create();
-        AnalysisBeam.setProgress(1);
-    }
+    const wrapper = $("#energy-beam-wrapper");
+    const beam = $(".energy-beam");
+    const glow = $(".energy-beam-glow");
+
+    if (wrapper) wrapper.classList.add("is-analyzing");
+    if (beam) beam.style.width = "1%";
+    if (glow) glow.style.width = "1%";
 }
 
 /**
@@ -1059,55 +1049,41 @@ function applyJobProgress(job) {
 
     animateProgressTo(safePercent, stage, title, 500);
 
-    if (
-        typeof AnalysisBeam !== "undefined"
-    ) {
-        AnalysisBeam.setProgress(safePercent);
-    }
+    const beam = $(".energy-beam");
+    const glow = $(".energy-beam-glow");
+    if (beam) beam.style.width = `${safePercent}%`;
+    if (glow) glow.style.width = `${safePercent}%`;
 }
 
 function finishProgress() {
-    const overlay =
-        $("#analysis-progress");
-
     animateProgressTo(100, "complete", "Analysis complete", 400);
 
-    if (
-        typeof AnalysisBeam !==
-        "undefined"
-    ) {
-        AnalysisBeam.setProgress(100);
-    }
+    const beam = $(".energy-beam");
+    const glow = $(".energy-beam-glow");
+    if (beam) beam.style.width = "100%";
+    if (glow) glow.style.width = "100%";
 
     setTimeout(() => {
-        if (overlay) {
-            hide(overlay);
-        }
-
-        if (
-            typeof AnalysisBeam !==
-            "undefined"
-        ) {
-            AnalysisBeam.remove();
-        }
+        const wrapper = $("#energy-beam-wrapper");
+        if (wrapper) wrapper.classList.remove("is-analyzing");
+        if (beam) beam.style.width = "0%";
+        if (glow) glow.style.width = "0%";
     }, 700);
 }
 
 function abortProgress() {
-    const overlay = $("#analysis-progress");
-
     if (_progressAnim) {
         cancelAnimationFrame(_progressAnim);
         _progressAnim = null;
     }
 
-    if (overlay) {
-        hide(overlay);
-    }
+    const wrapper = $("#energy-beam-wrapper");
+    const beam = $(".energy-beam");
+    const glow = $(".energy-beam-glow");
 
-    if (typeof AnalysisBeam !== "undefined") {
-        AnalysisBeam.remove();
-    }
+    if (wrapper) wrapper.classList.remove("is-analyzing");
+    if (beam) beam.style.width = "0%";
+    if (glow) glow.style.width = "0%";
 }
 
 
@@ -1262,7 +1238,7 @@ function formatConfidence(value) {
      */
     const normalized =
         number >= 0 &&
-        number <= 1
+            number <= 1
             ? number * 100
             : number;
 
@@ -1311,7 +1287,7 @@ function formatRelativeTime(value) {
     const seconds = Math.floor(
         (Date.now() -
             date.getTime()) /
-            1000
+        1000
     );
 
     if (seconds < 10) {
@@ -1397,7 +1373,7 @@ function isRiskReport(value) {
      */
     if (
         value.risk_score !==
-            undefined &&
+        undefined &&
         (
             value.asset ||
             value.token_symbol ||
@@ -1416,9 +1392,9 @@ function isRiskReport(value) {
         (
             value.risk_profile
                 .composite_score !==
-                undefined ||
+            undefined ||
             value.risk_profile.score !==
-                undefined
+            undefined
         )
     ) {
         return true;
@@ -1503,11 +1479,11 @@ function getMarketFromPayload(
         isPlainObject(payload) &&
         (
             payload.price !==
-                undefined ||
+            undefined ||
             payload.current_price_usd !==
-                undefined ||
+            undefined ||
             payload.current_price !==
-                undefined
+            undefined
         )
     ) {
         return payload;
@@ -1543,13 +1519,13 @@ function getMarketFromPayload(
             isPlainObject(candidate) &&
             (
                 candidate.price !==
-                    undefined ||
+                undefined ||
                 candidate.current_price_usd !==
-                    undefined ||
+                undefined ||
                 candidate.current_price !==
-                    undefined ||
+                undefined ||
                 candidate.price_usd !==
-                    undefined
+                undefined
             )
         ) {
             return candidate;
@@ -2049,6 +2025,15 @@ async function runAnalysis(
         finishProgress();
 
         if (state.currentSymbol) {
+            // FIX (Problem 1): Use the fresh market data from the newly completed 
+            // analysis report to update the live UI immediately. This avoids a 
+            // redundant /api/market call right after a job finishes.
+            const jobMarket = getMarket(report);
+            if (jobMarket && Object.keys(jobMarket).length > 0) {
+                updateLiveMarket(jobMarket);
+                setLastFetchTime(state.currentSymbol, Date.now());
+            }
+
             startLivePolling(state.currentSymbol);
         }
     } catch (error) {
@@ -2290,6 +2275,39 @@ async function logout() {
 // provider cooldown and return available: false.
 const LIVE_MARKET_POLL_INTERVAL_MS = 30000;
 
+let marketBackoffUntil = 0;
+
+function getLastFetchTime(symbol) {
+    try {
+        return Number(localStorage.getItem(`marketFetchGate:${symbol}`)) || 0;
+    } catch (error) {
+        return 0;
+    }
+}
+
+function setLastFetchTime(symbol, timestamp) {
+    try {
+        localStorage.setItem(`marketFetchGate:${symbol}`, timestamp);
+    } catch (error) {
+        // ignore
+    }
+}
+
+function canFetchMarketNow(symbol) {
+    const now = Date.now();
+
+    if (now < marketBackoffUntil) {
+        return false;
+    }
+
+    const sinceLastFetch = now - getLastFetchTime(symbol);
+    if (sinceLastFetch < LIVE_MARKET_POLL_INTERVAL_MS) {
+        return false;
+    }
+
+    return true;
+}
+
 function stopLivePolling() {
     if (state.livePollTimer) {
         clearInterval(
@@ -2325,16 +2343,10 @@ function startLivePolling(symbol) {
      * tab becomes visible again when a fetch already happened within
      * the backend's MARKET_CACHE_TTL window.
      */
-    if (!document.hidden) {
-        const sinceLastFetch =
-            Date.now() -
-            (state.lastLiveMarketFetchAt || 0);
-
-        if (sinceLastFetch >= LIVE_MARKET_POLL_INTERVAL_MS) {
-            refreshLiveMarket(
-                normalizedSymbol
-            );
-        }
+    if (!document.hidden && canFetchMarketNow(normalizedSymbol)) {
+        refreshLiveMarket(
+            normalizedSymbol
+        );
     }
 
     /*
@@ -2357,6 +2369,10 @@ function startLivePolling(symbol) {
             if (
                 state.isLiveRequestInFlight
             ) {
+                return;
+            }
+
+            if (!canFetchMarketNow(state.currentSymbol)) {
                 return;
             }
 
@@ -2395,8 +2411,7 @@ async function refreshLiveMarket(
     // FIX (Bug 3): record when the last market fetch happened so
     // startLivePolling() can skip the immediate refresh if the tab
     // becomes visible again within the cache window.
-    state.lastLiveMarketFetchAt =
-        Date.now();
+    setLastFetchTime(normalizedSymbol, Date.now());
 
     try {
         const payload =
@@ -2462,6 +2477,7 @@ async function refreshLiveMarket(
          * everything behind a generic state.
          */
         if (error.status === 429) {
+            marketBackoffUntil = Date.now() + LIVE_MARKET_POLL_INTERVAL_MS;
             setMarketLiveState(
                 false,
                 "Market feed rate-limited"
@@ -2591,7 +2607,7 @@ function updateLiveMarket(
             market.market_cap_usd
         );
 
-    const source =
+    let source =
         normalizeSource(
             firstDefined(
                 market.source,
@@ -2599,6 +2615,10 @@ function updateLiveMarket(
                 market.data_source
             )
         );
+
+    if (market.is_fallback_provider) {
+        source += " (Fallback)";
+    }
 
     const timestamp =
         firstDefined(
@@ -2713,6 +2733,7 @@ function updateLiveMarket(
 
 function clearReportView() {
     state.latestReport = null;
+    document.body.classList.remove('report-active');
 
     setText(
         "#report-token",
@@ -3320,7 +3341,7 @@ function renderMarket(report) {
             market.market_cap_usd
         );
 
-    const source =
+    let source =
         normalizeSource(
             firstDefined(
                 market.source,
@@ -3329,8 +3350,14 @@ function renderMarket(report) {
             )
         );
 
+    if (report?.data_quality?.is_fallback_provider || market?.is_fallback_provider) {
+        source += " (Fallback)";
+    }
+
     const timestamp =
         firstDefined(
+            report?.created_at,
+            report?.generated_at,
             market.timestamp,
             market.updated_at,
             market.fetched_at,
@@ -3490,6 +3517,11 @@ function renderRiskProfile(
             : "—"
     );
 
+    const partialBadge = document.getElementById("report-risk-partial");
+    if (partialBadge) {
+        partialBadge.style.display = risk.partial_data ? "inline-block" : "none";
+    }
+
     setText(
         "#report-risk-label",
         label
@@ -3560,7 +3592,7 @@ function renderRiskProfile(
             getPillars(report)
                 .marketSensitivity,
             getPillars(report)
-                ["market-sensitivity"]
+            ["market-sensitivity"]
         );
 
     renderPillar(
@@ -3959,8 +3991,7 @@ function renderRiskDrivers(
                 firstDefined(
                     safeDriver.title,
                     safeDriver.name,
-                    `Risk driver ${
-                        index + 1
+                    `Risk driver ${index + 1
                     }`
                 );
 
@@ -4049,17 +4080,17 @@ function getExpectedDrawdown(
                 base.drawdown_pct
             );
 
-        const numericMove =
-            Number(move);
+        if (move !== null) {
+            const numericMove =
+                Number(move);
 
-        if (
-            Number.isFinite(
-                numericMove
-            )
-        ) {
-            return Math.abs(
-                numericMove
-            );
+            if (
+                Number.isFinite(
+                    numericMove
+                )
+            ) {
+                return numericMove;
+            }
         }
     }
 
@@ -4097,21 +4128,23 @@ function getResilienceLabel(
             stressObj.resilience_score
         );
 
-    const score =
-        Number(rawScore);
+    if (rawScore !== null) {
+        const score =
+            Number(rawScore);
 
-    if (
-        Number.isFinite(score)
-    ) {
-        if (score >= 65) {
-            return "Resilient";
+        if (
+            Number.isFinite(score)
+        ) {
+            if (score >= 65) {
+                return "Resilient";
+            }
+
+            if (score >= 40) {
+                return "Moderate";
+            }
+
+            return "Fragile";
         }
-
-        if (score >= 40) {
-            return "Moderate";
-        }
-
-        return "Fragile";
     }
 
     return null;
@@ -4508,7 +4541,7 @@ function renderDataQuality(
     const reportMarket =
         getMarket(reportObj);
 
-    const source =
+    let source =
         normalizeSource(
             firstDefined(
                 reportMarket.source,
@@ -4516,6 +4549,10 @@ function renderDataQuality(
                 quality.source
             )
         );
+
+    if (quality.is_fallback_provider || reportMarket?.is_fallback_provider) {
+        source += " (Fallback)";
+    }
 
     setText(
         "#market-source",
@@ -4527,6 +4564,9 @@ function renderDataQuality(
      */
     const timestamp =
         firstDefined(
+            reportObj.created_at,
+            reportObj.generated_at,
+
             reportMarket.timestamp,
             reportMarket.updated_at,
             reportMarket.fetched_at,
@@ -4536,8 +4576,6 @@ function renderDataQuality(
             quality.updated_at,
             quality.fetched_at,
 
-            reportObj.generated_at,
-            reportObj.created_at,
             reportObj.updated_at
         );
 
@@ -4657,6 +4695,7 @@ function renderReport(
         return;
     }
 
+    document.body.classList.add('report-active');
     console.log(
         "Rendering CryptoRisk report:",
         report
@@ -5000,8 +5039,8 @@ function createHistoryCell(
 
     cell.textContent =
         value === null ||
-        value === undefined ||
-        value === ""
+            value === undefined ||
+            value === ""
             ? "—"
             : String(value);
 
@@ -5188,9 +5227,9 @@ function setupKeyboardShortcuts() {
                 active &&
                 (
                     active.tagName ===
-                        "INPUT" ||
+                    "INPUT" ||
                     active.tagName ===
-                        "TEXTAREA" ||
+                    "TEXTAREA" ||
                     active.isContentEditable
                 );
 
@@ -5251,18 +5290,8 @@ window.addEventListener(
         stopLivePolling();
         stopJobPolling();
 
-        if (
-            typeof CursorPhysics !==
-            "undefined"
-        ) {
-            CursorPhysics.destroy();
-        }
-
-        if (
-            typeof MoneyMeteor !==
-            "undefined"
-        ) {
-            MoneyMeteor.destroy();
+        if (typeof ParallaxHeist !== "undefined") {
+            ParallaxHeist.destroy();
         }
     }
 );
@@ -5444,12 +5473,12 @@ const AnalysisBeam = {
 
                 if (
                     particle.life <=
-                        0 ||
+                    0 ||
                     particle.y <
-                        -10 ||
+                    -10 ||
                     particle.y >
-                        this.canvas.height +
-                            10
+                    this.canvas.height +
+                    10
                 ) {
                     particle.x =
                         Math.random() *
@@ -5474,7 +5503,7 @@ const AnalysisBeam = {
 
                     particle.life =
                         Math.random() *
-                            0.5 +
+                        0.5 +
                         0.5;
                 }
 
@@ -5495,7 +5524,7 @@ const AnalysisBeam = {
                     Math.max(
                         0,
                         particle.alpha *
-                            particle.life
+                        particle.life
                     );
 
                 this.ctx.fill();
@@ -5568,12 +5597,12 @@ const AnalysisBeam = {
 
                 size:
                     Math.random() *
-                        3 +
+                    3 +
                     1,
 
                 alpha:
                     Math.random() *
-                        0.5 +
+                    0.5 +
                     0.2,
 
                 color:
@@ -5583,10 +5612,10 @@ const AnalysisBeam = {
                         "#39ff14",
                         "#7c3aed"
                     ][
-                        Math.floor(
-                            Math.random() *
-                                4
-                        )
+                    Math.floor(
+                        Math.random() *
+                        4
+                    )
                     ],
 
                 life:
@@ -5652,7 +5681,7 @@ const AnalysisBeam = {
                 Math.max(
                     0,
                     Number(percent) ||
-                        0
+                    0
                 )
             );
 
@@ -5755,9 +5784,9 @@ const AnalysisBeam = {
 
             if (
                 this.progress <
-                    this.targetProgress ||
+                this.targetProgress ||
                 Math.abs(diff) >
-                    0.5
+                0.5
             ) {
                 requestAnimationFrame(
                     update
@@ -5791,7 +5820,7 @@ const AnalysisBeam = {
                 particle.vy =
                     -(
                         Math.random() *
-                            6 +
+                        6 +
                         2
                     );
 
@@ -5799,7 +5828,7 @@ const AnalysisBeam = {
 
                 particle.alpha =
                     Math.random() *
-                        0.5 +
+                    0.5 +
                     0.5;
             }
         );
@@ -5986,7 +6015,7 @@ const MoneyMeteor = {
         const startY =
             -40 -
             Math.random() *
-                100;
+            100;
 
         const isBitcoin =
             Math.random() < 0.5;
@@ -5999,11 +6028,11 @@ const MoneyMeteor = {
         const symbolSize =
             isBitcoin
                 ? 28 +
-                  Math.random() *
-                      12
+                Math.random() *
+                12
                 : 22 +
-                  Math.random() *
-                      8;
+                Math.random() *
+                8;
 
         const coreColor =
             isBitcoin
@@ -6027,12 +6056,12 @@ const MoneyMeteor = {
             decay:
                 0.005 +
                 Math.random() *
-                    0.008,
+                0.008,
 
             len:
                 120 +
                 Math.random() *
-                    200,
+                200,
 
             isB: isBitcoin,
             sym: symbol,
@@ -6076,7 +6105,7 @@ const MoneyMeteor = {
                 (
                     0.3 +
                     Math.random() *
-                        0.4
+                    0.4
                 )
             );
 
@@ -6098,7 +6127,7 @@ const MoneyMeteor = {
                 point.life -=
                     0.025 +
                     Math.random() *
-                        0.02;
+                    0.02;
             }
         );
 
@@ -6145,12 +6174,12 @@ const MoneyMeteor = {
                 decay:
                     0.02 +
                     Math.random() *
-                        0.03,
+                    0.03,
 
                 size:
                     1.5 +
                     Math.random() *
-                        2.5,
+                    2.5,
 
                 isB:
                     meteor.isB
@@ -6168,8 +6197,8 @@ const MoneyMeteor = {
                         Math.random() -
                         0.5
                     ) *
-                        meteor.len *
-                        0.5,
+                    meteor.len *
+                    0.5,
 
                 y:
                     meteor.y +
@@ -6177,8 +6206,8 @@ const MoneyMeteor = {
                         Math.random() -
                         0.5
                     ) *
-                        meteor.len *
-                        0.5,
+                    meteor.len *
+                    0.5,
 
                 vx:
                     (
@@ -6189,19 +6218,19 @@ const MoneyMeteor = {
                 vy:
                     -0.3 -
                     Math.random() *
-                        0.6,
+                    0.6,
 
                 life: 1,
 
                 decay:
                     0.015 +
                     Math.random() *
-                        0.015,
+                    0.015,
 
                 size:
                     8 +
                     Math.random() *
-                        6,
+                    6,
 
                 rot:
                     Math.random() *
@@ -6227,8 +6256,8 @@ const MoneyMeteor = {
                         Math.random() -
                         0.5
                     ) *
-                        meteor.len *
-                        0.3,
+                    meteor.len *
+                    0.3,
 
                 y:
                     meteor.y +
@@ -6236,8 +6265,8 @@ const MoneyMeteor = {
                         Math.random() -
                         0.5
                     ) *
-                        meteor.len *
-                        0.3,
+                    meteor.len *
+                    0.3,
 
                 vx:
                     (
@@ -6248,19 +6277,19 @@ const MoneyMeteor = {
                 vy:
                     -0.4 -
                     Math.random() *
-                        0.8,
+                    0.8,
 
                 life: 1,
 
                 decay:
                     0.012 +
                     Math.random() *
-                        0.012,
+                    0.012,
 
                 size:
                     7 +
                     Math.random() *
-                        5,
+                    5,
 
                 rot:
                     Math.random() *
@@ -6567,20 +6596,20 @@ const MoneyMeteor = {
             const hue =
                 particle.isB
                     ? 45 +
-                      Math.random() *
-                          20
+                    Math.random() *
+                    20
                     : 20 +
-                      Math.random() *
-                          20;
+                    Math.random() *
+                    20;
 
             const lightness =
                 particle.isB
                     ? 50 +
-                      Math.random() *
-                          30
+                    Math.random() *
+                    30
                     : 40 +
-                      Math.random() *
-                          30;
+                    Math.random() *
+                    30;
 
             ctx.beginPath();
 
@@ -6588,7 +6617,7 @@ const MoneyMeteor = {
                 particle.x,
                 particle.y,
                 particle.size *
-                    particle.life,
+                particle.life,
                 0,
                 Math.PI * 2
             );
@@ -6878,7 +6907,7 @@ const MoneyMeteor = {
 
         if (
             now -
-                this.lastSpawn >
+            this.lastSpawn >
             this.spawnInterval
         ) {
             this.spawnMeteor();
@@ -6889,7 +6918,7 @@ const MoneyMeteor = {
             this.spawnInterval =
                 600 +
                 Math.random() *
-                    600;
+                600;
         }
 
         for (
@@ -6908,13 +6937,13 @@ const MoneyMeteor = {
 
             if (
                 meteor.life <=
-                    0 ||
+                0 ||
                 meteor.y >
-                    this.H + 50 ||
+                this.H + 50 ||
                 meteor.x <
-                    -100 ||
+                -100 ||
                 meteor.x >
-                    this.W + 100
+                this.W + 100
             ) {
                 this.meteors.splice(
                     i,
@@ -6981,18 +7010,44 @@ const MoneyMeteor = {
    FINAL DOM INITIALIZATION
    ============================================================ */
 
+function initCardTilt() {
+    document.body.addEventListener('mousemove', (e) => {
+        const card = e.target.closest('.market-card, .risk-pillar, .stress-card, .stress-verdict-card, .driver-card');
+        if (!card) return;
+
+        const rect = card.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        const centerX = rect.width / 2;
+        const centerY = rect.height / 2;
+
+        const rotateX = ((y - centerY) / centerY) * -10;
+        const rotateY = ((x - centerX) / centerX) * 10;
+
+        card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`;
+        card.style.transition = 'none';
+        card.style.zIndex = '10';
+    });
+
+    document.body.addEventListener('mouseout', (e) => {
+        const card = e.target.closest('.market-card, .risk-pillar, .stress-card, .stress-verdict-card, .driver-card');
+        if (!card) return;
+
+        // Only reset if we actually left the card, not just a child element
+        if (!card.contains(e.relatedTarget)) {
+            card.style.transform = '';
+            card.style.transition = 'transform 0.5s ease';
+            card.style.zIndex = '1';
+        }
+    });
+}
+
 document.addEventListener(
     "DOMContentLoaded",
     () => {
-        CursorPhysics.init();
-
-        if (
-            document.getElementById(
-                "meteor-canvas"
-            )
-        ) {
-            MoneyMeteor.init();
-        }
+        ParallaxHeist.init();
+        initCardTilt();
 
         const analysisForm =
             $("#analysis-form");
@@ -7088,7 +7143,7 @@ window.addEventListener(
         console.error(
             "Frontend error:",
             event.error ||
-                event.message
+            event.message
         );
     }
 );
