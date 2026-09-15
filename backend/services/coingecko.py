@@ -4,11 +4,23 @@ import logging
 import requests
 from datetime import datetime, timezone
 from urllib.parse import quote
-from utils.helpers import _coin_resolution_cache, percentage_change, numeric, _mark_provider_failure, optional_numeric, utc_now_iso, normalize_symbol, json_safe, _get_symbol_fetch_lock, _clear_provider_success, empty_market_data, _provider_is_cooling
+from utils.helpers import (
+    _coin_resolution_cache,
+    _mark_provider_failure,
+    utc_now_iso,
+    normalize_symbol,
+    json_safe,
+    _get_symbol_fetch_lock,
+    _clear_provider_success,
+    empty_market_data,
+    _provider_is_cooling,
+    _http_get_cmc,
+    _http_get_market,
+)
+from utils.math_helpers import percentage_change, numeric, optional_numeric
 from typing import Dict, Any, List, Optional
 from config import *
 from extensions import *
-from utils.helpers import *
 from utils.errors import *
 
 logger = logging.getLogger(__name__)

@@ -4,15 +4,129 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.helpers import (
-    clamp,
     first_defined,
     json_safe,
     normalize_symbol,
-    numeric,
-    optional_numeric,
-    percentage_change,
-    safe_divide,
 )
+
+def numeric(
+    value: Any,
+    default: float = 0.0,
+) -> float:
+    """
+    Convert a scalar value to a finite float.
+    Invalid, missing, NaN and infinite values return the supplied
+    finite fallback.
+    """
+    try:
+        if value is None:
+            raise TypeError("None is not numeric")
+        if isinstance(value, bool):
+            result = float(value)
+        elif isinstance(value, (list, dict, tuple, set)):
+            raise TypeError("Non-scalar is not numeric")
+        elif isinstance(value, bytes):
+            text = value.decode().strip()
+            if not text:
+                raise ValueError("Empty numeric string")
+            result = float(text.replace(",", ""))
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text:
+                raise ValueError("Empty numeric string")
+            result = float(text.replace(",", ""))
+        else:
+            result = float(value)
+        if math.isfinite(result):
+            return result
+    except (TypeError, ValueError, ArithmeticError, OverflowError, UnicodeError):
+        pass
+    try:
+        fallback = float(default)
+        if math.isfinite(fallback):
+            return fallback
+    except (TypeError, ValueError, ArithmeticError, OverflowError):
+        pass
+    return 0.0
+
+def optional_numeric(
+    value: Any,
+) -> Optional[float]:
+    """
+    Convert a scalar value to a finite float.
+    Unlike numeric(), invalid or missing values remain None.
+    """
+    try:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (list, dict, tuple, set)):
+            return None
+        if isinstance(value, bytes):
+            text = value.decode().strip()
+            if not text:
+                return None
+            result = float(text.replace(",", ""))
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            result = float(text.replace(",", ""))
+        else:
+            result = float(value)
+        if not math.isfinite(result):
+            return None
+        return result
+    except (TypeError, ValueError, ArithmeticError, OverflowError, UnicodeError):
+        return None
+
+def clamp(
+    value: Any,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """
+    Clamp a numeric value to an inclusive range.
+    If the supplied bounds are reversed, they are normalized first.
+    """
+    minimum = numeric(minimum, default=0.0)
+    maximum = numeric(maximum, default=0.0)
+    if minimum > maximum:
+        minimum, maximum = maximum, minimum
+    value = numeric(value, default=minimum)
+    return max(minimum, min(maximum, value))
+
+def safe_divide(
+    numerator: Any,
+    denominator: Any,
+    default: float = 0.0,
+) -> float:
+    """Safely divide two numeric values without zero-division errors."""
+    denominator_value = optional_numeric(denominator)
+    if denominator_value is None or denominator_value == 0:
+        return numeric(default, default=0.0)
+    numerator_value = optional_numeric(numerator)
+    if numerator_value is None:
+        return numeric(default, default=0.0)
+    return numeric(numerator_value / denominator_value, default=default)
+
+def percentage_change(
+    current: Any,
+    previous: Any,
+) -> Optional[float]:
+    """Calculate percentage change from previous to current."""
+    current_value = optional_numeric(current)
+    previous_value = optional_numeric(previous)
+    if current_value is None or previous_value is None:
+        return None
+    if previous_value == 0:
+        return None
+    result = ((current_value - previous_value) / abs(previous_value)) * 100.0
+    if not math.isfinite(result):
+        return None
+    return result
+
 
 
 logger = logging.getLogger(__name__)

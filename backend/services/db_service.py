@@ -1,7 +1,8 @@
 import json
 import uuid
 import bcrypt
-from utils.helpers import normalize_symbol, json_safe, clamp
+from utils.helpers import normalize_symbol, json_safe
+from utils.math_helpers import clamp
 import logging
 import psycopg2
 from config import *

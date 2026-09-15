@@ -15,16 +15,16 @@ from services.coingecko import (
 from services.gemini import run_gemini_interpretation
 from services.goplus import fetch_token_security
 from utils.helpers import (
-    clamp,
     first_defined,
     format_number,
     json_safe,
     normalize_symbol,
-    numeric,
-    optional_numeric,
     utc_now_iso,
 )
 from utils.math_helpers import (
+    clamp,
+    numeric,
+    optional_numeric,
     calculate_quant_metrics,
     extract_beta_value,
     extract_volatility_value,
@@ -1342,18 +1342,22 @@ def run_analysis(
         not isinstance(market, dict)
         or not market.get("available")
     ):
+        unavailable_reason = (
+            market.get(
+                "unavailable_reason",
+                "Market provider did not return usable data.",
+            )
+            if isinstance(market, dict)
+            else "Market provider did not return usable data."
+        )
         logger.warning(
             "Market data unavailable for %s: %s",
             symbol,
-            (
-                market.get(
-                    "unavailable_reason",
-                    "Market provider did not return usable data.",
-                )
-                if isinstance(market, dict)
-                else "Market provider did not return usable data."
-            ),
+            unavailable_reason,
         )
+        
+        from utils.errors import MarketDataUnavailableError
+        raise MarketDataUnavailableError(unavailable_reason)
 
     report_progress(
         progress_callback,

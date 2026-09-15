@@ -12,7 +12,8 @@ from config import (
     GEMINI_TIMEOUT_SECONDS,
     AI_LIST_FIELDS,
 )
-from utils.helpers import format_number, clamp, json_safe
+from utils.helpers import format_number, json_safe
+from utils.math_helpers import clamp
 
 # FIX: these were previously pulled in via `from extensions import *`.
 # `_gemini_generate` is underscore-prefixed, so a wildcard import

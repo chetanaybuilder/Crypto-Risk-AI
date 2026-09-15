@@ -5,12 +5,11 @@ from urllib.parse import quote
 from config import GOPLUS_API_URL, MARKET_TIMEOUT
 from utils.helpers import (
     _http_get_market,
-    clamp,
     format_number,
     json_safe,
-    optional_numeric,
     utc_now_iso,
 )
+from utils.math_helpers import clamp, optional_numeric
 
 logger = logging.getLogger(__name__)
 
