@@ -255,6 +255,13 @@ COINGECKO_API_KEY = (
     ).strip()
 )
 
+if COINGECKO_PLAN == "pro":
+    COINGECKO_API_URL = "https://pro-api.coingecko.com/api/v3"
+    COINGECKO_AUTH_HEADER = "x-cg-pro-api-key"
+else:
+    COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
+    COINGECKO_AUTH_HEADER = "x-cg-demo-api-key"
+
 
 def _mask_secret(
     value: str,
