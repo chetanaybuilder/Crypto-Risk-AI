@@ -1,6 +1,6 @@
 import { getAI } from './market.js';
 import { firstDefined, setText } from '../utils/dom.js';
-import { marked } from 'marked';
+import { marked } from 'https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js';
 
 /* ============================================================
    AI REPORT
