@@ -1113,3 +1113,124 @@ def format_number(
         OverflowError,
     ):
         return "N/A"
+
+
+def _http_get_market(
+    url: str,
+    params: Optional[dict] = None,
+    timeout: Optional[int] = None,
+):
+    """
+    HTTP GET for market data providers.
+    """
+    try:
+        headers = {
+            "User-Agent": "CryptoRisk-AI/3.0",
+        }
+
+        if COINGECKO_API_KEY and "coingecko.com" in url:
+            headers[COINGECKO_AUTH_HEADER] = COINGECKO_API_KEY
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=(
+                timeout
+                or MARKET_TIMEOUT
+            ),
+            headers=headers,
+        )
+
+        if response.ok:
+            return response, response.status_code, None
+
+        retry_after = response.headers.get("Retry-After")
+
+        if retry_after:
+            try:
+                retry_after = str(max(0, float(retry_after)))
+            except (TypeError, ValueError):
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    retry_after = str(
+                        max(0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    retry_after = None
+        retry_suffix = (
+            f"; retry_after={retry_after}"
+            if retry_after
+            else ""
+        )
+
+        return response, response.status_code, (
+            f"HTTP {response.status_code}{retry_suffix}"
+        )
+
+    except requests.exceptions.Timeout:
+        return None, None, "timeout"
+    except requests.exceptions.ConnectionError:
+        return None, None, "connection_error"
+    except requests.RequestException as exc:
+        return None, None, str(exc)
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+def _http_get_cmc(
+    url: str,
+    params: Optional[dict] = None,
+    timeout: Optional[int] = None,
+):
+    """
+    HTTP GET for CoinMarketCap API with CMC auth header.
+    """
+    try:
+        headers = {
+            "User-Agent": "CryptoRisk-AI/3.0",
+            "Accept": "application/json",
+        }
+
+        if CMC_API_KEY:
+            headers["X-CMC_PRO_API_KEY"] = CMC_API_KEY
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=(
+                timeout
+                or MARKET_TIMEOUT
+            ),
+            headers=headers,
+        )
+
+        if response.ok:
+            return response, response.status_code, None
+
+        retry_after = response.headers.get("Retry-After")
+
+        if retry_after:
+            try:
+                retry_after = str(max(0, float(retry_after)))
+            except (TypeError, ValueError):
+                retry_after = None
+        retry_suffix = (
+            f"; retry_after={retry_after}"
+            if retry_after
+            else ""
+        )
+
+        return response, response.status_code, (
+            f"HTTP {response.status_code}{retry_suffix}"
+        )
+
+    except requests.exceptions.Timeout:
+        return None, None, "timeout"
+    except requests.exceptions.ConnectionError:
+        return None, None, "connection_error"
+    except requests.RequestException as exc:
+        return None, None, str(exc)
+    except Exception as exc:
+        return None, None, str(exc)
