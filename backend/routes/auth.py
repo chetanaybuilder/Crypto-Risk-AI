@@ -1,6 +1,7 @@
 import requests
 import logging
-from flask import Blueprint, request, jsonify, redirect, url_for
+from urllib.parse import quote
+from flask import Blueprint, request, jsonify, redirect, url_for, g
 
 logger = logging.getLogger(__name__)
 from config import *
