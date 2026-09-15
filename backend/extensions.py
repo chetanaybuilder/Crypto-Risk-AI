@@ -603,9 +603,22 @@ def init_db():
             # created by an older version of the application.
             cursor.execute(
                 """
-                ALTER TABLE analyses
-                ALTER COLUMN id
-                SET DEFAULT gen_random_uuid();
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = 'analyses'
+                          AND column_name = 'id'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE analyses ALTER COLUMN id DROP DEFAULT;
+                        ALTER TABLE analyses ALTER COLUMN id SET DATA TYPE UUID USING gen_random_uuid();
+                    END IF;
+                    
+                    ALTER TABLE analyses ALTER COLUMN id SET DEFAULT gen_random_uuid();
+                END
+                $$;
                 """
             )
 
@@ -675,9 +688,22 @@ def init_db():
             # default existed.
             cursor.execute(
                 """
-                ALTER TABLE analysis_jobs
-                ALTER COLUMN id
-                SET DEFAULT gen_random_uuid();
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = 'analysis_jobs'
+                          AND column_name = 'id'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE analysis_jobs ALTER COLUMN id DROP DEFAULT;
+                        ALTER TABLE analysis_jobs ALTER COLUMN id SET DATA TYPE UUID USING gen_random_uuid();
+                    END IF;
+                    
+                    ALTER TABLE analysis_jobs ALTER COLUMN id SET DEFAULT gen_random_uuid();
+                END
+                $$;
                 """
             )
 
