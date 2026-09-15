@@ -1,5 +1,9 @@
 import os
 from typing import Any
+from dotenv import load_dotenv
+
+# Try to load .env from parent directory
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
 def _safe_env_int(key, default):
     try: return int(os.environ.get(key, default))
