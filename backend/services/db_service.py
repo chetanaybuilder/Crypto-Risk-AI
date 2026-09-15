@@ -6,7 +6,7 @@ import logging
 import psycopg2
 import psycopg2.extras
 from config import *
-from extensions import get_db_connection
+from extensions import get_db_connection, ANALYSIS_EXECUTOR
 from utils.helpers import utc_now_iso
 
 logger = logging.getLogger(__name__)

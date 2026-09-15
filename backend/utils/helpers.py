@@ -9,6 +9,17 @@ from flask import request, abort
 from config import *
 from extensions import *
 
+import threading
+_rate_limit_lock = threading.Lock()
+_rate_limit_buckets = {}
+_symbol_fetch_locks_guard = threading.Lock()
+_symbol_fetch_locks = {}
+_provider_cooldown_lock = threading.Lock()
+_provider_cooldown = {}
+_provider_failure_counts = {}
+_coin_resolution_cache = {}
+
+
 def _rate_limit_check(
     bucket: str,
     max_attempts: int,
