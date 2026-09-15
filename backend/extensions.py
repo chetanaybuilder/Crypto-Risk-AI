@@ -56,6 +56,40 @@ GEMINI_EXECUTOR = ThreadPoolExecutor(
 
 
 # ---------------------------------------------------------------------------
+# Gemini AI initialization
+# ---------------------------------------------------------------------------
+
+try:
+    from google import genai
+except ImportError:
+    genai = None
+
+gemini_client = None
+
+if genai and GEMINI_API_KEY:
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        logger.info("Gemini AI client initialized.")
+    except Exception as exc:
+        logger.error("Failed to initialize Gemini AI client: %s", exc)
+
+
+def _gemini_generate(prompt):
+    """
+    Synchronous wrapper for Gemini generation to run inside thread pools.
+    """
+    if gemini_client is None:
+        raise RuntimeError("Gemini AI is not configured (missing API key or library).")
+        
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+    )
+    
+    return response.text
+
+
+# ---------------------------------------------------------------------------
 # Database pool
 # ---------------------------------------------------------------------------
 
