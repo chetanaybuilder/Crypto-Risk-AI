@@ -1,4 +1,4 @@
-import { getRiskProfile, getRiskScore, getRiskSeverity } from './market.js';
+import { getRiskProfile } from './market.js';
 import { formatScore, normalizeSeverity } from '../utils/formatters.js';
 import { firstDefined, setText } from '../utils/dom.js';
 

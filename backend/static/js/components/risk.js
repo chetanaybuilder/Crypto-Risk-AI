@@ -1,7 +1,7 @@
 import { getPillars, getPillar } from './market.js';
 import { renderPillar, buildPillarDetail } from './pillars.js';
 import { formatConfidence, clampScore, applyRiskClass } from '../utils/formatters.js';
-import { getRiskProfile, getRiskScore, getRiskSeverity } from './market.js';
+import { getRiskProfile } from './market.js';
 import { formatScore, normalizeSeverity } from '../utils/formatters.js';
 import { firstDefined, setText } from '../utils/dom.js';
 
