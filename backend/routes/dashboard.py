@@ -1,6 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
-from flask import Blueprint, jsonify, render_template
+from flask import Blueprint, jsonify, render_template, g
 from services.auth_service import login_required_api, current_user
 from services.db_service import get_user_history
 
