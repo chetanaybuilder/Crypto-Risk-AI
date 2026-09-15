@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 from flask import Blueprint, request, jsonify
 from services.auth_service import login_required_api
 from services.coingecko import fetch_market_data

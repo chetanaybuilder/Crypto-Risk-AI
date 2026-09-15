@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 from flask import Blueprint, request, jsonify
 from services.auth_service import login_required_api, current_user
 from services.risk_engine import run_analysis

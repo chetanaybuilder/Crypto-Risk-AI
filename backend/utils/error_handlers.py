@@ -1,6 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 bp = Blueprint('error_handlers', __name__)
 
