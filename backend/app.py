@@ -2,7 +2,7 @@ import uuid
 from flask import Flask, request, g, jsonify
 from flask_cors import CORS
 
-from config import IS_PRODUCTION, FRONTEND_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+from config import IS_PRODUCTION, FRONTEND_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SECRET_KEY
 from extensions import init_db, oauth
 
 from routes.auth import bp as auth_bp
@@ -14,6 +14,7 @@ from routes.health import bp as health_bp
 from utils.error_handlers import bp as errors_bp
 
 app = Flask(__name__, static_folder="static")
+app.secret_key = SECRET_KEY
 
 oauth.init_app(app)
 oauth.register(
