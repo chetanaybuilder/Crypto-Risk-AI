@@ -1,4 +1,6 @@
 import logging
+from utils.helpers import is_valid_symbol, normalize_symbol
+from utils.errors import UnsupportedAssetError
 logger = logging.getLogger(__name__)
 from flask import Blueprint, request, jsonify
 from services.auth_service import login_required_api
