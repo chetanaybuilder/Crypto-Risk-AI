@@ -1,3 +1,7 @@
+from authlib.integrations.flask_client import OAuth
+
+oauth = OAuth()
+
 import logging
 import threading
 from threading import Lock

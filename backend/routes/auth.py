@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify, redirect, url_for
 
 logger = logging.getLogger(__name__)
 from config import *
+from extensions import oauth
 from services.auth_service import login_required_api, current_user, create_jwt_for_user
 from services.db_service import create_local_user, get_user_by_email, create_or_update_google_user
 from werkzeug.security import check_password_hash
@@ -255,7 +256,7 @@ def google_login():
     try:
 
         redirect_uri = url_for(
-            "google_callback",
+            "auth.google_callback",
             _external=True,
         )
 

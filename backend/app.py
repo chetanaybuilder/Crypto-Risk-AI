@@ -2,8 +2,8 @@ import uuid
 from flask import Flask, request, g, jsonify
 from flask_cors import CORS
 
-from config import IS_PRODUCTION, FRONTEND_URL
-from extensions import init_db
+from config import IS_PRODUCTION, FRONTEND_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+from extensions import init_db, oauth
 
 from routes.auth import bp as auth_bp
 from routes.market import bp as market_bp
@@ -15,6 +15,16 @@ from utils.error_handlers import bp as errors_bp
 
 app = Flask(__name__, static_folder="static")
 
+oauth.init_app(app)
+oauth.register(
+    name='google',
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={
+        'scope': 'openid email profile'
+    }
+)
 CORS(
     app,
     resources={r"/api/*": {"origins": FRONTEND_URL if IS_PRODUCTION else "*"}},
