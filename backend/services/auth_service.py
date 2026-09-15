@@ -38,7 +38,7 @@ def create_jwt_for_user(
         ),
     }
 
-    return pyjwt.encode(
+    return jwt.encode(
         payload,
         JWT_SECRET_KEY,
         algorithm="HS256",
@@ -54,7 +54,7 @@ def decode_jwt_token(
 
     try:
 
-        return pyjwt.decode(
+        return jwt.decode(
             token,
             JWT_SECRET_KEY,
             algorithms=[
