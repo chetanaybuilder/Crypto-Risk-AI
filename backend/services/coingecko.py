@@ -1,6 +1,9 @@
+import re
 import time
 import logging
 import requests
+from datetime import datetime, timezone
+from urllib.parse import quote
 from utils.helpers import _coin_resolution_cache, percentage_change, numeric, _mark_provider_failure, optional_numeric, utc_now_iso, normalize_symbol, json_safe, _get_symbol_fetch_lock, _clear_provider_success, empty_market_data, _provider_is_cooling
 from typing import Dict, Any, List, Optional
 from config import *
@@ -221,17 +224,41 @@ def fetch_coingecko_market(
 
     if not coin_id:
         market = empty_market_data(symbol)
-        market["unavailable_reason"] = f"CoinGecko could not resolve symbol {symbol}."
+        # BUG FIX: previously always said "could not resolve symbol",
+        # even when the real reason was an active CoinGecko cooldown
+        # (rate limit / outage). That misleads whoever's reading the
+        # unavailable_reason (logs, frontend, support) into thinking
+        # the symbol itself is bad rather than a transient provider
+        # issue. Report the real cause.
+        if _provider_is_cooling("CoinGecko"):
+            market["unavailable_reason"] = (
+                "CoinGecko is temporarily cooling down after a provider "
+                f"failure; could not resolve symbol {symbol}."
+            )
+        else:
+            market["unavailable_reason"] = f"CoinGecko could not resolve symbol {symbol}."
         return market
 
     # CoinGecko is now the single source — wrap the upstream call in a
     # short retry loop so a single transient hiccup (timeout, 5xx,
-    # connection reset) doesn't take down the whole report. 429s and
-    # 4xx (bad request) are NOT retried here: 429 is handled by the
-    # provider cooldown system (Retry-After), and 4xx means the request
-    # itself is bad and retrying would be pointless.
+    # connection reset) doesn't take down the whole report. 429s are
+    # NOT retried here except for short Retry-After waits: 429 is
+    # handled by the provider cooldown system (Retry-After), and 4xx
+    # (bad request) means the request itself is bad and retrying would
+    # be pointless.
     last_error_reason = None
     last_status_code = None
+    # BUG FIX: response/status_code/error_reason must be initialized
+    # before the loop. If COINGECKO_MAX_RETRIES were ever 0 (bad env
+    # var, misconfiguration, etc.) the loop body below never executes,
+    # and referencing `response` afterward would raise
+    # UnboundLocalError, crashing this entire function instead of
+    # degrading gracefully to an "unavailable" result.
+    # fetch_coingecko_history() (below) already guards against this
+    # correctly — this function didn't, which was the inconsistency.
+    response = None
+    status_code = None
+    error_reason = None
     for attempt in range(1, COINGECKO_MAX_RETRIES + 1):
         response, status_code, error_reason = _http_get_market(
             f"{COINGECKO_API_URL}/coins/markets",
@@ -433,7 +460,17 @@ def _read_market_number(
     source: str,
     field_errors: dict,
 ):
-    """Read one numeric provider field without affecting other fields."""
+    """Read one numeric provider field without affecting other fields.
+
+    NOTE: on a missing/unusable field this currently returns 0 rather
+    than None, while also recording the miss in field_errors. Depending
+    on how field_errors is used downstream (risk scoring, frontend
+    display), a silent 0 can be indistinguishable from a real zero
+    value. This was left unchanged because other files (risk scoring,
+    frontend) weren't available to verify what they expect — but it's
+    worth checking whether those consumers should be checking
+    field_errors before trusting a 0.
+    """
 
     try:
         value = optional_numeric(payload.get(key))
@@ -480,7 +517,17 @@ def fetch_market_data(
                         default=0,
                     )
 
-                    effective_ttl = 86400 if symbol.upper() == "BTC" else MARKET_CACHE_TTL
+                    # BUG FIX: this used to special-case BTC to an
+                    # 86400s (24h) TTL, copied from the *history* cache
+                    # logic below (where a 24h TTL makes sense because
+                    # BTC history is only used as a benchmark series
+                    # for beta calculations). Applied to the *live*
+                    # market snapshot instead, it meant BTC's current
+                    # price/24h change/volume could be shown up to a
+                    # full day stale to users, while every other coin
+                    # refreshed on the normal TTL. Live snapshots
+                    # should always use the normal TTL.
+                    effective_ttl = MARKET_CACHE_TTL
                     if (
                         cached.get("available")
                         and (now - cached_at) < effective_ttl
@@ -519,7 +566,9 @@ def fetch_market_data(
                             default=0,
                         )
 
-                        effective_ttl = 86400 if symbol.upper() == "BTC" else MARKET_CACHE_TTL
+                        # BUG FIX: same as above — no BTC-specific 24h
+                        # TTL for the live snapshot cache.
+                        effective_ttl = MARKET_CACHE_TTL
                         if (
                             cached.get("available")
                             and (now - cached_at) < effective_ttl
@@ -1194,7 +1243,13 @@ def fetch_price_history(
                     default=0,
                 )
 
-                # BTC history is a global benchmark that updates daily; cache it for 24h
+                # BTC history is a global benchmark that updates daily; cache it for 24h.
+                # NOTE: this 24h TTL is intentionally kept HERE ONLY —
+                # it's correct for the historical benchmark series used
+                # in beta/volatility math, unlike the live market
+                # snapshot in fetch_market_data() where the same
+                # special-case was a bug (fixed above) and has been
+                # removed.
                 effective_ttl = 86400 if symbol.upper() == "BTC" else HISTORY_CACHE_TTL
 
                 if (
@@ -1419,5 +1474,3 @@ def _align_series_by_date(
     btc_aligned = [btc_map[d] for d in common_days]
 
     return asset_aligned, btc_aligned, common_days
-
-

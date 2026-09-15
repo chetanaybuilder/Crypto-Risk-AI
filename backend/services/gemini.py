@@ -1,16 +1,29 @@
 import json
 import time
 import re
-from config import AI_STRING_FIELDS, FIELD_LABELS, GEMINI_MAX_RETRIES, GEMINI_TIMEOUT_SECONDS, AI_LIST_FIELDS
-from utils.helpers import format_number, clamp, json_safe
 import logging
-import requests
-from typing import Dict, Any
-from config import *
-from extensions import *
-from utils.helpers import *
+from typing import Optional
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+from config import (
+    AI_STRING_FIELDS,
+    FIELD_LABELS,
+    GEMINI_MAX_RETRIES,
+    GEMINI_TIMEOUT_SECONDS,
+    AI_LIST_FIELDS,
+)
+from utils.helpers import format_number, clamp, json_safe
+
+# FIX: these were previously pulled in via `from extensions import *`.
+# `_gemini_generate` is underscore-prefixed, so a wildcard import
+# silently skips it unless extensions.py lists it in __all__ — that
+# was a near-certain NameError the first time Gemini was actually
+# called. Importing explicitly here removes that fragility for all
+# three names.
+from extensions import gemini_client, GEMINI_EXECUTOR, _gemini_generate
 
 logger = logging.getLogger(__name__)
+
 
 def build_gemini_prompt(
     symbol,
@@ -68,9 +81,22 @@ STRICT RULES:
 
 12. Distinguish observed facts from scenario interpretation.
 
-13. If any signals are missing in the evidence, the executive 
-    summary must explicitly start with a caveat acknowledging 
+13. If any signals are missing in the evidence, the executive
+    summary must explicitly start with a caveat acknowledging
     that it is based on partial data.
+
+14. PRECISION: Whenever a numeric value exists in the evidence packet,
+    quote it exactly as given (same decimal precision, same units).
+    Never round, estimate, or hedge with words like "around", "roughly",
+    or "approximately" when an exact figure is present in the evidence.
+    Reference specific field values by name when explaining a claim
+    (e.g. "30-day realized volatility of 84.2%" rather than "high
+    volatility").
+
+15. OUTPUT FORMAT: Return ONLY the JSON object below. No markdown code
+    fences, no preamble, no trailing commentary, no explanation outside
+    the JSON. The entire response body must be valid, directly
+    parseable JSON — nothing else.
 
 Return ONLY valid JSON.
 
@@ -276,6 +302,53 @@ def fallback_ai_report(
         ),
 
         "confidence": 50,
+    }
+
+
+def _minimal_safe_report(symbol, error_note=None):
+    """
+    Absolute last-resort report.
+
+    Used only if even `fallback_ai_report` itself fails unexpectedly
+    (e.g. because of a malformed risk_profile/stress payload), so
+    callers of run_gemini_interpretation are guaranteed to always get
+    back a well-formed dict and never an exception.
+    """
+
+    note = "AI interpretation is unavailable."
+
+    if error_note:
+        note += f" ({error_note})"
+
+    try:
+        label = str(symbol).upper()
+    except Exception:
+        label = "the requested asset"
+
+    return {
+        "executive_summary": (
+            f"Automated interpretation for {label} could not be "
+            f"generated. Quantitative signals may still be available "
+            f"separately."
+        ),
+        "synthesis": "AI interpretation pipeline failed unexpectedly.",
+        "risk_regime": "Unavailable",
+        "primary_risk_driver": "Unavailable",
+        "secondary_risk_drivers": [],
+        "what_changed": "Unavailable",
+        "what_matters_now": "Unavailable",
+        "watch_next": "Unavailable",
+        "risk_mitigating_factors": [],
+        "red_flags": [],
+        "bull_case": "Unavailable",
+        "base_case": "Unavailable",
+        "bear_case": "Unavailable",
+        "stress_interpretation": "Unavailable",
+        "data_quality_note": note,
+        "confidence": 0,
+        "provider": "deterministic_fallback",
+        "fallback_used": True,
+        "partially_invalid_fields": ["all"],
     }
 
 
@@ -535,14 +608,60 @@ def run_gemini_interpretation(
     gemini_max_retries_override: Optional[int]
         If not None, overrides GEMINI_MAX_RETRIES for the inner
         _gemini_generate retry loop.
+
+    Guarantee: this function never raises. Any unexpected failure,
+    anywhere in the pipeline, degrades to a safe fallback report
+    instead of propagating an exception to the caller.
     """
 
-    fallback = fallback_ai_report(
-        symbol,
-        risk_profile,
-        stress,
-        security,
-    )
+    try:
+        return _run_gemini_interpretation(
+            symbol,
+            evidence,
+            risk_profile,
+            stress,
+            security=security,
+            gemini_max_retries_override=gemini_max_retries_override,
+        )
+
+    except Exception as exc:
+        # Last-resort net: nothing above this point should ever get
+        # here, but if fallback_ai_report/build_gemini_prompt/etc.
+        # choke on unexpected input shapes, callers still get a valid
+        # report dict instead of a crash.
+        logger.exception(
+            "Unhandled failure in run_gemini_interpretation for %s: %s",
+            symbol,
+            exc,
+        )
+        return json_safe(
+            _minimal_safe_report(symbol, str(exc))
+        )
+
+
+def _run_gemini_interpretation(
+    symbol,
+    evidence,
+    risk_profile,
+    stress,
+    security=None,
+    gemini_max_retries_override: Optional[int] = None,
+):
+
+    try:
+        fallback = fallback_ai_report(
+            symbol,
+            risk_profile,
+            stress,
+            security,
+        )
+    except Exception as exc:
+        logger.exception(
+            "fallback_ai_report failed for %s: %s",
+            symbol,
+            exc,
+        )
+        fallback = _minimal_safe_report(symbol, str(exc))
 
     fallback["provider"] = (
         "deterministic_fallback"
@@ -558,10 +677,21 @@ def run_gemini_interpretation(
 
         return json_safe(fallback)
 
-    prompt = build_gemini_prompt(
-        symbol,
-        evidence,
-    )
+    try:
+        prompt = build_gemini_prompt(
+            symbol,
+            evidence,
+        )
+    except Exception as exc:
+        logger.exception(
+            "build_gemini_prompt failed for %s: %s",
+            symbol,
+            exc,
+        )
+        fallback["data_quality_note"] += (
+            f" Prompt construction failed ({exc})."
+        )
+        return json_safe(fallback)
 
     last_error = None
 
@@ -572,6 +702,13 @@ def run_gemini_interpretation(
         if gemini_max_retries_override is not None
         else GEMINI_MAX_RETRIES
     )
+
+    # FIX: guard against a negative/garbage override so range() below
+    # can never blow up.
+    try:
+        max_retries = max(0, int(max_retries))
+    except (TypeError, ValueError):
+        max_retries = GEMINI_MAX_RETRIES
 
     total_attempts = max_retries + 1
 
@@ -664,11 +801,14 @@ def run_gemini_interpretation(
             # IMPORTANT:
             # Do not break here.
             # Continue to the configured retry.
-
-            if (
-                attempt
-                < GEMINI_MAX_RETRIES
-            ):
+            #
+            # FIX: this used to compare against the module-level
+            # GEMINI_MAX_RETRIES even when a caller had overridden the
+            # retry budget via gemini_max_retries_override, so a
+            # caller asking for 0 retries could still (harmlessly, but
+            # incorrectly) attempt to continue. Now compares against
+            # the resolved max_retries so overrides are always honored.
+            if attempt < max_retries:
                 time.sleep(
                     0.4
                 )
@@ -691,23 +831,13 @@ def run_gemini_interpretation(
                 exc,
             )
 
-            if (
-                attempt
-                < GEMINI_MAX_RETRIES
-            ):
+            if attempt < max_retries:
                 time.sleep(
                     0.4
                 )
+                continue
 
-        finally:
-
-            if future is not None:
-
-                try:
-                    if future.done():
-                        future = None
-                except Exception:
-                    pass
+            break
 
     fallback["data_quality_note"] += (
         " Gemini interpretation was unavailable"
@@ -747,5 +877,3 @@ def _field_error_label(
     readable = readable.strip().title()
 
     return readable or key
-
-

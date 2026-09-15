@@ -1,15 +1,16 @@
 import logging
-logger = logging.getLogger(__name__)
-import re
-import time
 import math
-from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple, Dict
-from flask import request, abort
+import re
+import threading
+import time
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from threading import Lock, Timer
+from typing import Any, Dict, List, Optional, Tuple
+from flask import abort, jsonify, request
 from config import *
 from extensions import *
-
-import threading
+logger = logging.getLogger(__name__)
 _rate_limit_lock = threading.Lock()
 _rate_limit_buckets = {}
 _symbol_fetch_locks_guard = threading.Lock()
@@ -18,68 +19,124 @@ _provider_cooldown_lock = threading.Lock()
 _provider_cooldown = {}
 _provider_failure_counts = {}
 _coin_resolution_cache = {}
-
-
 def _rate_limit_check(
     bucket: str,
     max_attempts: int,
     window_seconds: int,
-) -> tuple:
+) -> Tuple[bool, int, int]:
     """
-    Returns (allowed: bool, remaining: int, retry_after: int).
-    Prunes stale entries in the same call so the dict stays bounded.
+    Check and update an in-process rate-limit bucket.
+    Returns:
+        (allowed, remaining, retry_after_seconds)
+    Stale timestamps are removed during the same operation so
+    individual buckets remain bounded.
     """
-
+    try:
+        max_attempts = int(max_attempts)
+        window_seconds = int(window_seconds)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[RATE LIMIT] Invalid configuration for bucket=%s",
+            bucket,
+        )
+        return False, 0, 1
+    if max_attempts <= 0 or window_seconds <= 0:
+        logger.warning(
+            "[RATE LIMIT] Invalid limits for bucket=%s "
+            "(max_attempts=%s, window_seconds=%s)",
+            bucket,
+            max_attempts,
+            window_seconds,
+        )
+        return False, 0, 1
     now = time.time()
     window_start = now - window_seconds
-
     with _rate_limit_lock:
-        entries = _rate_limit_buckets.setdefault(bucket, [])
-        # Prune stale timestamps
+        entries = _rate_limit_buckets.setdefault(
+            bucket,
+            [],
+        )
         entries[:] = [
-            ts for ts in entries if ts > window_start
+            timestamp
+            for timestamp in entries
+            if isinstance(timestamp, (int, float))
+            and timestamp > window_start
         ]
-
         if len(entries) >= max_attempts:
             oldest = min(entries)
-            retry_after = int(oldest + window_seconds - now) + 1
-            return False, 0, max(1, retry_after)
-
+            retry_after = int(
+                oldest + window_seconds - now
+            ) + 1
+            return (
+                False,
+                0,
+                max(1, retry_after),
+            )
         entries.append(now)
         remaining = max_attempts - len(entries)
-        return True, remaining, 0
-
-
+        return (
+            True,
+            remaining,
+            0,
+        )
 def _client_ip() -> str:
-    """Best-effort client IP, honoring X-Forwarded-For behind a proxy."""
+    """
+    Return the best-effort client IP.
+    X-Forwarded-For is supported for deployments behind a reverse
+    proxy. The first address is treated as the originating client.
+    """
     forwarded = request.headers.get(
         "X-Forwarded-For",
         "",
-    )
+    ).strip()
     if forwarded:
-        return forwarded.split(",")[0].strip() or "unknown"
+        client_ip = forwarded.split(
+            ",",
+            1,
+        )[0].strip()
+        if client_ip:
+            return client_ip
     return request.remote_addr or "unknown"
-
-
 def rate_limit(
     max_attempts: int,
     window_seconds: int,
     bucket_prefix: str,
 ) -> Optional[tuple]:
     """
-    Decorator factory: returns a 429 response tuple if the limit is
-    exceeded, or None if the request is allowed to proceed.
-
-    Usage inside a route:
-        blocked = rate_limit(5, 900, "login")(
+    Check a dynamically resolved rate-limit bucket.
+    Usage:
+        blocked = rate_limit(
+            5,
+            900,
+            "login",
+        )(
             lambda: f"{_client_ip()}:{email.lower().strip()}"
         )
         if blocked is not None:
             return blocked
     """
-
     def resolver(resolver_fn):
-        bucket = f"{bucket_prefix}:{resolver_fn()}"
+        if not callable(resolver_fn):
+            logger.warning(
+                "[RATE LIMIT] Invalid bucket resolver for prefix=%s",
+                bucket_prefix,
+            )
+            return _api_rate_limit_response(
+                1,
+            )
+        try:
+            resolved_bucket = resolver_fn()
+        except Exception as exc:
+            logger.warning(
+                "[RATE LIMIT] Bucket resolver failed: %s",
+                exc,
+            )
+            return _api_rate_limit_response(
+                1,
+            )
+        bucket = (
+            f"{bucket_prefix}:{resolved_bucket}"
+        )
         allowed, remaining, retry_after = _rate_limit_check(
             bucket,
             max_attempts,
@@ -87,271 +144,486 @@ def rate_limit(
         )
         if not allowed:
             logger.warning(
-                "[RATE LIMIT] bucket=%s blocked (retry_after=%ds)",
+                "[RATE LIMIT] bucket=%s blocked "
+                "(retry_after=%ds)",
                 bucket,
                 retry_after,
             )
-            response = jsonify({
-                "success": False,
-                "error": (
-                    f"Too many attempts. Try again in "
-                    f"{retry_after} seconds."
-                ),
-            })
-            response.status_code = 429
-            response.headers["Retry-After"] = str(retry_after)
-            return response
-        return None
-
-    return resolver
-
-
-def _periodic_cache_cleanup() -> None:
-    """Purge expired entries from every in-process cache dict."""
-
-    now = time.time()
-
-    try:
-
-        # _market_cache entries carry "_cached_at"
-        with _cache_lock:
-            expired_markets = [
-                k
-                for k, v in _market_cache.items()
-                if not isinstance(v, dict)
-                or (now - numeric(
-                    v.get("_cached_at", 0),
-                    default=0,
-                )) > MARKET_STALE_MAX_AGE
-            ]
-            for k in expired_markets:
-                _market_cache.pop(k, None)
-
-        # _history_cache entries carry "_cached_at"
-        with _cache_lock:
-            expired_history = [
-                k
-                for k, v in _history_cache.items()
-                if not isinstance(v, dict)
-                or (now - numeric(
-                    v.get("_cached_at", 0),
-                    default=0,
-                )) > MARKET_STALE_MAX_AGE
-            ]
-            for k in expired_history:
-                _history_cache.pop(k, None)
-
-        # _coin_resolution_cache entries carry "cached_at"
-        with _cache_lock:
-            expired_resolutions = [
-                k
-                for k, v in _coin_resolution_cache.items()
-                if not isinstance(v, dict)
-                or (now - float(v.get("cached_at") or 0))
-                > max(COIN_RESOLUTION_CACHE_TTL, COIN_RESOLUTION_MISS_TTL) * 2
-            ]
-            for k in expired_resolutions:
-                _coin_resolution_cache.pop(k, None)
-
-        # _market_cap_cache entries carry "cached_at"
-        with _cache_lock:
-            expired_caps = [
-                k
-                for k, v in _market_cap_cache.items()
-                if not isinstance(v, dict)
-                or (now - numeric(
-                    v.get("cached_at", 0),
-                    default=0,
-                )) > MARKET_STALE_MAX_AGE
-            ]
-            for k in expired_caps:
-                _market_cap_cache.pop(k, None)
-
-        with _provider_cooldown_lock:
-            expired_cooldowns = [
-                k
-                for k, v in _provider_cooldown.items()
-                if isinstance(v, dict)
-                and time.time() >= v.get("until", 0)
-            ]
-            for k in expired_cooldowns:
-                _provider_cooldown.pop(k, None)
-                _provider_failure_counts.pop(k, None)
-
-        # _symbol_fetch_locks: prune only stale (garbage-collected) refs
-        # is not applicable — Lock objects are cheap and never GC'd
-        # while referenced. We leave them; their count is bounded by
-        # the number of distinct symbols fetched, which is small.
-
-        total_purged = (
-            len(expired_markets)
-            + len(expired_history)
-            + len(expired_resolutions)
-            + len(expired_caps)
-            + len(expired_cooldowns)
-        )
-        if total_purged > 0:
-            logger.info(
-                "[CLEANUP] purged %d stale cache entries "
-                "(market=%d history=%d resolution=%d mcap=%d cooldown=%d)",
-                total_purged,
-                len(expired_markets),
-                len(expired_history),
-                len(expired_resolutions),
-                len(expired_caps),
-                len(expired_cooldowns),
+            return _api_rate_limit_response(
+                retry_after,
             )
-
+        return None
+    return resolver
+def _api_rate_limit_response(
+    retry_after: int,
+):
+    """Build a standard rate-limit response."""
+    retry_after = max(
+        1,
+        int(retry_after),
+    )
+    response = jsonify({
+        "success": False,
+        "error": (
+            "Too many attempts. "
+            f"Try again in {retry_after} seconds."
+        ),
+    })
+    response.status_code = 429
+    response.headers["Retry-After"] = str(
+        retry_after
+    )
+    return response
+def _periodic_cache_cleanup() -> None:
+    """
+    Purge expired entries from in-process caches and rate-limit state.
+    Cleanup is best-effort: corruption in one cache must not prevent
+    other caches from being cleaned.
+    """
+    now = time.time()
+    total_purged = 0
+    expired_markets = 0
+    expired_history = 0
+    expired_resolutions = 0
+    expired_caps = 0
+    expired_cooldowns = 0
+    expired_rate_limit_buckets = 0
+    try:
+        with _cache_lock:
+            expired_market_keys = []
+            for key, value in _market_cache.items():
+                if not isinstance(value, dict):
+                    expired_market_keys.append(key)
+                    continue
+                cached_at = numeric(
+                    value.get(
+                        "_cached_at",
+                        0,
+                    ),
+                    default=0,
+                )
+                if (
+                    now - cached_at
+                    > MARKET_STALE_MAX_AGE
+                ):
+                    expired_market_keys.append(key)
+            for key in expired_market_keys:
+                _market_cache.pop(
+                    key,
+                    None,
+                )
+            expired_markets = len(
+                expired_market_keys
+            )
     except Exception as exc:
-        logger.warning("[CLEANUP] cache cleanup failed: %s", exc)
-
-
+        logger.warning(
+            "[CLEANUP] market cache cleanup failed: %s",
+            exc,
+        )
+    try:
+        with _cache_lock:
+            expired_history_keys = []
+            for key, value in _history_cache.items():
+                if not isinstance(value, dict):
+                    expired_history_keys.append(key)
+                    continue
+                cached_at = numeric(
+                    value.get(
+                        "_cached_at",
+                        0,
+                    ),
+                    default=0,
+                )
+                if (
+                    now - cached_at
+                    > MARKET_STALE_MAX_AGE
+                ):
+                    expired_history_keys.append(key)
+            for key in expired_history_keys:
+                _history_cache.pop(
+                    key,
+                    None,
+                )
+            expired_history = len(
+                expired_history_keys
+            )
+    except Exception as exc:
+        logger.warning(
+            "[CLEANUP] history cache cleanup failed: %s",
+            exc,
+        )
+    try:
+        resolution_ttl = max(
+            COIN_RESOLUTION_CACHE_TTL,
+            COIN_RESOLUTION_MISS_TTL,
+        ) * 2
+        with _cache_lock:
+            expired_resolution_keys = []
+            for key, value in _coin_resolution_cache.items():
+                if not isinstance(value, dict):
+                    expired_resolution_keys.append(key)
+                    continue
+                cached_at = numeric(
+                    value.get(
+                        "cached_at",
+                        0,
+                    ),
+                    default=0,
+                )
+                if (
+                    now - cached_at
+                    > resolution_ttl
+                ):
+                    expired_resolution_keys.append(key)
+            for key in expired_resolution_keys:
+                _coin_resolution_cache.pop(
+                    key,
+                    None,
+                )
+            expired_resolutions = len(
+                expired_resolution_keys
+            )
+    except Exception as exc:
+        logger.warning(
+            "[CLEANUP] resolution cache cleanup failed: %s",
+            exc,
+        )
+    try:
+        with _cache_lock:
+            expired_cap_keys = []
+            for key, value in _market_cap_cache.items():
+                if not isinstance(value, dict):
+                    expired_cap_keys.append(key)
+                    continue
+                cached_at = numeric(
+                    value.get(
+                        "cached_at",
+                        0,
+                    ),
+                    default=0,
+                )
+                if (
+                    now - cached_at
+                    > MARKET_STALE_MAX_AGE
+                ):
+                    expired_cap_keys.append(key)
+            for key in expired_cap_keys:
+                _market_cap_cache.pop(
+                    key,
+                    None,
+                )
+            expired_caps = len(
+                expired_cap_keys
+            )
+    except Exception as exc:
+        logger.warning(
+            "[CLEANUP] market-cap cache cleanup failed: %s",
+            exc,
+        )
+    try:
+        with _provider_cooldown_lock:
+            expired_cooldown_keys = []
+            for key, value in _provider_cooldown.items():
+                if not isinstance(value, dict):
+                    expired_cooldown_keys.append(key)
+                    continue
+                until = numeric(
+                    value.get(
+                        "until",
+                        0,
+                    ),
+                    default=0,
+                )
+                if now >= until:
+                    expired_cooldown_keys.append(key)
+            for key in expired_cooldown_keys:
+                _provider_cooldown.pop(
+                    key,
+                    None,
+                )
+                _provider_failure_counts.pop(
+                    key,
+                    None,
+                )
+            expired_cooldowns = len(
+                expired_cooldown_keys
+            )
+    except Exception as exc:
+        logger.warning(
+            "[CLEANUP] provider cooldown cleanup failed: %s",
+            exc,
+        )
+    try:
+        with _rate_limit_lock:
+            empty_or_expired_buckets = []
+            for bucket, entries in _rate_limit_buckets.items():
+                if not isinstance(entries, list):
+                    empty_or_expired_buckets.append(bucket)
+                    continue
+                cleaned_entries = [
+                    timestamp
+                    for timestamp in entries
+                    if isinstance(timestamp, (int, float))
+                    and timestamp > now - max(
+                        1,
+                        int(
+                            CLEANUP_INTERVAL_SECONDS
+                        ),
+                    )
+                ]
+                if cleaned_entries:
+                    _rate_limit_buckets[bucket] = cleaned_entries
+                else:
+                    empty_or_expired_buckets.append(bucket)
+            for bucket in empty_or_expired_buckets:
+                _rate_limit_buckets.pop(
+                    bucket,
+                    None,
+                )
+            expired_rate_limit_buckets = len(
+                empty_or_expired_buckets
+            )
+    except Exception as exc:
+        logger.warning(
+            "[CLEANUP] rate-limit cleanup failed: %s",
+            exc,
+        )
+    total_purged = (
+        expired_markets
+        + expired_history
+        + expired_resolutions
+        + expired_caps
+        + expired_cooldowns
+        + expired_rate_limit_buckets
+    )
+    if total_purged > 0:
+        logger.info(
+            "[CLEANUP] purged %d stale cache/state entries "
+            "(market=%d history=%d resolution=%d "
+            "mcap=%d cooldown=%d rate_limit=%d)",
+            total_purged,
+            expired_markets,
+            expired_history,
+            expired_resolutions,
+            expired_caps,
+            expired_cooldowns,
+            expired_rate_limit_buckets,
+        )
 def _schedule_cache_cleanup() -> None:
-    """Run one cleanup cycle and reschedule the next."""
-
+    """
+    Run one cleanup cycle and schedule the next cycle.
+    A failure in one cleanup cycle must never permanently stop
+    periodic cleanup.
+    """
     try:
         _periodic_cache_cleanup()
     except Exception as exc:
-        logger.exception("[CLEANUP] periodic cache cleanup failed: %s", exc)
-    finally:
-        # Always reschedule — a single failed run must not kill the loop.
-        timer = Timer(
-            CLEANUP_INTERVAL_SECONDS,
-            _schedule_cache_cleanup,
+        logger.exception(
+            "[CLEANUP] periodic cache cleanup failed: %s",
+            exc,
         )
-        timer.daemon = True
-        timer.start()
-
-
+    finally:
+        try:
+            interval = max(
+                1,
+                int(
+                    CLEANUP_INTERVAL_SECONDS
+                ),
+            )
+            timer = Timer(
+                interval,
+                _schedule_cache_cleanup,
+            )
+            timer.daemon = True
+            timer.start()
+        except Exception as exc:
+            logger.exception(
+                "[CLEANUP] failed to schedule next cleanup: %s",
+                exc,
+            )
 def _mask_secret(
     value: str,
 ) -> str:
     """Return a masked, log-safe representation of a secret."""
-
     if not value:
         return "(not set)"
-
+    value = str(value)
     if len(value) <= 8:
         return f"***({len(value)} chars)"
-
     return (
         f"{value[:4]}…{value[-4:]} "
         f"({len(value)} chars)"
     )
-
-
 def _provider_is_cooling(
     name: str,
 ) -> bool:
-    """Return True if *name* is currently on cooldown."""
+    """Return True when a provider is currently on cooldown."""
+    now = time.time()
     with _provider_cooldown_lock:
         entry = _provider_cooldown.get(
             name
         )
-        if (
-            entry
-            and isinstance(
-                entry,
-                dict,
-            )
-            and time.time() < entry.get(
-                "until",
-                0
-            )
-        ):
-            logger.info(
-                "[MARKET] %s on cooldown (%s), skipping",
-                name,
+        if isinstance(entry, dict):
+            until = numeric(
                 entry.get(
-                    "reason",
-                    "cooldown",
+                    "until",
+                    0,
                 ),
+                default=0,
             )
-            return True
-
-        # FIX: when a cooldown has expired, also reset the failure
-        # count for this provider. Previously the count was only
-        # cleared after a successful fetch — but during cooldown the
-        # provider is never called, so it could never succeed and
-        # the count never reset. Backoff then escalated to the 300s
-        # cap permanently ("always on 429 cooldown"). Expiry now
-        # starts a fresh cooldown episode at the base duration.
-        if name in _provider_cooldown:
-            _provider_cooldown.pop(name, None)
-            _provider_failure_counts.pop(name, None)
-
+            if now < until:
+                logger.info(
+                    "[MARKET] %s on cooldown (%s), skipping",
+                    name,
+                    entry.get(
+                        "reason",
+                        "cooldown",
+                    ),
+                )
+                return True
+            _provider_cooldown.pop(
+                name,
+                None,
+            )
+            _provider_failure_counts.pop(
+                name,
+                None,
+            )
+        elif entry is not None:
+            _provider_cooldown.pop(
+                name,
+                None,
+            )
+            _provider_failure_counts.pop(
+                name,
+                None,
+            )
         return False
-
-
 def _mark_provider_failure(
     name: str,
     status_code,
     reason: str,
 ) -> None:
-    """Record a provider failure and start its cooldown."""
-    if status_code == 429:
+    """Record a provider failure and start an appropriate cooldown."""
+    normalized_status = optional_numeric(
+        status_code
+    )
+    if (
+        normalized_status is not None
+        and normalized_status.is_integer()
+    ):
+        normalized_status = int(
+            normalized_status
+        )
+    if normalized_status == 429:
         retry_after = None
         match = re.search(
             r"retry_after=([0-9]+(?:\.[0-9]+)?)",
             str(reason or ""),
         )
-
         if match:
-            retry_after = float(match.group(1))
-
+            try:
+                retry_after = float(
+                    match.group(1)
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                retry_after = None
+        now = time.time()
         with _provider_cooldown_lock:
-            # FIX: if the previous cooldown already expired, this is
-            # a fresh episode — start counting from zero so backoff
-            # does not inherit escalation from a stale failure count.
-            previous = _provider_cooldown.get(name)
+            previous = _provider_cooldown.get(
+                name
+            )
+            previous_until = (
+                numeric(
+                    previous.get(
+                        "until",
+                        0,
+                    ),
+                    default=0,
+                )
+                if isinstance(
+                    previous,
+                    dict,
+                )
+                else 0
+            )
             if (
                 previous is None
-                or time.time() >= previous.get("until", 0)
+                or now >= previous_until
             ):
-                _provider_failure_counts.pop(name, None)
-
-            failures = _provider_failure_counts.get(name, 0) + 1
+                _provider_failure_counts.pop(
+                    name,
+                    None,
+                )
+            failures = (
+                _provider_failure_counts.get(
+                    name,
+                    0,
+                )
+                + 1
+            )
             _provider_failure_counts[name] = failures
-
         backoff = min(
             120,
-            PROVIDER_COOLDOWN_429 * (2 ** min(failures - 1, 4)),
+            PROVIDER_COOLDOWN_429
+            * (
+                2 ** min(
+                    failures - 1,
+                    4,
+                )
+            ),
+        )
+        retry_after_seconds = max(
+            0,
+            retry_after or 0,
         )
         seconds = max(
             backoff,
-            ceil(retry_after or 0),
+            math.ceil(
+                retry_after_seconds
+            ),
         )
-    elif status_code in (
+    elif normalized_status in (
         403,
         451,
     ):
         seconds = PROVIDER_COOLDOWN_FORBIDDEN
     elif (
-        status_code is not None
-        and status_code >= 500
+        normalized_status is not None
+        and normalized_status >= 500
     ):
         seconds = PROVIDER_COOLDOWN_DEFAULT
     else:
         seconds = PROVIDER_COOLDOWN_DEFAULT
-
+    seconds = max(
+        1,
+        int(
+            numeric(
+                seconds,
+                default=1,
+            )
+        ),
+    )
     with _provider_cooldown_lock:
         _provider_cooldown[name] = {
             "until": time.time() + seconds,
-            "reason": reason,
+            "reason": str(
+                reason or "provider failure"
+            ),
         }
-
     logger.warning(
         "[MARKET] %s marked on cooldown for %ds (%s)",
         name,
         seconds,
         reason,
     )
-
-
 def _clear_provider_success(
     name: str,
 ) -> None:
-    """Clear a provider's cooldown after a successful fetch."""
+    """Clear provider cooldown and failure state after success."""
     with _provider_cooldown_lock:
         if name in _provider_cooldown:
             logger.info(
@@ -362,13 +634,14 @@ def _clear_provider_success(
                 name,
                 None,
             )
-        _provider_failure_counts.pop(name, None)
-
-
+        _provider_failure_counts.pop(
+            name,
+            None,
+        )
 def _get_symbol_fetch_lock(
     symbol: str,
 ) -> Lock:
-    """Return (creating if necessary) the per-symbol dedup lock."""
+    """Return a per-symbol lock used to deduplicate concurrent fetches."""
     with _symbol_fetch_locks_guard:
         lock = _symbol_fetch_locks.get(
             symbol
@@ -377,39 +650,31 @@ def _get_symbol_fetch_lock(
             lock = Lock()
             _symbol_fetch_locks[symbol] = lock
         return lock
-
-
 def utc_now_iso() -> str:
-
+    """Return the current UTC timestamp in ISO-8601 format."""
     return datetime.now(
         timezone.utc
     ).isoformat()
-
-
 def numeric(
     value: Any,
     default: float = 0.0,
 ) -> float:
     """
-    Convert a value to a finite float.
-
-    Never return NaN or infinity.
+    Convert a scalar value to a finite float.
+    Invalid, missing, NaN and infinite values return the supplied
+    finite fallback.
     """
-
     try:
-
         if value is None:
             raise TypeError(
                 "None is not numeric"
             )
-
         if isinstance(
             value,
             bool,
         ):
-            return float(value)
-
-        if isinstance(
+            result = float(value)
+        elif isinstance(
             value,
             (
                 list,
@@ -421,91 +686,75 @@ def numeric(
             raise TypeError(
                 "Non-scalar is not numeric"
             )
-
-        if isinstance(
+        elif isinstance(
             value,
-            (
-                str,
-                bytes,
-            ),
+            bytes,
         ):
-
-            try:
-                text = value.decode() if isinstance(
-                    value,
-                    bytes,
-                ) else value
-            except Exception:
-                raise TypeError(
-                    "Undecodable bytes"
-                )
-
-            text = str(text).strip().replace(
-                ",",
-                "",
-            )
-
+            text = value.decode().strip()
             if not text:
                 raise ValueError(
                     "Empty numeric string"
                 )
-
-            result = float(text)
-
+            result = float(
+                text.replace(
+                    ",",
+                    "",
+                )
+            )
+        elif isinstance(
+            value,
+            str,
+        ):
+            text = value.strip()
+            if not text:
+                raise ValueError(
+                    "Empty numeric string"
+                )
+            result = float(
+                text.replace(
+                    ",",
+                    "",
+                )
+            )
         else:
-
             result = float(value)
-
-        if not math.isfinite(result):
-            return float(default)
-
-        return result
-
+        if math.isfinite(result):
+            return result
+    except (
+        TypeError,
+        ValueError,
+        ArithmeticError,
+        OverflowError,
+        UnicodeError,
+    ):
+        pass
+    try:
+        fallback = float(default)
+        if math.isfinite(fallback):
+            return fallback
     except (
         TypeError,
         ValueError,
         ArithmeticError,
         OverflowError,
     ):
-
-        try:
-            fallback = float(default)
-
-            if not math.isfinite(fallback):
-                return 0.0
-
-            return fallback
-
-        except (
-            TypeError,
-            ValueError,
-            ArithmeticError,
-            OverflowError,
-        ):
-
-            return 0.0
-
-
+        pass
+    return 0.0
 def optional_numeric(
     value: Any,
 ) -> Optional[float]:
     """
-    Convert a value to float or return None.
-
-    Unlike numeric(), this preserves unavailable data.
+    Convert a scalar value to a finite float.
+    Unlike numeric(), invalid or missing values remain None.
     """
-
     try:
-
         if value is None:
             return None
-
         if isinstance(
             value,
             bool,
         ):
             return float(value)
-
         if isinstance(
             value,
             (
@@ -516,60 +765,68 @@ def optional_numeric(
             ),
         ):
             return None
-
         if isinstance(
             value,
-            (
-                str,
-                bytes,
-            ),
+            bytes,
         ):
-
-            try:
-                text = value.decode() if isinstance(
-                    value,
-                    bytes,
-                ) else value
-            except Exception:
-                return None
-
-            text = str(text).strip().replace(
-                ",",
-                "",
-            )
-
+            text = value.decode().strip()
             if not text:
                 return None
-
-            result = float(text)
-
+            result = float(
+                text.replace(
+                    ",",
+                    "",
+                )
+            )
+        elif isinstance(
+            value,
+            str,
+        ):
+            text = value.strip()
+            if not text:
+                return None
+            result = float(
+                text.replace(
+                    ",",
+                    "",
+                )
+            )
         else:
-
             result = float(value)
-
         if not math.isfinite(result):
             return None
-
         return result
-
     except (
         TypeError,
         ValueError,
         ArithmeticError,
         OverflowError,
+        UnicodeError,
     ):
-
         return None
-
-
 def clamp(
     value: Any,
     minimum: float,
     maximum: float,
 ) -> float:
-
-    value = numeric(value)
-
+    """
+    Clamp a numeric value to an inclusive range.
+    If the supplied bounds are reversed, they are normalized first.
+    """
+    minimum = numeric(
+        minimum,
+        default=0.0,
+    )
+    maximum = numeric(
+        maximum,
+        default=0.0,
+    )
+    if minimum > maximum:
+        minimum, maximum = maximum, minimum
+    value = numeric(
+        value,
+        default=minimum,
+    )
     return max(
         minimum,
         min(
@@ -577,164 +834,165 @@ def clamp(
             value,
         ),
     )
-
-
 def safe_divide(
     numerator: Any,
     denominator: Any,
     default: float = 0.0,
 ) -> float:
-
-    denominator = numeric(
-        denominator,
-        default=0.0,
+    """Safely divide two numeric values without zero-division errors."""
+    denominator_value = optional_numeric(
+        denominator
     )
-
-    if denominator == 0:
-        return float(default)
-
+    if (
+        denominator_value is None
+        or denominator_value == 0
+    ):
+        return numeric(
+            default,
+            default=0.0,
+        )
+    numerator_value = optional_numeric(
+        numerator
+    )
+    if numerator_value is None:
+        return numeric(
+            default,
+            default=0.0,
+        )
     return numeric(
-        numeric(numerator)
-        / denominator,
+        numerator_value / denominator_value,
         default=default,
     )
-
-
 def percentage_change(
     current: Any,
     previous: Any,
 ) -> Optional[float]:
-
-    current = optional_numeric(
+    """Calculate percentage change from previous to current."""
+    current_value = optional_numeric(
         current
     )
-
-    previous = optional_numeric(
+    previous_value = optional_numeric(
         previous
     )
-
     if (
-        current is None
-        or previous is None
+        current_value is None
+        or previous_value is None
     ):
         return None
-
-    if previous == 0:
+    if previous_value == 0:
         return None
-
-    return (
+    result = (
         (
-            current - previous
+            current_value - previous_value
         )
-        / abs(previous)
+        / abs(previous_value)
     ) * 100.0
-
-
+    if not math.isfinite(result):
+        return None
+    return result
 def clean_text(
     value: Any,
     default: str = "",
     max_length: int = 2000,
 ) -> str:
-
+    """Normalize text and enforce a maximum length."""
     if value is None:
         return default
-
+    try:
+        max_length = max(
+            0,
+            int(max_length),
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        max_length = 2000
     text = str(value).strip()
-
     if not text:
         return default
-
     return text[:max_length]
-
-
 def normalize_symbol(
     symbol: Any,
 ) -> str:
-
+    """Normalize a token symbol to uppercase alphanumeric characters."""
     if symbol is None:
         return ""
-
-    symbol = str(
-        symbol
-    ).strip().upper()
-
-    symbol = re.sub(
+    try:
+        normalized = str(
+            symbol
+        ).strip().upper()
+    except Exception:
+        return ""
+    normalized = re.sub(
         r"[^A-Z0-9]",
         "",
-        symbol,
+        normalized,
     )
-
-    return symbol[
+    return normalized[
         :MAX_TOKEN_SYMBOL_LENGTH
     ]
-
-
 def is_valid_symbol(
     symbol: Any,
 ) -> bool:
-
+    """Return True when a normalized symbol matches the allowed format."""
     normalized = normalize_symbol(
         symbol
     )
-
     if not normalized:
         return False
-
     return bool(
         re.fullmatch(
             r"[A-Z0-9]{1,15}",
             normalized,
         )
     )
-
-
 def json_safe(
     value: Any,
 ) -> Any:
-
+    """
+    Recursively convert values into JSON-safe primitives.
+    NaN and Infinity become None.
+    Decimal values become finite floats.
+    Date/time values become ISO strings.
+    """
     if value is None:
         return None
-
-    # bool must be checked before int (bool subclasses int).
     if isinstance(
         value,
         bool,
     ):
         return value
-
     if isinstance(
         value,
-        (
-            str,
-            int,
-        ),
+        int,
     ):
         return value
-
+    if isinstance(
+        value,
+        str,
+    ):
+        return value
     if isinstance(
         value,
         float,
     ):
-
-        if math.isfinite(value):
-            return value
-
-        return None
-
+        return (
+            value
+            if math.isfinite(value)
+            else None
+        )
     if isinstance(
         value,
         Decimal,
     ):
-
         try:
-
             number = float(value)
-
-            if math.isfinite(number):
-                return number
-
-            return None
-
+            return (
+                number
+                if math.isfinite(number)
+                else None
+            )
         except (
             ArithmeticError,
             TypeError,
@@ -742,7 +1000,6 @@ def json_safe(
             OverflowError,
         ):
             return None
-
     if isinstance(
         value,
         (
@@ -754,30 +1011,26 @@ def json_safe(
             return value.isoformat()
         except Exception:
             return None
-
     if isinstance(
         value,
         dict,
     ):
-
         try:
-            items = list(value.items())
+            items = list(
+                value.items()
+            )
         except Exception:
             return None
-
         safe_dict = {}
-
         for key, item in items:
-
             try:
                 safe_key = str(key)
             except Exception:
                 continue
-
-            safe_dict[safe_key] = json_safe(item)
-
+            safe_dict[safe_key] = json_safe(
+                item
+            )
         return safe_dict
-
     if isinstance(
         value,
         (
@@ -787,28 +1040,22 @@ def json_safe(
             frozenset,
         ),
     ):
-
         try:
             items = list(value)
         except Exception:
             return []
-
         return [
             json_safe(item)
             for item in items
         ]
-
     try:
         return str(value)
-
     except Exception:
         return None
-
-
 def empty_market_data(
     symbol: str,
 ) -> dict:
-
+    """Return a consistent unavailable-market payload."""
     return {
         "symbol": normalize_symbol(
             symbol
@@ -821,51 +1068,46 @@ def empty_market_data(
         "high_24h": None,
         "low_24h": None,
         "source": "unavailable",
-        "unavailable_reason": "CoinGecko did not return a usable market snapshot.",
+        "unavailable_reason": (
+            "CoinGecko did not return a usable market snapshot."
+        ),
         "timestamp": utc_now_iso(),
         "available": False,
     }
-
-
 def first_defined(*values):
     """
     Return the first value that is not None.
-
-    Important:
-    False, 0 and empty strings are valid values and are
-    therefore not treated as missing.
+    False, zero and empty strings are intentionally preserved.
     """
-
     for value in values:
         if value is not None:
             return value
-
     return None
-
-
 def format_number(
     value,
     decimals=2,
 ):
-    """
-    Safely format a numeric value for human-readable text.
-    """
-
+    """Safely format a numeric value for human-readable output."""
     if value is None:
         return "N/A"
-
     try:
-        number = float(value)
-
-        if not math.isfinite(number):
-            return "N/A"
-
-        return f"{number:,.{decimals}f}"
-
+        decimals = max(
+            0,
+            int(decimals),
+        )
     except (
         TypeError,
         ValueError,
     ):
+        decimals = 2
+    try:
+        number = float(value)
+        if not math.isfinite(number):
+            return "N/A"
+        return f"{number:,.{decimals}f}"
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
         return "N/A"
-
-

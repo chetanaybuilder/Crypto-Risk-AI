@@ -1,39 +1,53 @@
-from authlib.integrations.flask_client import OAuth
-
-oauth = OAuth()
-
 import logging
 import threading
-from threading import Lock
-import collections
+import time
 from concurrent.futures import ThreadPoolExecutor
+
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
+from authlib.integrations.flask_client import OAuth
+
 from config import *
 
+
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# OAuth
+# ---------------------------------------------------------------------------
+
+oauth = OAuth()
+
+
+# ---------------------------------------------------------------------------
+# Database state
+# ---------------------------------------------------------------------------
 
 _db_pool = None
 _db_pool_lock = threading.Lock()
 
-_cache_lock = Lock()
 
+# ---------------------------------------------------------------------------
+# Shared application caches
+# ---------------------------------------------------------------------------
+
+_cache_lock = threading.Lock()
+
+_market_cache = {}
+_market_cap_cache = {}
+_history_cache = {}
+
+
+# ---------------------------------------------------------------------------
+# Background executors
+# ---------------------------------------------------------------------------
 
 ANALYSIS_EXECUTOR = ThreadPoolExecutor(
     max_workers=ANALYSIS_EXECUTOR_WORKERS,
     thread_name_prefix="analysis",
 )
-
-
-_market_cache = {}
-
-
-_market_cap_cache = {}
-
-
-_history_cache = {}
-
 
 GEMINI_EXECUTOR = ThreadPoolExecutor(
     max_workers=GEMINI_EXECUTOR_WORKERS,
@@ -41,14 +55,49 @@ GEMINI_EXECUTOR = ThreadPoolExecutor(
 )
 
 
+# ---------------------------------------------------------------------------
+# Database pool
+# ---------------------------------------------------------------------------
+
+def _validate_db_pool_config() -> None:
+    """Validate PostgreSQL pool configuration before initialization."""
+
+    try:
+        min_conn = int(
+            DB_POOL_MIN_CONN
+        )
+
+        max_conn = int(
+            DB_POOL_MAX_CONN
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise RuntimeError(
+            "DB_POOL_MIN_CONN and DB_POOL_MAX_CONN "
+            "must be valid integers."
+        ) from exc
+
+    if min_conn < 1:
+        raise RuntimeError(
+            "DB_POOL_MIN_CONN must be at least 1."
+        )
+
+    if max_conn < min_conn:
+        raise RuntimeError(
+            "DB_POOL_MAX_CONN must be greater than "
+            "or equal to DB_POOL_MIN_CONN."
+        )
+
+
 def _init_db_pool():
     """
-    Lazily create a single shared connection pool.
+    Lazily initialize the single shared PostgreSQL connection pool.
 
-    Fixes:
-      - Opening/closing a brand-new TCP connection on every
-        single query, which exhausts free-tier connection
-        limits under any real concurrency.
+    The double-check under _db_pool_lock prevents multiple threads from
+    creating competing pools during application startup.
     """
 
     global _db_pool
@@ -66,120 +115,383 @@ def _init_db_pool():
                 "DATABASE_URL is not configured."
             )
 
-        _db_pool = psycopg2.pool.ThreadedConnectionPool(
-            DB_POOL_MIN_CONN,
-            DB_POOL_MAX_CONN,
-            dsn=DATABASE_URL,
-            sslmode="require",
-            connect_timeout=10,
-        )
+        _validate_db_pool_config()
 
-        return _db_pool
+        try:
+            _db_pool = (
+                psycopg2.pool.ThreadedConnectionPool(
+                    int(DB_POOL_MIN_CONN),
+                    int(DB_POOL_MAX_CONN),
+                    dsn=DATABASE_URL,
+                    sslmode="require",
+                    connect_timeout=10,
+                )
+            )
+
+            logger.info(
+                "PostgreSQL connection pool initialized "
+                "(min=%s, max=%s).",
+                DB_POOL_MIN_CONN,
+                DB_POOL_MAX_CONN,
+            )
+
+            return _db_pool
+
+        except Exception:
+            _db_pool = None
+
+            logger.exception(
+                "Failed to initialize PostgreSQL connection pool."
+            )
+
+            raise
 
 
 class _PooledConnection:
     """
-    Thin wrapper so existing call sites can keep calling
-    connection.cursor() / connection.commit() / connection.close()
-    exactly as before, while the real connection is returned to
-    the pool instead of being torn down.
+    Compatibility wrapper around a psycopg2 pooled connection.
+
+    Existing application code can continue using:
+
+        connection.cursor()
+        connection.commit()
+        connection.rollback()
+        connection.close()
+
+    close() returns the connection to the pool instead of physically
+    closing the TCP connection.
+
+    The wrapper is deliberately idempotent so double-close cannot return
+    the same physical connection to the pool twice.
     """
 
-    def __init__(self, pool, conn):
+    def __init__(
+        self,
+        pool,
+        conn,
+    ):
         self._pool = pool
         self._conn = conn
+        self._closed = False
 
-    # FIX (Bug 10): support `with get_db_connection() as conn:` usage.
+    @property
+    def raw_connection(self):
+        """Expose the underlying psycopg2 connection when necessary."""
+        return self._conn
+
     def __enter__(self):
+        if self._closed:
+            raise RuntimeError(
+                "Cannot enter an already-closed database connection."
+            )
+
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
-            try:
+    def __exit__(
+        self,
+        exc_type,
+        exc_val,
+        exc_tb,
+    ):
+        try:
+            if exc_type is not None:
                 self.rollback()
-            except Exception:
-                pass
-        self.close()
+        except Exception:
+            logger.debug(
+                "Rollback during connection context exit failed.",
+                exc_info=True,
+            )
+
+        finally:
+            self.close()
+
         return False
 
-    def cursor(self, *args, **kwargs):
-        return self._conn.cursor(*args, **kwargs)
+    def _ensure_open(self):
+        if self._closed:
+            raise RuntimeError(
+                "Database connection has already been returned to the pool."
+            )
+
+        if self._conn is None:
+            raise RuntimeError(
+                "Underlying database connection is unavailable."
+            )
+
+        if self._conn.closed:
+            raise RuntimeError(
+                "Underlying database connection is closed."
+            )
+
+    def cursor(
+        self,
+        *args,
+        **kwargs,
+    ):
+        self._ensure_open()
+
+        return self._conn.cursor(
+            *args,
+            **kwargs,
+        )
 
     def commit(self):
-        return self._conn.commit()
+        self._ensure_open()
+
+        try:
+            return self._conn.commit()
+
+        except Exception:
+            logger.exception(
+                "Database commit failed."
+            )
+            raise
 
     def rollback(self):
-        return self._conn.rollback()
+        self._ensure_open()
+
+        try:
+            return self._conn.rollback()
+
+        except Exception:
+            logger.exception(
+                "Database rollback failed."
+            )
+            raise
 
     def close(self):
+        """
+        Return the physical connection to the pool exactly once.
+
+        A rollback is performed before returning it so a transaction that
+        was accidentally left open cannot leak into the next request.
+        """
+
+        if self._closed:
+            return
+
+        self._closed = True
+
+        conn = self._conn
+        pool = self._pool
+
+        self._conn = None
+        self._pool = None
+
+        if conn is None or pool is None:
+            return
+
         try:
-            self._pool.putconn(self._conn)
-        except Exception as exc:
-            logger.debug(
-                "Could not return connection to pool: %s",
-                exc,
+            # A rollback after a successful commit is harmless.
+            # This guarantees a clean transaction state before reuse.
+            if not conn.closed:
+                try:
+                    conn.rollback()
+                except Exception:
+                    logger.warning(
+                        "Could not reset transaction state before "
+                        "returning DB connection to pool.",
+                        exc_info=True,
+                    )
+
+                    # If rollback itself fails, discard the physical
+                    # connection instead of returning a potentially
+                    # corrupted connection to the pool.
+                    try:
+                        pool.putconn(
+                            conn,
+                            close=True,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Failed to discard broken DB connection.",
+                            exc_info=True,
+                        )
+
+                    return
+
+            pool.putconn(
+                conn
             )
+
+        except Exception:
+            logger.debug(
+                "Could not return DB connection to pool.",
+                exc_info=True,
+            )
+
+            # Best-effort physical cleanup if returning to the pool fails.
+            try:
+                if not conn.closed:
+                    conn.close()
+            except Exception:
+                pass
+
+
+def _discard_pooled_connection(
+    pool,
+    conn,
+) -> None:
+    """
+    Remove a bad physical connection from the pool.
+
+    Never return a known-broken connection for another request.
+    """
+
+    if conn is None:
+        return
+
+    try:
+        pool.putconn(
+            conn,
+            close=True,
+        )
+
+    except Exception:
+        logger.debug(
+            "Failed to discard broken pooled connection.",
+            exc_info=True,
+        )
+
+        try:
+            if not conn.closed:
+                conn.close()
+        except Exception:
+            pass
 
 
 def get_db_connection():
     """
-    Get a pooled PostgreSQL connection, with retry/backoff.
+    Obtain a healthy PostgreSQL connection from the shared pool.
 
-    Fixes:
-      - No connection pooling (every call opened a fresh
-        connection, which exhausts free-tier connection caps
-        under concurrency).
-      - No retry against transient failures, which is the
-        main cause of "sometimes it fetches, sometimes it
-        doesn't" on serverless/auto-suspend Postgres hosts
-        (Neon, Supabase) that need a moment to wake up.
+    Transient connection failures are retried with linear backoff.
+
+    Returned connections MUST eventually have close() called.
     """
 
     pool = _init_db_pool()
 
+    try:
+        retries = max(
+            1,
+            int(DB_CONNECT_RETRIES),
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        retries = 1
+
+    try:
+        retry_delay = max(
+            0.0,
+            float(
+                DB_CONNECT_RETRY_DELAY
+            ),
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        retry_delay = 0.0
+
     last_error = None
 
-    for attempt in range(DB_CONNECT_RETRIES):
+    for attempt in range(
+        retries
+    ):
+
+        conn = None
 
         try:
-
             conn = pool.getconn()
 
-            # Detect dead/stale pooled connections instead of
-            # handing back a broken one. Don't consume a retry
-            # attempt for stale connections — the pool itself
-            # is fine, it just handed back a bad connection.
+            if conn is None:
+                raise RuntimeError(
+                    "PostgreSQL pool returned no connection."
+                )
+
+            # A closed connection must never be handed to application code.
             if conn.closed:
-                pool.putconn(conn, close=True)
-                # Retry, allowing the loop to consume an attempt
+                _discard_pooled_connection(
+                    pool,
+                    conn,
+                )
+
+                # This is a pool-health event, not an application failure.
+                # Try again without sleeping unnecessarily.
                 continue
 
-            return _PooledConnection(pool, conn)
+            # Lightweight transaction-state reset.
+            #
+            # A pooled connection should normally already be clean, but
+            # rollback here prevents accidental transaction leakage from
+            # older call paths.
+            try:
+                conn.rollback()
+            except Exception as exc:
+                logger.warning(
+                    "Discarding unhealthy pooled connection: %s",
+                    exc,
+                )
+
+                _discard_pooled_connection(
+                    pool,
+                    conn,
+                )
+
+                continue
+
+            return _PooledConnection(
+                pool,
+                conn,
+            )
 
         except Exception as exc:
 
             last_error = exc
 
+            if conn is not None:
+                _discard_pooled_connection(
+                    pool,
+                    conn,
+                )
+
             logger.warning(
                 "DB connection attempt %s/%s failed: %s",
                 attempt + 1,
-                DB_CONNECT_RETRIES,
+                retries,
                 exc,
             )
 
-            if attempt < DB_CONNECT_RETRIES - 1:
-                time.sleep(
-                    DB_CONNECT_RETRY_DELAY * (attempt + 1)
+            if attempt < retries - 1:
+                sleep_seconds = (
+                    retry_delay
+                    * (attempt + 1)
                 )
 
+                if sleep_seconds > 0:
+                    time.sleep(
+                        sleep_seconds
+                    )
+
     raise RuntimeError(
-        f"Could not obtain a database connection: {last_error}"
+        "Could not obtain a healthy database connection: "
+        f"{last_error}"
     )
 
 
+# ---------------------------------------------------------------------------
+# Database initialization
+# ---------------------------------------------------------------------------
+
 def init_db():
     """
-    Create all required tables and indexes.
+    Create required tables, indexes and safe schema defaults.
+
+    Safe to call repeatedly because all operations are idempotent.
     """
 
     connection = None
@@ -189,9 +501,19 @@ def init_db():
 
         with connection.cursor() as cursor:
 
-            # ------------------------------------------------
+            # --------------------------------------------------------------
+            # PostgreSQL UUID support
+            # --------------------------------------------------------------
+
+            cursor.execute(
+                """
+                CREATE EXTENSION IF NOT EXISTS pgcrypto;
+                """
+            )
+
+            # --------------------------------------------------------------
             # USERS
-            # ------------------------------------------------
+            # --------------------------------------------------------------
 
             cursor.execute(
                 """
@@ -217,13 +539,10 @@ def init_db():
                 """
             )
 
-            # ------------------------------------------------
+            # --------------------------------------------------------------
             # ANALYSES
-            # ------------------------------------------------
+            # --------------------------------------------------------------
 
-            # FIX (Bug 11): add DEFAULT gen_random_uuid() so INSERTs
-            # that omit the id column (like save_analysis) get a UUID
-            # automatically instead of a NOT NULL constraint violation.
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS analyses (
@@ -244,25 +563,38 @@ def init_db():
                 """
             )
 
+            # IMPORTANT:
+            # CREATE TABLE IF NOT EXISTS does NOT modify an existing table.
+            # Therefore explicitly repair the UUID default for databases
+            # created by an older version of the application.
+            cursor.execute(
+                """
+                ALTER TABLE analyses
+                ALTER COLUMN id
+                SET DEFAULT gen_random_uuid();
+                """
+            )
+
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS
                 idx_analyses_user_created
-                ON analyses(
+                ON analyses (
                     user_id,
                     created_at DESC
                 );
                 """
             )
 
-            # ------------------------------------------------
-            # PERSISTENT ANALYSIS JOBS
-            # ------------------------------------------------
+            # --------------------------------------------------------------
+            # ANALYSIS JOBS
+            # --------------------------------------------------------------
 
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS analysis_jobs (
-                    id UUID PRIMARY KEY,
+                    id UUID PRIMARY KEY
+                        DEFAULT gen_random_uuid(),
 
                     user_id INTEGER NOT NULL
                         REFERENCES users(id)
@@ -305,11 +637,21 @@ def init_db():
                 """
             )
 
+            # Repair the default for installations created before this
+            # default existed.
+            cursor.execute(
+                """
+                ALTER TABLE analysis_jobs
+                ALTER COLUMN id
+                SET DEFAULT gen_random_uuid();
+                """
+            )
+
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS
                 idx_analysis_jobs_user_created
-                ON analysis_jobs(
+                ON analysis_jobs (
                     user_id,
                     created_at DESC
                 );
@@ -320,27 +662,30 @@ def init_db():
                 """
                 CREATE INDEX IF NOT EXISTS
                 idx_analysis_jobs_status
-                ON analysis_jobs(
+                ON analysis_jobs (
                     status,
                     updated_at
                 );
                 """
             )
 
-            # ------------------------------------------------
-            # S4 — partial unique index preventing duplicate
-            # active (queued/running/saving) jobs per user+symbol.
-            # The unique constraint lets create_analysis_job()
-            # detect races atomically via IntegrityError instead
-            # of relying on a separate SELECT that two concurrent
-            # requests could both pass before either INSERTs.
-            # ------------------------------------------------
+            # --------------------------------------------------------------
+            # ACTIVE JOB DEDUPLICATION
+            # --------------------------------------------------------------
+
             cursor.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS
                 idx_analysis_jobs_active_unique
-                ON analysis_jobs (user_id, token_symbol)
-                WHERE status IN ('queued', 'running', 'saving');
+                ON analysis_jobs (
+                    user_id,
+                    token_symbol
+                )
+                WHERE status IN (
+                    'queued',
+                    'running',
+                    'saving'
+                );
                 """
             )
 
@@ -352,6 +697,15 @@ def init_db():
 
     except Exception as exc:
 
+        if connection is not None:
+            try:
+                connection.rollback()
+            except Exception:
+                logger.debug(
+                    "Database rollback after init failure failed.",
+                    exc_info=True,
+                )
+
         logger.exception(
             "Database initialization failed: %s",
             exc,
@@ -361,7 +715,5 @@ def init_db():
 
     finally:
 
-        if connection:
+        if connection is not None:
             connection.close()
-
-

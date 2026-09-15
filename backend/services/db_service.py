@@ -4,12 +4,11 @@ import bcrypt
 from utils.helpers import normalize_symbol, json_safe, clamp
 import logging
 import psycopg2
-import psycopg2.extras
 from config import *
 from extensions import get_db_connection, ANALYSIS_EXECUTOR
-from utils.helpers import utc_now_iso
 
 logger = logging.getLogger(__name__)
+
 
 def row_to_user(row):
     """
@@ -138,11 +137,13 @@ def create_local_user(
             "Invalid email address."
         )
 
-    password_hash = (
-        bcrypt
-        .generate_password_hash(password)
-        .decode("utf-8")
-    )
+    # FIX: the real `bcrypt` package (imported above) does not have a
+    # `generate_password_hash` method — that's Flask-Bcrypt/Werkzeug's
+    # API. The correct real-bcrypt call is hashpw(bytes, gensalt()).
+    password_hash = bcrypt.hashpw(
+        password.encode("utf-8"),
+        bcrypt.gensalt(),
+    ).decode("utf-8")
 
     connection = None
 
@@ -1067,6 +1068,15 @@ def cleanup_old_analysis_jobs():
 def submit_analysis_job(
     job_id,
 ):
+    # FIX: `execute_analysis_job` was referenced but never imported
+    # anywhere in this file, which would raise a NameError as soon as
+    # a job got submitted. Importing it lazily here (rather than at
+    # module load time) also sidesteps any circular-import issues if
+    # that module imports from db_service.
+    #
+    # >>> Update this import path to wherever execute_analysis_job
+    # >>> actually lives in your project (e.g. services.analysis_worker).
+    from analysis_worker import execute_analysis_job
 
     try:
 
@@ -1112,5 +1122,3 @@ def submit_analysis_job(
             pass
 
         return False
-
-

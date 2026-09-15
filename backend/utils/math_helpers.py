@@ -1,22 +1,385 @@
 import logging
-logger = logging.getLogger(__name__)
-from typing import Any, List, Optional, Tuple, Dict
 import math
-from utils.helpers import *
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
+from utils.helpers import (
+    clamp,
+    first_defined,
+    json_safe,
+    normalize_symbol,
+    numeric,
+    optional_numeric,
+    percentage_change,
+    safe_divide,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Internal numeric helpers
+# ---------------------------------------------------------------------------
+
+def _finite_float(value: Any) -> Optional[float]:
+    """
+    Convert value to a finite float.
+
+    Unlike numeric(), invalid values remain None so that bad market data
+    cannot silently become a legitimate zero inside statistical calculations.
+    """
+    value = optional_numeric(value)
+
+    if value is None:
+        return None
+
+    if not math.isfinite(value):
+        return None
+
+    return value
+
+
+def _mean(values: List[float]) -> float:
+    """
+    Numerically safer arithmetic mean.
+
+    math.fsum() reduces floating-point accumulation error compared with
+    ordinary sum() for large or heterogeneous values.
+    """
+    if not values:
+        return 0.0
+
+    return math.fsum(values) / len(values)
+
+
+def _timestamp_to_datetime(value: Any) -> Optional[datetime]:
+    """
+    Normalize supported timestamps to timezone-aware UTC datetimes.
+
+    Supported:
+        - datetime
+        - date
+        - Unix seconds
+        - Unix milliseconds
+        - ISO-8601 strings
+    """
+
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(
+                tzinfo=timezone.utc
+            )
+
+        return value.astimezone(
+            timezone.utc
+        )
+
+    if isinstance(value, date):
+        return datetime(
+            value.year,
+            value.month,
+            value.day,
+            tzinfo=timezone.utc,
+        )
+
+    numeric_timestamp = _finite_float(value)
+
+    if numeric_timestamp is not None:
+        # Millisecond Unix timestamps are normally > 10^11.
+        if abs(numeric_timestamp) > 10_000_000_000:
+            numeric_timestamp /= 1000.0
+
+        try:
+            return datetime.fromtimestamp(
+                numeric_timestamp,
+                tz=timezone.utc,
+            )
+        except (
+            OverflowError,
+            OSError,
+            ValueError,
+        ):
+            return None
+
+    if isinstance(value, str):
+        text = value.strip()
+
+        if not text:
+            return None
+
+        # Numeric strings may be Unix timestamps.
+        numeric_string = _finite_float(text)
+
+        if numeric_string is not None:
+            return _timestamp_to_datetime(
+                numeric_string
+            )
+
+        # Handle common ISO-8601 UTC suffix.
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+
+        try:
+            parsed = datetime.fromisoformat(
+                text
+            )
+
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(
+                    tzinfo=timezone.utc
+                )
+
+            return parsed.astimezone(
+                timezone.utc
+            )
+
+        except ValueError:
+            return None
+
+    return None
+
+
+def _extract_price_point(
+    item: Any,
+) -> Optional[Tuple[Optional[datetime], float]]:
+    """
+    Extract (timestamp, price) from either:
+
+        {"timestamp": ..., "price": ...}
+
+    or a raw numeric price.
+
+    Raw numeric prices have no timestamp.
+    """
+
+    if isinstance(item, dict):
+        raw_price = first_defined(
+            item.get("price"),
+            item.get("close"),
+            item.get("value"),
+        )
+
+        price = _finite_float(
+            raw_price
+        )
+
+        if price is None or price <= 0:
+            return None
+
+        raw_timestamp = first_defined(
+            item.get("timestamp"),
+            item.get("time"),
+            item.get("date"),
+            item.get("datetime"),
+        )
+
+        timestamp = _timestamp_to_datetime(
+            raw_timestamp
+        )
+
+        return timestamp, price
+
+    price = _finite_float(item)
+
+    if price is None or price <= 0:
+        return None
+
+    return None, price
+
+
+def _prices_only(
+    history: Any,
+) -> List[float]:
+    """
+    Extract valid positive prices from a history series.
+
+    This function intentionally does not invent prices for malformed
+    records.
+    """
+
+    if not isinstance(
+        history,
+        list,
+    ):
+        return []
+
+    prices = []
+
+    for item in history:
+        point = _extract_price_point(
+            item
+        )
+
+        if point is None:
+            continue
+
+        _, price = point
+        prices.append(price)
+
+    return prices
+
+
+def _series_points(
+    history: Any,
+) -> List[Tuple[datetime, float]]:
+    """
+    Extract valid timestamped price observations.
+
+    Records without usable timestamps are excluded because they cannot
+    participate safely in calendar-date alignment.
+    """
+
+    if not isinstance(
+        history,
+        list,
+    ):
+        return []
+
+    points = []
+
+    for item in history:
+        point = _extract_price_point(
+            item
+        )
+
+        if point is None:
+            continue
+
+        timestamp, price = point
+
+        if timestamp is None:
+            continue
+
+        points.append(
+            (
+                timestamp,
+                price,
+            )
+        )
+
+    # Chronological order is mandatory for return calculations.
+    points.sort(
+        key=lambda point: point[0]
+    )
+
+    return points
+
+
+def _align_series_by_date(
+    asset_prices: Any,
+    btc_prices: Any,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[datetime]]:
+    """
+    Align asset and BTC prices by UTC calendar date.
+
+    Only dates present in BOTH series are retained.
+
+    If multiple observations exist on the same date, the last
+    chronological observation for that date is used.
+
+    Returns:
+        aligned_asset,
+        aligned_btc,
+        aligned_dates
+    """
+
+    asset_points = _series_points(
+        asset_prices
+    )
+
+    btc_points = _series_points(
+        btc_prices
+    )
+
+    if not asset_points or not btc_points:
+        return [], [], []
+
+    asset_by_date = {}
+
+    for timestamp, price in asset_points:
+        asset_by_date[
+            timestamp.date()
+        ] = {
+            "timestamp": timestamp,
+            "price": price,
+        }
+
+    btc_by_date = {}
+
+    for timestamp, price in btc_points:
+        btc_by_date[
+            timestamp.date()
+        ] = {
+            "timestamp": timestamp,
+            "price": price,
+        }
+
+    common_dates = sorted(
+        set(asset_by_date)
+        & set(btc_by_date)
+    )
+
+    aligned_asset = [
+        asset_by_date[day]
+        for day in common_dates
+    ]
+
+    aligned_btc = [
+        btc_by_date[day]
+        for day in common_dates
+    ]
+
+    aligned_dates = [
+        datetime(
+            day.year,
+            day.month,
+            day.day,
+            tzinfo=timezone.utc,
+        )
+        for day in common_dates
+    ]
+
+    return (
+        aligned_asset,
+        aligned_btc,
+        aligned_dates,
+    )
+
+
+def _prices_from_aligned(
+    series: Any,
+) -> List[float]:
+    """Extract prices from an already-aligned series."""
+
+    return _prices_only(
+        series
+    )
+
+
+# ---------------------------------------------------------------------------
+# Core statistics
+# ---------------------------------------------------------------------------
 
 def standard_deviation(
     values: list,
     sample: bool = False,
 ) -> float:
     """
-    Standard deviation of a value list.
+    Calculate standard deviation.
 
-    sample=False (default): population std dev (divide by N).
-    sample=True: sample std dev (divide by N-1) — the correct
-    unbiased estimator for return series, which typically have
-    very few observations (e.g. 7 daily returns from 8 candles).
-    Population std dev understates volatility by ~sqrt((N-1)/N),
-    which matters at these small sample sizes (~6.5% low).
+    sample=False:
+        Population standard deviation.
+
+    sample=True:
+        Sample standard deviation using N-1 degrees of freedom.
+
+    For realized volatility estimated from historical returns, sample=True
+    is generally appropriate because the observed return series represents
+    a sample of the asset's underlying return process.
     """
 
     if not isinstance(
@@ -25,35 +388,54 @@ def standard_deviation(
     ):
         return 0.0
 
-    cleaned = [
-        numeric(value)
-        for value in values
-        if optional_numeric(value)
-        is not None
-    ]
+    cleaned = []
 
-    min_points = 3 if sample else 2
+    for value in values:
+        numeric_value = _finite_float(
+            value
+        )
 
-    if len(cleaned) < min_points:
+        if numeric_value is not None:
+            cleaned.append(
+                numeric_value
+            )
+
+    minimum_points = (
+        2 if sample else 1
+    )
+
+    if len(cleaned) < minimum_points:
         return 0.0
 
-    avg = mean(cleaned)
+    average = _mean(
+        cleaned
+    )
+
+    squared_deviations = [
+        (value - average) ** 2
+        for value in cleaned
+    ]
 
     divisor = (
-        (len(cleaned) - 1)
+        len(cleaned) - 1
         if sample
         else len(cleaned)
     )
 
+    if divisor <= 0:
+        return 0.0
+
     variance_value = (
-        sum(
-            (
-                value - avg
-            ) ** 2
-            for value in cleaned
+        math.fsum(
+            squared_deviations
         )
         / divisor
     )
+
+    if not math.isfinite(
+        variance_value
+    ):
+        return 0.0
 
     return math.sqrt(
         max(
@@ -67,6 +449,12 @@ def covariance(
     values_a: list,
     values_b: list,
 ) -> float:
+    """
+    Calculate population covariance between two aligned series.
+
+    Both series must represent paired observations. Invalid pairs are
+    discarded together so the pairing is never shifted.
+    """
 
     if (
         not isinstance(
@@ -80,20 +468,27 @@ def covariance(
     ):
         return 0.0
 
-    pairs = [
-        (
-            numeric(a),
-            numeric(b),
+    pairs = []
+
+    for a, b in zip(
+        values_a,
+        values_b,
+    ):
+        a_value = _finite_float(a)
+        b_value = _finite_float(b)
+
+        if (
+            a_value is None
+            or b_value is None
+        ):
+            continue
+
+        pairs.append(
+            (
+                a_value,
+                b_value,
+            )
         )
-        for a, b in zip(
-            values_a,
-            values_b,
-        )
-        if optional_numeric(a)
-        is not None
-        and optional_numeric(b)
-        is not None
-    ]
 
     if len(pairs) < 2:
         return 0.0
@@ -108,23 +503,44 @@ def covariance(
         for pair in pairs
     ]
 
-    mean_a = mean(a_values)
-    mean_b = mean(b_values)
+    mean_a = _mean(
+        a_values
+    )
 
-    return mean(
-        [
-            (
-                (a - mean_a)
-                * (b - mean_b)
-            )
-            for a, b in pairs
-        ]
+    mean_b = _mean(
+        b_values
+    )
+
+    products = [
+        (
+            a - mean_a
+        ) * (
+            b - mean_b
+        )
+        for a, b in pairs
+    ]
+
+    result = (
+        math.fsum(products)
+        / len(pairs)
+    )
+
+    return (
+        result
+        if math.isfinite(result)
+        else 0.0
     )
 
 
 def variance(
     values: list,
 ) -> float:
+    """
+    Calculate population variance.
+
+    This matches the covariance convention used by beta:
+        beta = Cov(asset, BTC) / Var(BTC)
+    """
 
     if not isinstance(
         values,
@@ -132,31 +548,63 @@ def variance(
     ):
         return 0.0
 
-    cleaned = [
-        numeric(value)
-        for value in values
-        if optional_numeric(value)
-        is not None
-    ]
+    cleaned = []
+
+    for value in values:
+        numeric_value = _finite_float(
+            value
+        )
+
+        if numeric_value is not None:
+            cleaned.append(
+                numeric_value
+            )
 
     if len(cleaned) < 2:
         return 0.0
 
-    avg = mean(cleaned)
-
-    return mean(
-        [
-            (
-                value - avg
-            ) ** 2
-            for value in cleaned
-        ]
+    average = _mean(
+        cleaned
     )
 
+    squared_deviations = [
+        (
+            value - average
+        ) ** 2
+        for value in cleaned
+    ]
+
+    result = (
+        math.fsum(
+            squared_deviations
+        )
+        / len(cleaned)
+    )
+
+    return (
+        result
+        if math.isfinite(result)
+        else 0.0
+    )
+
+
+# ---------------------------------------------------------------------------
+# Returns
+# ---------------------------------------------------------------------------
 
 def calculate_returns(
     prices: list,
 ) -> list:
+    """
+    Calculate simple returns:
+
+        R_t = (P_t / P_(t-1)) - 1
+
+    Invalid observations are NOT compressed across missing values when
+    the input contains structured timestamped records.
+
+    For a plain numeric list, valid positive observations are used.
+    """
 
     if not isinstance(
         prices,
@@ -164,19 +612,66 @@ def calculate_returns(
     ):
         return []
 
-    cleaned = [
-        optional_numeric(price)
-        for price in prices
-    ]
+    if not prices:
+        return []
 
-    cleaned = [
-        price
-        for price in cleaned
-        if (
-            price is not None
-            and price > 0
+    # Structured history: preserve chronological adjacency.
+    if any(
+        isinstance(
+            item,
+            dict,
         )
-    ]
+        for item in prices
+    ):
+        points = _series_points(
+            prices
+        )
+
+        if len(points) < 2:
+            return []
+
+        returns = []
+
+        for previous, current in zip(
+            points,
+            points[1:],
+        ):
+            previous_price = previous[1]
+            current_price = current[1]
+
+            if (
+                previous_price <= 0
+                or current_price <= 0
+            ):
+                continue
+
+            result = (
+                current_price
+                / previous_price
+            ) - 1.0
+
+            if math.isfinite(result):
+                returns.append(
+                    result
+                )
+
+        return returns
+
+    # Plain numeric history.
+    cleaned = []
+
+    for price in prices:
+        numeric_price = _finite_float(
+            price
+        )
+
+        if (
+            numeric_price is not None
+            and numeric_price > 0
+        ):
+            cleaned.append(
+                numeric_price
+            )
 
     if len(cleaned) < 2:
         return []
@@ -187,51 +682,42 @@ def calculate_returns(
         cleaned,
         cleaned[1:],
     ):
-
         if previous <= 0:
             continue
 
-        returns.append(
-            (
-                current - previous
+        result = (
+            current / previous
+        ) - 1.0
+
+        if math.isfinite(result):
+            returns.append(
+                result
             )
-            / previous
-        )
 
     return returns
 
+
+# ---------------------------------------------------------------------------
+# Drawdown
+# ---------------------------------------------------------------------------
 
 def max_drawdown(
     prices: list,
 ) -> float:
     """
-    Calculate maximum drawdown from a price series.
+    Calculate maximum peak-to-trough drawdown.
 
-    Methodology:
-        Track running peak; compute drawdown at each point as
-        (price - peak) / peak * 100. Return the absolute value
-        of the largest observed decline.
+    Returns a positive percentage.
 
-    This measures the worst peak-to-tail decline an investor
-    would have experienced holding the asset over the period.
-
-    Returns:
-        float: Maximum drawdown as a positive percentage
+    Example:
+        peak = 100
+        trough = 70
+        result = 30.0
     """
 
-    cleaned = [
-        optional_numeric(price)
-        for price in prices
-    ]
-
-    cleaned = [
-        price
-        for price in cleaned
-        if (
-            price is not None
-            and price > 0
-        )
-    ]
+    cleaned = _prices_only(
+        prices
+    )
 
     if not cleaned:
         return 0.0
@@ -240,136 +726,183 @@ def max_drawdown(
     maximum_drawdown = 0.0
 
     for price in cleaned:
-
         if price > peak:
             peak = price
 
         if peak <= 0:
             continue
 
-        # Drawdown from peak as percentage (negative value)
-        drawdown = (
-            (
-                price - peak
-            )
+        drawdown_pct = (
+            (price - peak)
             / peak
         ) * 100.0
 
-        maximum_drawdown = min(
-            maximum_drawdown,
-            drawdown,
-        )
+        if math.isfinite(
+            drawdown_pct
+        ):
+            maximum_drawdown = min(
+                maximum_drawdown,
+                drawdown_pct,
+            )
 
     return abs(
-        numeric(
-            maximum_drawdown
-        )
+        maximum_drawdown
     )
 
+
+# ---------------------------------------------------------------------------
+# Realized volatility
+# ---------------------------------------------------------------------------
 
 def realized_volatility(
     prices: list,
 ) -> dict:
     """
-    Compute realized volatility from a daily price series.
+    Calculate realized annualized volatility.
 
-    Methodology:
-        1. Calculate log returns: ln(current / previous)
-        2. Compute SAMPLE standard deviation of returns
-           (divide by N-1 — the unbiased estimator; with only
-           ~7 daily returns the population estimator understates
-           volatility by ~6.5%)
-        3. Annualize: daily_std * sqrt(365) * 100
-           (365 because crypto trades 24/7)
+    Steps:
+        1. Extract valid positive prices.
+        2. Calculate logarithmic returns.
+        3. Calculate sample standard deviation.
+        4. Annualize using sqrt(365), because crypto trades 24/7.
 
-    Returns:
-        dict: daily_volatility_pct, annualized_volatility_pct, observations
+    Annualized volatility is returned as a percentage.
+
+    Example:
+        0.80 annualized decimal volatility
+        -> 80.0%
     """
 
     try:
-
         if not isinstance(
             prices,
             list,
         ):
-            prices = []
+            return {
+                "daily_volatility_pct": None,
+                "annualized_volatility_pct": None,
+                "observations": 0,
+            }
 
-        # Log returns: ln(current / previous).
-        # More precise than simple returns for volatile series —
-        # a +15% day contributes ln(1.15) ≈ 13.98%, not 15%,
-        # so volatility is not overstated by asymmetric moves.
-        cleaned = [
-            optional_numeric(price)
-            for price in prices
-        ]
-
-        cleaned = [
-            price
-            for price in cleaned
-            if (
-                price is not None
-                and price > 0
+        # Preserve structured chronological history.
+        if any(
+            isinstance(
+                item,
+                dict,
             )
-        ]
+            for item in prices
+        ):
+            points = _series_points(
+                prices
+            )
 
-        returns = []
+            cleaned = [
+                price
+                for _, price in points
+            ]
+
+        else:
+            cleaned = _prices_only(
+                prices
+            )
+
+        if len(cleaned) < 2:
+            return {
+                "daily_volatility_pct": None,
+                "annualized_volatility_pct": None,
+                "observations": 0,
+            }
+
+        log_returns = []
 
         for previous, current in zip(
             cleaned,
             cleaned[1:],
         ):
-
-            if previous <= 0 or current <= 0:
+            if (
+                previous <= 0
+                or current <= 0
+            ):
                 continue
 
-            returns.append(
-                math.log(
-                    current / previous
-                )
+            ratio = (
+                current / previous
             )
 
-        if len(returns) < 2:
+            if (
+                ratio <= 0
+                or not math.isfinite(ratio)
+            ):
+                continue
 
-            return json_safe({
+            log_return = math.log(
+                ratio
+            )
+
+            if math.isfinite(
+                log_return
+            ):
+                log_returns.append(
+                    log_return
+                )
+
+        if len(log_returns) < 2:
+            return {
                 "daily_volatility_pct": None,
                 "annualized_volatility_pct": None,
                 "observations": len(
-                    returns
+                    log_returns
                 ),
-            })
+            }
 
         daily_std = standard_deviation(
-            returns,
+            log_returns,
             sample=True,
         )
 
-        daily_std = numeric(
-            daily_std,
-            default=0.0,
-        )
+        if (
+            not math.isfinite(
+                daily_std
+            )
+            or daily_std < 0
+        ):
+            return {
+                "daily_volatility_pct": None,
+                "annualized_volatility_pct": None,
+                "observations": len(
+                    log_returns
+                ),
+            }
 
-        # Annualization factor: sqrt(365) for daily data
         annualized = (
             daily_std
-            * math.sqrt(365)
+            * math.sqrt(365.0)
             * 100.0
         )
 
+        if not math.isfinite(
+            annualized
+        ):
+            return {
+                "daily_volatility_pct": None,
+                "annualized_volatility_pct": None,
+                "observations": len(
+                    log_returns
+                ),
+            }
+
         return json_safe({
-            "daily_volatility_pct": numeric(
+            "daily_volatility_pct": (
                 daily_std * 100.0
             ),
-            "annualized_volatility_pct": numeric(
-                annualized
-            ),
+            "annualized_volatility_pct": annualized,
             "observations": len(
-                returns
+                log_returns
             ),
         })
 
     except Exception as exc:
-
-        logger.debug(
+        logger.exception(
             "realized_volatility failed: %s",
             exc,
         )
@@ -381,53 +914,124 @@ def realized_volatility(
         }
 
 
+# ---------------------------------------------------------------------------
+# Beta
+# ---------------------------------------------------------------------------
+
 def calculate_beta(
     asset_prices: list,
     btc_prices: list,
 ) -> dict:
     """
-    Calculate BTC beta (market sensitivity) for an asset.
+    Calculate BTC beta:
 
-    Methodology:
-        Beta = Cov(asset_returns, btc_returns) / Var(btc_returns)
-
-    A beta of 1.0 indicates the asset moves in line with BTC.
-    Beta > 1.0 indicates amplified sensitivity to BTC movements.
+        beta = Cov(asset_returns, BTC_returns)
+               / Var(BTC_returns)
 
     Returns:
-        dict: beta coefficient and observation count
+        beta
+        observations
+
+    Beta is calculated from SIMPLE returns, which is standard for
+    market-regression beta.
+
+    The asset and BTC histories are aligned by UTC calendar date before
+    returns are calculated.
     """
 
     try:
+        if (
+            not isinstance(
+                asset_prices,
+                list,
+            )
+            or not isinstance(
+                btc_prices,
+                list,
+            )
+        ):
+            return {
+                "beta": None,
+                "observations": 0,
+            }
 
-        # P2: align by calendar date rather than by raw list position.
-        # This guarantees that a return on day T for the asset is always
-        # paired with a return on day T for BTC, even if the two series
-        # have different lengths or small gaps (e.g. a newly-listed coin).
-        aligned_asset, btc_aligned, aligned_dates = _align_series_by_date(
-            asset_prices,
-            btc_prices,
+        # If both series are structured, align by date.
+        if (
+            any(
+                isinstance(
+                    item,
+                    dict,
+                )
+                for item in asset_prices
+            )
+            or any(
+                isinstance(
+                    item,
+                    dict,
+                )
+                for item in btc_prices
+            )
+        ):
+            (
+                aligned_asset,
+                aligned_btc,
+                aligned_dates,
+            ) = _align_series_by_date(
+                asset_prices,
+                btc_prices,
+            )
+
+            asset_series = _prices_from_aligned(
+                aligned_asset
+            )
+
+            btc_series = _prices_from_aligned(
+                aligned_btc
+            )
+
+        else:
+            # Plain lists cannot be calendar-aligned, so only use them
+            # when both lengths are compatible.
+            asset_series = _prices_only(
+                asset_prices
+            )
+
+            btc_series = _prices_only(
+                btc_prices
+            )
+
+            aligned_dates = []
+
+        if (
+            len(asset_series) < 3
+            or len(btc_series) < 3
+        ):
+            return json_safe({
+                "beta": None,
+                "observations": 0,
+            })
+
+        # Both aligned series must have exactly the same length.
+        length = min(
+            len(asset_series),
+            len(btc_series),
         )
 
+        asset_series = asset_series[
+            -length:
+        ]
+
+        btc_series = btc_series[
+            -length:
+        ]
+
         asset_returns = calculate_returns(
-            aligned_asset
+            asset_series
         )
 
         btc_returns = calculate_returns(
-            btc_aligned
+            btc_series
         )
-
-        if not isinstance(
-            asset_returns,
-            list,
-        ):
-            asset_returns = []
-
-        if not isinstance(
-            btc_returns,
-            list,
-        ):
-            btc_returns = []
 
         length = min(
             len(asset_returns),
@@ -435,10 +1039,9 @@ def calculate_beta(
         )
 
         if length < 2:
-
             return json_safe({
                 "beta": None,
-                "observations": int(length),
+                "observations": length,
             })
 
         asset_returns = asset_returns[
@@ -449,62 +1052,64 @@ def calculate_beta(
             -length:
         ]
 
-        logger.info(
-            "[BETA] %d aligned return observations over %s to %s",
-            length,
-            aligned_dates[0].isoformat() if aligned_dates else "?",
-            aligned_dates[-1].isoformat() if aligned_dates else "?",
-        )
+        if aligned_dates:
+            logger.info(
+                "[BETA] %d aligned price observations "
+                "over %s to %s",
+                len(aligned_dates),
+                aligned_dates[0].date().isoformat(),
+                aligned_dates[-1].date().isoformat(),
+            )
 
         btc_variance = variance(
             btc_returns
         )
 
-        btc_variance = optional_numeric(
-            btc_variance
-        )
-
         if (
-            btc_variance is None
-            or btc_variance <= 0
-        ):
-
-            return json_safe({
-                "beta": None,
-                "observations": int(length),
-            })
-
-        covariance_value = optional_numeric(
-            covariance(
-                asset_returns,
-                btc_returns,
+            not math.isfinite(
+                btc_variance
             )
-        )
-
-        if covariance_value is None:
-
+            or btc_variance <= 1e-16
+        ):
+            # BTC barely moved; beta is mathematically unstable.
             return json_safe({
                 "beta": None,
-                "observations": int(length),
+                "observations": length,
             })
 
-        # Beta = Cov(asset, BTC) / Var(BTC)
-        beta = safe_divide(
-            covariance_value,
-            btc_variance,
-            default=0.0,
+        covariance_value = covariance(
+            asset_returns,
+            btc_returns,
         )
 
-        beta_value = optional_numeric(beta)
+        if not math.isfinite(
+            covariance_value
+        ):
+            return json_safe({
+                "beta": None,
+                "observations": length,
+            })
+
+        beta = (
+            covariance_value
+            / btc_variance
+        )
+
+        if not math.isfinite(
+            beta
+        ):
+            return json_safe({
+                "beta": None,
+                "observations": length,
+            })
 
         return json_safe({
-            "beta": beta_value,
-            "observations": int(length),
+            "beta": beta,
+            "observations": length,
         })
 
     except Exception as exc:
-
-        logger.debug(
+        logger.exception(
             "calculate_beta failed: %s",
             exc,
         )
@@ -515,37 +1120,41 @@ def calculate_beta(
         }
 
 
+# ---------------------------------------------------------------------------
+# Liquidity
+# ---------------------------------------------------------------------------
+
 def calculate_liquidity_metrics(
     market: dict,
 ) -> dict:
     """
-    Estimate liquidity risk from market structure.
+    Calculate basic market-liquidity metrics.
 
-    Methodology:
-        Turnover ratio = (24h_volume / market_cap) * 100
+    Turnover:
 
-    Higher turnover indicates deeper markets and lower exit risk.
-    This ratio is used by score_liquidity() to generate a 0-100 risk score.
+        turnover_pct =
+            volume_24h / market_cap * 100
 
-    Returns:
-        dict: volume_24h, market_cap, turnover_pct
+    Higher turnover generally indicates more active trading.
+
+    This function measures the metric only. Risk scoring belongs in
+    risk_engine.py.
     """
 
     try:
-
         if not isinstance(
             market,
             dict,
         ):
             market = {}
 
-        volume = optional_numeric(
+        volume = _finite_float(
             market.get(
                 "volume_24h"
             )
         )
 
-        market_cap = optional_numeric(
+        market_cap = _finite_float(
             market.get(
                 "market_cap"
             )
@@ -555,37 +1164,19 @@ def calculate_liquidity_metrics(
 
         if (
             volume is not None
+            and volume >= 0
             and market_cap is not None
             and market_cap > 0
-            and volume >= 0
         ):
+            turnover_value = (
+                volume
+                / market_cap
+            ) * 100.0
 
-            try:
-
-                # Turnover as percentage: higher = more liquid
-                turnover_value = (
-                    volume
-                    / market_cap
-                ) * 100.0
-
-                turnover = optional_numeric(
-                    turnover_value
-                )
-
-            except (
-                ZeroDivisionError,
-                ArithmeticError,
-                TypeError,
-                ValueError,
-                OverflowError,
-            ) as exc:
-
-                logger.debug(
-                    "Liquidity turnover failed: %s",
-                    exc,
-                )
-
-                turnover = None
+            if math.isfinite(
+                turnover_value
+            ):
+                turnover = turnover_value
 
         return json_safe({
             "volume_24h": volume,
@@ -594,8 +1185,7 @@ def calculate_liquidity_metrics(
         })
 
     except Exception as exc:
-
-        logger.debug(
+        logger.exception(
             "calculate_liquidity_metrics failed: %s",
             exc,
         )
@@ -607,19 +1197,25 @@ def calculate_liquidity_metrics(
         }
 
 
+# ---------------------------------------------------------------------------
+# Combined quantitative metrics
+# ---------------------------------------------------------------------------
+
 def calculate_quant_metrics(
     symbol: str,
     market: dict,
     history: list,
     btc_history: list,
 ) -> dict:
+    """
+    Calculate all quantitative signals consumed by risk_engine.py.
+    """
+
+    normalized_symbol = normalize_symbol(
+        symbol
+    )
 
     try:
-
-        symbol = normalize_symbol(
-            symbol
-        )
-
         if not isinstance(
             market,
             dict,
@@ -638,17 +1234,14 @@ def calculate_quant_metrics(
         ):
             btc_history = []
 
-        # FIX (Bug 3): history is now a list of {"timestamp": ..., "price": ...}
-        # dicts (P2 format). Functions like realized_volatility(), max_drawdown(),
-        # and calculate_returns() expect bare floats. Extract prices first.
-        history_prices = _prices_only(history)
-
-        volatility = realized_volatility(
-            history_prices
+        history_prices = _prices_only(
+            history
         )
 
-        # calculate_beta uses _align_series_by_date internally,
-        # which expects the rich P2 format with timestamps.
+        volatility = realized_volatility(
+            history
+        )
+
         beta = calculate_beta(
             history,
             btc_history,
@@ -659,39 +1252,50 @@ def calculate_quant_metrics(
         )
 
         drawdown = max_drawdown(
-            history_prices
+            history
         )
 
         returns = calculate_returns(
-            history_prices
+            history
         )
 
-        current_price = optional_numeric(
-            market.get("price")
+        current_price = _finite_float(
+            market.get(
+                "price"
+            )
         )
 
-        # FIX (Bug 4): history[-1] is now a dict, not a float.
-        # Extract the price float from the last entry.
         historical_price = (
             history_prices[-1]
             if history_prices
             else None
         )
 
-        price_change_from_history = (
-            percentage_change(
-                current_price,
-                historical_price,
+        price_change_from_history = None
+
+        if (
+            current_price is not None
+            and historical_price is not None
+        ):
+            price_change_from_history = (
+                percentage_change(
+                    current_price,
+                    historical_price,
+                )
             )
-            if (
-                current_price is not None
-                and historical_price is not None
+
+        valid_history_count = len(
+            history_prices
+        )
+
+        valid_btc_history_count = len(
+            _prices_only(
+                btc_history
             )
-            else None
         )
 
         return json_safe({
-            "symbol": symbol,
+            "symbol": normalized_symbol,
 
             "volatility": volatility,
 
@@ -709,67 +1313,92 @@ def calculate_quant_metrics(
                 price_change_from_history
             ),
 
-            "history_observations": len(
-                history
+            "history_observations": (
+                valid_history_count
             ),
 
-            "btc_history_observations": len(
-                btc_history
+            "btc_history_observations": (
+                valid_btc_history_count
             ),
         })
 
     except Exception as exc:
-
-        logger.warning(
-            "quant metrics failed; returning safe defaults: %s",
+        logger.exception(
+            "quant metrics failed for %s: %s",
+            normalized_symbol,
             exc,
         )
 
         return json_safe({
-            "symbol": normalize_symbol(
-                symbol
-            ),
+            "symbol": normalized_symbol,
+
             "volatility": {
                 "daily_volatility_pct": None,
                 "annualized_volatility_pct": None,
                 "observations": 0,
             },
+
             "beta": {
                 "beta": None,
                 "observations": 0,
             },
+
             "liquidity": {
                 "volume_24h": None,
                 "market_cap": None,
                 "turnover_pct": None,
             },
-            "max_drawdown_pct": 0.0,
+
+            "max_drawdown_pct": None,
+
             "return_observations": 0,
+
             "price_change_from_history_pct": None,
+
             "history_observations": 0,
+
             "btc_history_observations": 0,
         })
 
+
+# ---------------------------------------------------------------------------
+# Risk-engine extraction helpers
+# ---------------------------------------------------------------------------
 
 def extract_volatility_value(
     quant,
     market=None,
 ):
     """
-    Extract the scalar annualized volatility used by the
-    risk engine.
-
-    PART 1 stores volatility as a nested dictionary.
+    Extract scalar annualized volatility for risk_engine.py.
     """
 
-    quant = quant or {}
-    market = market or {}
+    quant = (
+        quant
+        if isinstance(
+            quant,
+            dict,
+        )
+        else {}
+    )
+
+    market = (
+        market
+        if isinstance(
+            market,
+            dict,
+        )
+        else {}
+    )
 
     volatility = quant.get(
         "volatility"
     )
 
-    if isinstance(volatility, dict):
+    if isinstance(
+        volatility,
+        dict,
+    ):
         volatility = first_defined(
             volatility.get(
                 "annualized_volatility_pct"
@@ -784,7 +1413,7 @@ def extract_volatility_value(
             "volatility"
         )
 
-    return optional_numeric(
+    return _finite_float(
         volatility
     )
 
@@ -793,23 +1422,30 @@ def extract_beta_value(
     quant,
 ):
     """
-    Extract scalar BTC beta from the nested beta structure
-    produced by PART 1.
+    Extract scalar BTC beta from the nested beta structure.
     """
 
-    quant = quant or {}
+    quant = (
+        quant
+        if isinstance(
+            quant,
+            dict,
+        )
+        else {}
+    )
 
     beta = quant.get(
         "beta"
     )
 
-    if isinstance(beta, dict):
+    if isinstance(
+        beta,
+        dict,
+    ):
         beta = beta.get(
             "beta"
         )
 
-    return optional_numeric(
+    return _finite_float(
         beta
     )
-
-
