@@ -409,7 +409,7 @@ def build_risk_profile(
 
     else:
         structural_detail = (
-            "Contract security assessment unavailable."
+            "Contract/security signal unavailable — no contract security data."
         )
 
     (
