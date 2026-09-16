@@ -15,8 +15,8 @@ export const API = {
     history: (id) => `/api/history/${encodeURIComponent(id)}`,
     deleteHistory: (id) => `/api/history/${encodeURIComponent(id)}`,
     logout: "/api/auth/logout",
-    analyzeStatus: (jobId) => `/api/analyze/${encodeURIComponent(jobId)}`,
-    analyzeStart: "/api/analyze"
+    analyzeStatus: (jobId) => `/api/analyze/status/${encodeURIComponent(jobId)}`,
+    analyzeStart: "/api/analyze/start",
 };
 
 /* ============================================================
