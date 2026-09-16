@@ -98,7 +98,7 @@ GEMINI_TIMEOUT_MS = min(
         int(
             os.getenv(
                 "GEMINI_TIMEOUT_MS",
-                "40000",
+                "60000",
             )
         ),
     ),

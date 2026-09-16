@@ -11,9 +11,11 @@ def execute_analysis_job(job_id):
         return
 
     symbol = job["token_symbol"]
-    chain_id = job.get("chain_id")
-    contract_address = job.get("contract_address")
+    chain_id = job.get("chain_id") or job.get("chain") or job.get("network")
+    contract_address = job.get("contract_address") or job.get("contractAddress")
     user_id = job.get("user_id")
+
+    print(f"[DEBUG] Analysis requested for symbol={symbol}, chain={chain_id}, address={contract_address}")
 
     update_analysis_job(job_id, status="running", started=True)
 

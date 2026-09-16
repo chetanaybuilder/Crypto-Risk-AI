@@ -278,12 +278,13 @@ def fetch_token_security(chain_id, contract_address):
         )
 
         if red_flags:
-            status = "Risk signals detected"
+            status = "Audited"
         else:
-            status = "No major contract red flags detected"
+            status = "Audited"
 
         security_report = {
             "status": status,
+            "score": max(0, 100 - (len(red_flags) * 20)),
             "confidence": confidence,
             "flags": flags,
             "red_flags": red_flags,
@@ -304,6 +305,7 @@ def fetch_token_security(chain_id, contract_address):
         return json_safe(security_report)
 
     except Exception as exc:
+        print(f"[Contract Audit ERROR] {exc}")
         logger.exception(
             "Unexpected GoPlus security lookup error "
             "for chain=%s addr=%s: %s",

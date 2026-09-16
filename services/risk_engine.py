@@ -1505,6 +1505,7 @@ def run_analysis(
         }
 
     elif chain_id and contract_address:
+        print(f"[Contract Audit] Calling security API for {contract_address} on chain {chain_id}")
         security = fetch_token_security(
             chain_id,
             contract_address,

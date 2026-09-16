@@ -41,8 +41,9 @@ def analyze():
             }), 400
 
         symbol = normalize_symbol(raw_symbol)
-        chain_id = data.get("chain_id")
-        contract_address = data.get("contract_address")
+        chain_id = data.get("chain_id") or data.get("chain") or data.get("network")
+        contract_address = data.get("contract_address") or data.get("contractAddress")
+        print(f"[DEBUG] Analysis requested for symbol={symbol}, chain={chain_id}, address={contract_address}")
 
         if not symbol:
             return jsonify({
@@ -150,8 +151,9 @@ def start_analysis():
             }), 400
 
         symbol = normalize_symbol(raw_symbol)
-        chain_id = data.get("chain_id")
-        contract_address = data.get("contract_address")
+        chain_id = data.get("chain_id") or data.get("chain") or data.get("network")
+        contract_address = data.get("contract_address") or data.get("contractAddress")
+        print(f"[DEBUG] Analysis requested for symbol={symbol}, chain={chain_id}, address={contract_address}")
 
         if not symbol:
             return jsonify({
