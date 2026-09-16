@@ -13,6 +13,28 @@ from utils.math_helpers import clamp, optional_numeric
 
 logger = logging.getLogger(__name__)
 
+CHAIN_ID_MAP = {
+    "1": "1",
+    "eth": "1",
+    "ethereum": "1",
+    "ethereum (eth)": "1",
+    "56": "56",
+    "bsc": "56",
+    "bnb": "56",
+    "bnb chain": "56",
+    "bnb chain (bsc)": "56",
+    "137": "137",
+    "polygon": "137",
+    "42161": "42161",
+    "arbitrum": "42161",
+    "10": "10",
+    "optimism": "10",
+    "8453": "8453",
+    "base": "8453",
+    "43114": "43114",
+    "avalanche": "43114",
+    "avax": "43114",
+}
 
 def goplus_bool(value):
     """
@@ -87,12 +109,13 @@ def fetch_token_security(chain_id, contract_address):
         }
 
     address = address.lower()
-    chain_id = str(chain_id).strip()
+    raw_chain = str(chain_id).strip().lower()
+    numeric_chain_id = CHAIN_ID_MAP.get(raw_chain, raw_chain)
 
     try:
         url = (
             f"{GOPLUS_API_URL.rstrip('/')}/"
-            f"{quote(chain_id, safe='')}"
+            f"{quote(numeric_chain_id, safe='')}"
         )
 
         response, status_code, error_reason = _http_get_market(
@@ -108,7 +131,7 @@ def fetch_token_security(chain_id, contract_address):
         ):
             logger.warning(
                 "GoPlus security lookup failed for chain=%s addr=%s: %s",
-                chain_id,
+                numeric_chain_id,
                 address,
                 error_reason or f"HTTP {status_code}",
             )
@@ -121,7 +144,7 @@ def fetch_token_security(chain_id, contract_address):
         except ValueError:
             logger.warning(
                 "GoPlus returned invalid JSON for chain=%s addr=%s",
-                chain_id,
+                numeric_chain_id,
                 address,
             )
             return _unavailable_report(
@@ -139,7 +162,7 @@ def fetch_token_security(chain_id, contract_address):
             logger.warning(
                 "GoPlus API returned code=%s for chain=%s addr=%s: %s",
                 api_code,
-                chain_id,
+                numeric_chain_id,
                 address,
                 payload.get("message"),
             )
@@ -309,7 +332,7 @@ def fetch_token_security(chain_id, contract_address):
         logger.exception(
             "Unexpected GoPlus security lookup error "
             "for chain=%s addr=%s: %s",
-            chain_id,
+            numeric_chain_id,
             address,
             exc,
         )
