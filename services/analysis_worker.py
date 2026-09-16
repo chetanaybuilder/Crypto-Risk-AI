@@ -41,7 +41,8 @@ def execute_analysis_job(job_id):
             job_id,
             status="completed",
             progress=100,
-            report=saved,
+            report=report,
+            meta={"analysis_id": saved},
             completed=True,
             message="Analysis complete."
         )
