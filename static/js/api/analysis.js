@@ -417,6 +417,13 @@ export async function runAnalysis(
         // [PIPELINE TRACE 1]
         console.log(`[PIPELINE TRACE 1] Dispatching analysis for ${normalizedSymbol} with chain_id=${chainId} and contract_address=${contractAddress}`);
 
+        const startPayload = await apiRequest(
+            API.analyzeStart,
+            {
+                method: "POST",
+                body: requestBody
+            }
+        );
 
         console.log(
             "CryptoRisk analyze/start payload:",
