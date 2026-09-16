@@ -2,7 +2,7 @@ import logging
 import math
 
 from config import (
-    NATIVE_ASSETS,
+    L1_WHITELIST,
     REPORT_SCHEMA_VERSION,
     RISK_WEIGHTS,
     SUPPORTED_HISTORY_DAYS,
@@ -896,6 +896,8 @@ def _format_fiat(value):
     try:
         val = float(value)
         abs_val = abs(val)
+        if 0 < abs_val < 0.01:
+            return val
         if abs_val >= 1_000_000_000_000:
             return f"${val / 1_000_000_000_000:.2f}T"
         if abs_val >= 1_000_000_000:
@@ -1068,7 +1070,7 @@ def build_structured_report(
     )
 
     is_native_asset = (
-        symbol.upper() in NATIVE_ASSETS
+        symbol.upper() in L1_WHITELIST
     )
 
     security_not_applicable = (
@@ -1093,7 +1095,7 @@ def build_structured_report(
         not is_native_asset
         and not security_not_applicable
     ):
-        field_checks["Contract security"] = (
+        field_checks["contract_data"] = (
             True
             if security.get("available")
             else None
@@ -1489,9 +1491,10 @@ def run_analysis(
         "Evaluating available contract security data.",
     )
 
-    if symbol.upper() in NATIVE_ASSETS:
+    if symbol.upper() in L1_WHITELIST:
         security = {
-            "status": "Not applicable",
+            "status": "N/A",
+            "label": "Native Layer-1 Asset",
             "confidence": None,
             "flags": [],
             "red_flags": [],
@@ -1509,16 +1512,15 @@ def run_analysis(
 
     else:
         security = {
-            "status": (
-                "Not applicable — no contract address provided"
-            ),
+            "status": "Unavailable",
+            "label": "Address Not Provided",
             "confidence": None,
             "flags": [],
             "red_flags": [],
             "source": "Not provided",
             "timestamp": utc_now_iso(),
             "available": False,
-            "not_applicable": True,
+            "not_applicable": False,
         }
 
     if not isinstance(security, dict):

@@ -407,27 +407,15 @@ TOKEN_MAP = {
 SUPPORTED_ASSETS = frozenset(TOKEN_MAP)
 
 
-NATIVE_ASSETS = frozenset(
-    sym
-    for sym in (
-        "BTC",
-        "ETH",
-        "SOL",
-        "BNB",
-        "XRP",
-        "ADA",
-        "DOGE",
-        "AVAX",
-        "DOT",
-        "LTC",
-        "BCH",
-        "ATOM",
-        "XLM",
-        "TRX",
-        "TON",
-    )
-    if sym in TOKEN_MAP
-)
+L1_WHITELIST = frozenset([
+    "BTC",
+    "ETH",
+    "SOL",
+    "AVAX",
+    "BNB",
+    "DOT",
+    "NEAR",
+])
 
 
 ANALYSIS_STAGES = {
