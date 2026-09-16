@@ -241,14 +241,16 @@ export function renderMissingSignals(
                     signal !== null &&
                     signal !== undefined &&
                     String(signal)
-                        .trim() !== ""
+                        .trim() !== "" &&
+                    String(signal) !== "Contract security data"
             );
     } else if (
         typeof missing ===
         "string"
     ) {
         if (
-            missing.trim()
+            missing.trim() &&
+            missing !== "Contract security data"
         ) {
             signals = [
                 missing
