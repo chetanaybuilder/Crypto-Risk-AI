@@ -6,7 +6,7 @@ import { state } from '../state/store.js';
 import { apiRequest, API } from './client.js';
 import { renderHistory } from '../components/history.js';
 import { renderReport } from '../components/market.js';
-import { clearReportView, finishProgress } from '../components/ui.js';
+import { clearReportView } from '../components/ui.js';
 import { startLivePolling } from './market.js';
 import { show, hide, setText } from '../utils/dom.js';
 
