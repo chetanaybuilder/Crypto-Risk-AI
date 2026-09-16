@@ -1077,7 +1077,7 @@ def submit_analysis_job(
     #
     # >>> Update this import path to wherever execute_analysis_job
     # >>> actually lives in your project (e.g. services.analysis_worker).
-    from analysis_worker import execute_analysis_job
+    from services.analysis_worker import execute_analysis_job
 
     try:
 
