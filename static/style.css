@@ -53,6 +53,7 @@
     /* === RISK COLORS (HEIST THEMED) === */
     --risk-low: #00ff66;
     --risk-moderate: #ff9900;
+    --risk-elevated: #ff7700;
     --risk-high: #ff5500;
     --risk-critical: #ff3333;
 
@@ -2598,6 +2599,10 @@ img {
     color: var(--risk-moderate) !important;
 }
 
+.risk-elevated {
+    color: var(--risk-elevated) !important;
+}
+
 .risk-high {
     color: var(--risk-high) !important;
 }
@@ -2613,6 +2618,10 @@ img {
 
 .pillar-bar span.risk-moderate {
     background: linear-gradient(90deg, #f5c542, #ff8a5c) !important;
+}
+
+.pillar-bar span.risk-elevated {
+    background: linear-gradient(90deg, #ffaa00, #ff7700) !important;
 }
 
 .pillar-bar span.risk-high {

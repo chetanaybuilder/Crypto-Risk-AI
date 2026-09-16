@@ -27,8 +27,16 @@ export function updateScoreBar(
         bar.removeAttribute(
             "aria-valuenow"
         );
+        
+        if (bar.parentElement) {
+            bar.parentElement.style.display = "none";
+        }
 
         return;
+    }
+    
+    if (bar.parentElement) {
+        bar.parentElement.style.display = "";
     }
 
     bar.style.width =
