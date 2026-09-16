@@ -79,7 +79,7 @@ GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
    cd <repository-directory>
 
 2. **Set up the environment:**
-   pip install -r Crypto-Risk-Ai/requirements.txt
+   pip install -r requirements.txt
 
 3. **Run the Flask application:**
    cd Crypto-Risk-Ai

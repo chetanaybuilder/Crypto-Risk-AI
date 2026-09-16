@@ -20,7 +20,7 @@ services:
     name: cryptorisk-ai-backend
     runtime: python
     plan: free
-    buildCommand: pip install --upgrade pip && pip install -r Crypto-Risk-Ai/requirements.txt
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     preDeployCommand: python Crypto-Risk-Ai/pre_start.py
     startCommand: gunicorn --chdir Crypto-Risk-Ai --config gunicorn.conf.py app:app
     healthCheckPath: /health
