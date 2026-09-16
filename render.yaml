@@ -21,8 +21,8 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    preDeployCommand: python Crypto-Risk-Ai/pre_start.py
-    startCommand: gunicorn --chdir Crypto-Risk-Ai --config gunicorn.conf.py app:app
+    preDeployCommand: python pre_start.py
+    startCommand: gunicorn --config gunicorn.conf.py app:app
     healthCheckPath: /health
     envVars:
       # Auto-generated secure secrets
