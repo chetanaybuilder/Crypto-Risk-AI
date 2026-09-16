@@ -2109,7 +2109,9 @@ export function initCardTilt() {
 document.addEventListener(
     "DOMContentLoaded",
     () => {
-        ParallaxHeist.init();
+        if (typeof ParallaxHeist !== "undefined") {
+            ParallaxHeist.init();
+        }
         initCardTilt();
 
         const analysisForm =

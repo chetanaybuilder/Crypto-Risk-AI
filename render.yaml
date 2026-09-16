@@ -20,8 +20,9 @@ services:
     name: cryptorisk-ai-backend
     runtime: python
     plan: free
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: gunicorn --chdir backend app:app --bind 0.0.0.0:$PORT --timeout 60
+    buildCommand: pip install --upgrade pip && pip install -r Crypto-Risk-Ai/requirements.txt
+    preDeployCommand: python Crypto-Risk-Ai/pre_start.py
+    startCommand: gunicorn --chdir Crypto-Risk-Ai --config gunicorn.conf.py app:app
     healthCheckPath: /health
     envVars:
       # Auto-generated secure secrets
@@ -45,17 +46,6 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
-
-      # Frontend URL for CORS configuration
-      - key: FRONTEND_URL
-        value: https://crypto-risk-ai.vercel.app
-
-  # Static Frontend Site — HTML/CSS/JS
-  - type: static_site
-    name: cryptorisk-ai-frontend
-    plan: free
-    buildCommand: echo "Static frontend ready"
-    staticPublishPath: frontend
 
 # PostgreSQL Database
 databases:

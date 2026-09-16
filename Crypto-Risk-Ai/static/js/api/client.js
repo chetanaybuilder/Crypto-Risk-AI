@@ -6,6 +6,20 @@ import { state } from '../state/store.js';
 import { show, hide, setText } from '../utils/dom.js';
 
 /* ============================================================
+   API ENDPOINTS
+   ============================================================ */
+
+export const API = {
+    market: (symbol) => `/api/market/${encodeURIComponent(symbol)}`,
+    dashboard: "/api/dashboard",
+    history: (id) => `/api/history/${encodeURIComponent(id)}`,
+    deleteHistory: (id) => `/api/history/${encodeURIComponent(id)}`,
+    logout: "/api/auth/logout",
+    analyzeStatus: (jobId) => `/api/analyze/${encodeURIComponent(jobId)}`,
+    analyzeStart: "/api/analyze"
+};
+
+/* ============================================================
    API URL RESOLUTION
    ============================================================ */
 

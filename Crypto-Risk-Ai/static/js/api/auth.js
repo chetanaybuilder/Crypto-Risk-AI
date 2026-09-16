@@ -107,10 +107,8 @@ export function redirectToHome() {
     stopLivePolling();
     stopJobPolling();
 
-    // FIX: redirect to the public Vercel frontend (consistent with
-    // logout()). Using "/" would land on the Flask backend index.html,
-    // not the public landing page.
-    window.location.href = "https://crypto-risk-ai.vercel.app/";
+    // Redirect to the Flask index page instead of the old Vercel frontend.
+    window.location.href = "/";
 }
 
 
@@ -140,7 +138,7 @@ export async function logout() {
         stopLivePolling();
         stopJobPolling();
 
-        window.location.href = "https://crypto-risk-ai.vercel.app/";
+        window.location.href = "/";
     }
 }
 

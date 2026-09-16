@@ -6,18 +6,18 @@ CryptoRisk AI is a production-grade, full-stack intelligence platform that trans
 
 ## Architecture & System Design
 
-The project uses a monorepo layout with a clear boundary between browser code and server code:
+The project uses a unified architecture where the Flask backend serves both the API and the static frontend assets:
 
-[ frontend/ browser UI ] --(HTTP / OAuth)--> [ backend/ Flask API ]
-                                                 |
-                                   +-------------+-------------+
-                                   |                           |
-                                   [ Google Gemini API ]       [ PostgreSQL ]
+[ Browser UI ] --(HTTP / OAuth)--> [ Flask App ]
+                                         |
+                           +-------------+-------------+
+                           |                           |
+                           [ Google Gemini API ]       [ PostgreSQL ]
 
-* **Frontend Layer:** HTML5, CSS, and browser JavaScript are isolated in `frontend/`.
-* **Backend Layer:** Python 3.14 and Flask live in `backend/`, managing secure user sessions, CSRF protections, and OAuth verification via Authlib.
-* **Intelligence Layer:** Integrates the Google Gemini API to analyze cryptocurrency tickers under strict data policies, filtering out real-time price hallucination in favor of rigorous risk analysis.
-* **Data Layer:** Persistent relational storage managed via PostgreSQL, maintaining strict foreign-key constraints between authenticated users and their historical analysis reports.
+* **Frontend Layer:** HTML5, CSS, and modern JavaScript, served statically by Flask.
+* **Backend Layer:** Python 3.14 and Flask, managing secure user sessions, CSRF protections, and OAuth verification via Authlib.
+* **Intelligence Layer:** Integrates the Google Gemini API to analyze cryptocurrency tickers under strict data policies.
+* **Data Layer:** Persistent relational storage managed via PostgreSQL, maintaining strict foreign-key constraints.
 
 ---
 
@@ -30,7 +30,7 @@ The project uses a monorepo layout with a clear boundary between browser code an
 | **Authentication** | Google OpenID Connect (OAuth 2.0 via Authlib) |
 | **AI Engine** | Google Gemini API (`gemini-2.5-flash`) |
 | **Database** | PostgreSQL, Psycopg2 |
-| **Project layout** | Monorepo with separate `frontend/` and `backend/` applications |
+| **Project layout** | Single unified Flask application |
 
 ---
 
@@ -46,18 +46,15 @@ The project uses a monorepo layout with a clear boundary between browser code an
 ## Project Structure
 
 Crypto-Risk-AI/
-├── frontend/
-│   ├── config.js            # Backend service URL
-│   ├── dashboard.html       # Static dashboard page
-│   ├── index.html           # Static landing page
-│   ├── script.js            # API client and UI behavior
-│   └── style.css            # UI styles
-├── backend/
-│   ├── app.py               # Flask application and API integration
-│   ├── requirements.txt     # Python runtime dependencies
-│   ├── static/               # Backend-served browser assets
-│   └── templates/            # Backend Jinja templates
-├── render.yaml              # Render frontend, backend, and database setup
+├── app.py               # Flask application and API integration
+├── config.py            # Application configuration
+├── extensions.py        # Database and shared state setup
+├── requirements.txt     # Python runtime dependencies
+├── routes/              # Flask blueprints
+├── services/            # Business logic and Gemini integration
+├── static/              # Frontend CSS, JS, and assets
+├── templates/           # Jinja HTML templates
+├── render.yaml          # Render deployment setup
 └── README.md
 
 ---
@@ -72,7 +69,6 @@ DATABASE_URL=postgresql://user:password@host:port/dbname
 GEMINI_API_KEY=your_google_gemini_api_key
 GOOGLE_CLIENT_ID=your_google_oauth_client_id
 GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
-FRONTEND_URL=http://localhost:8080
 
 ---
 
@@ -82,18 +78,15 @@ FRONTEND_URL=http://localhost:8080
    git clone <your-repository-url>
    cd <repository-directory>
 
-2. **Set up the backend environment:**
-   cd backend
-   pip install -r requirements.txt
+2. **Set up the environment:**
+   pip install -r Crypto-Risk-Ai/requirements.txt
 
-3. **Run the Flask backend:**
+3. **Run the Flask application:**
+   cd Crypto-Risk-Ai
    python app.py
 
-4. **Serve the frontend:**
-   From the project root, run `python -m http.server 8080 --directory frontend`.
-
-5. **Access the platform:**
-   Navigate to `http://localhost:8080` in your browser.
+4. **Access the platform:**
+   Navigate to `http://localhost:5000` in your browser.
 
 ## GitHub Setup
 
@@ -116,13 +109,12 @@ This repository includes `render.yaml` for a Render Blueprint deployment.
 
 1. Push the repository to GitHub.
 2. In Render, choose **New > Blueprint** and select this repository.
-3. Deploy the Blueprint. It creates a static frontend, Flask backend, and PostgreSQL database.
-4. In the backend web service's Environment settings, add these secret values:
+3. Deploy the Blueprint. It creates a single Flask backend and PostgreSQL database.
+4. In the web service's Environment settings, add these secret values:
    - `GEMINI_API_KEY`
    - `GOOGLE_CLIENT_ID`
    - `GOOGLE_CLIENT_SECRET`
-5. Update `frontend/config.js` if Render assigns a different frontend or backend URL than the defaults in `render.yaml`.
-6. In Google Cloud Console, add the backend callback URL to the OAuth authorized redirect URIs:
-   `https://cryptorisk-ai-backend.onrender.com/auth/google/callback`
+5. In Google Cloud Console, add the backend callback URL to the OAuth authorized redirect URIs:
+   `https://cryptorisk-ai-backend.onrender.com/api/auth/google/callback`
 
-Render uses `gunicorn --chdir backend app:app --bind 0.0.0.0:$PORT` for the backend and publishes `frontend/` as a static site. The backend exposes `/api/session`, `/api/dashboard`, `/api/history/<id>/delete`, and `/api/health` for the frontend.
+Render uses `gunicorn --chdir Crypto-Risk-Ai app:app --bind 0.0.0.0:$PORT` to serve both the API and the frontend.

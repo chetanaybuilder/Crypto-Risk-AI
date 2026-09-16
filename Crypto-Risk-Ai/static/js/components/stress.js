@@ -1,6 +1,6 @@
-import { getStressTest } from './market.js';
-import { firstDefined, setText } from '../utils/dom.js';
-import { formatPercent } from '../utils/formatters.js';
+import { getAI, getStress } from './market.js';
+import { isPlainObject, firstDefined, setText } from '../utils/dom.js';
+import { formatNumber, formatConfidence, applyRiskClass, formatPercent } from '../utils/formatters.js';
 
 /* ============================================================
    STRESS TEST

@@ -76,8 +76,6 @@ JWT_ACCESS_TOKEN_EXPIRES_DAYS = max(
 )
 
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5000").strip()
-
 
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",

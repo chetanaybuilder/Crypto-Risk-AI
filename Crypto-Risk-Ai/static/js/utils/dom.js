@@ -3,12 +3,17 @@
    DOM HELPERS
    ============================================================ */
 
-function $(selector) {
+export function $(selector) {
     return document.querySelector(selector);
 }
 
-function $all(selector) {
+export function $all(selector) {
     return Array.from(document.querySelectorAll(selector));
+}
+
+if (typeof window !== 'undefined') {
+    window.$ = $;
+    window.$all = $all;
 }
 
 export function setText(selector, value, fallback = "—") {

@@ -2,7 +2,7 @@ import uuid
 from flask import Flask, request, g, jsonify
 from flask_cors import CORS
 
-from config import IS_PRODUCTION, FRONTEND_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SECRET_KEY
+from config import IS_PRODUCTION, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SECRET_KEY
 from extensions import init_db, oauth
 
 from routes.auth import bp as auth_bp
@@ -28,7 +28,7 @@ oauth.register(
 )
 CORS(
     app,
-    resources={r"/api/*": {"origins": FRONTEND_URL if IS_PRODUCTION else "*"}},
+    resources={r"/api/*": {"origins": "*"}},
     supports_credentials=True,
 )
 
@@ -70,8 +70,7 @@ app.register_blueprint(history_bp)
 app.register_blueprint(health_bp)
 app.register_blueprint(errors_bp)
 
-# Initialize DB on import
-init_db()
+# DB initialization is now handled by pre_start.py before workers spawn
 
 if __name__ == "__main__":
     app.run(debug=not IS_PRODUCTION, port=5000)
