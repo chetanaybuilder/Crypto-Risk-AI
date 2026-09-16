@@ -3,7 +3,7 @@ import { showAnalysisError, friendlyErrorMessage } from './client.js';
 import { firstDefined } from '../utils/dom.js';
 import { state } from '../state/store.js';
 import { apiRequest, API } from './client.js';
-import { show, hide, setText } from '../utils/dom.js';
+import { show, hide, setText, $, $all } from '../utils/dom.js';
 import { clearReportView } from '../components/ui.js';
 import { stopLivePolling } from './market.js';
 import { stopJobPolling } from './analysis.js';

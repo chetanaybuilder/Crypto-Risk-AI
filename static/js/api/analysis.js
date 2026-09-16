@@ -1,7 +1,7 @@
 import { stopLivePolling } from './market.js';
 import { state } from '../state/store.js';
-import { apiRequest, API, friendlyErrorMessage, renderUser, applyJobProgress, clearAnalysisError, showAnalysisError } from './client.js';
-import { startProgress, animateProgressTo, finishProgress, abortProgress, clearReportView } from '../components/ui.js';
+import { apiRequest, API, friendlyErrorMessage, renderUser, applyJobProgress, clearAnalysisError, showAnalysisError, startProgress, finishProgress, abortProgress } from './client.js';
+import { clearReportView } from '../components/ui.js';
 import { refreshHistory } from './history.js';
 import { startLivePolling, setLastFetchTime } from './market.js';
 import { renderReport, getReportFromPayload, getMarket, updateLiveMarket } from '../components/market.js';
