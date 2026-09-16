@@ -114,7 +114,21 @@ STRICT RULES:
     (e.g. "30-day realized volatility of 84.2%" rather than "high
     volatility").
 
-15. OUTPUT FORMAT: Return ONLY the JSON object below. No markdown code
+15. If the asset is a native Layer-1 network (e.g., BTC), treat smart
+    contract structural risk as N/A. Do not flag it as 'null' or instruct
+    the user to monitor it.
+
+16. Only generate the phrase "Based on partial data" if the missing
+    signals array length is greater than zero. If the array is empty,
+    state that the data is fully verified.
+
+17. Output plain text and avoid wrapping risk categories or null values
+    in quotation marks.
+
+18. Apply an absolute value function Math.abs() to price change variables
+    when paired with negative verbs to prevent phrases like "decreased by -0.83%".
+
+19. OUTPUT FORMAT: Return ONLY the JSON object below. No markdown code
     fences, no preamble, no trailing commentary, no explanation outside
     the JSON. The entire response body must be valid, directly
     parseable JSON — nothing else.

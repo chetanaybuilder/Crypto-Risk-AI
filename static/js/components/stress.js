@@ -169,9 +169,13 @@ export function renderStressTest(
             stress
         );
 
+    const stressObj = isPlainObject(stress) ? stress : {};
+    const base = stressObj.base_scenario;
+    const rawScore = firstDefined(isPlainObject(base) ? base.resilience_score : null, stressObj.resilience_score);
+
     setText(
         "#stress-resilience",
-        resilience
+        rawScore !== null ? `${resilience} (${Number(rawScore).toFixed(1)})` : resilience
     );
 
     setText(

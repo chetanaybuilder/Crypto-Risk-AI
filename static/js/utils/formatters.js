@@ -283,10 +283,15 @@ export function normalizeSeverity(value) {
     }
 
     if (
-        text.includes("high") ||
-        text.includes("elevated")
+        text.includes("high")
     ) {
         return "High";
+    }
+
+    if (
+        text.includes("elevated")
+    ) {
+        return "Elevated";
     }
 
     if (
@@ -334,6 +339,12 @@ export function severityClass(
     }
 
     if (
+        normalized === "elevated"
+    ) {
+        return "risk-elevated";
+    }
+
+    if (
         normalized === "moderate"
     ) {
         return "risk-moderate";
@@ -357,6 +368,7 @@ export function applyRiskClass(
     element.classList.remove(
         "risk-low",
         "risk-moderate",
+        "risk-elevated",
         "risk-high",
         "risk-critical"
     );

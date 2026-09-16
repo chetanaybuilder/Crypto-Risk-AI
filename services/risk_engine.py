@@ -890,6 +890,32 @@ def build_risk_drivers(
     return drivers[:6]
 
 
+def _format_fiat(value):
+    if value is None:
+        return None
+    try:
+        val = float(value)
+        abs_val = abs(val)
+        if abs_val >= 1_000_000_000_000:
+            return f"${val / 1_000_000_000_000:.2f}T"
+        if abs_val >= 1_000_000_000:
+            return f"${val / 1_000_000_000:.2f}B"
+        if abs_val >= 1_000_000:
+            return f"${val / 1_000_000:.2f}M"
+        if abs_val >= 1000:
+            return f"${val:,.0f}"
+        return f"${val:,.2f}"
+    except (TypeError, ValueError):
+        return None
+
+def _round_pct(value):
+    if value is None:
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
 def build_evidence_pack(
     symbol,
     market,
@@ -918,34 +944,34 @@ def build_evidence_pack(
         "asset": symbol.upper(),
 
         "market": {
-            "price_usd": market.get("price"),
-            "change_24h_pct": market.get(
+            "price_usd": _format_fiat(market.get("price")),
+            "change_24h_pct": _round_pct(market.get(
                 "price_change_24h_pct"
-            ),
-            "change_7d_pct": market.get(
+            )),
+            "change_7d_pct": _round_pct(market.get(
                 "price_change_7d_pct"
-            ),
-            "volume_24h_usd": market.get(
+            )),
+            "volume_24h_usd": _format_fiat(market.get(
                 "volume_24h"
-            ),
-            "market_cap_usd": market.get(
+            )),
+            "market_cap_usd": _format_fiat(market.get(
                 "market_cap"
-            ),
-            "high_24h_usd": market.get(
+            )),
+            "high_24h_usd": _format_fiat(market.get(
                 "high_24h"
-            ),
-            "low_24h_usd": market.get(
+            )),
+            "low_24h_usd": _format_fiat(market.get(
                 "low_24h"
-            ),
+            )),
             "source": market.get("source"),
         },
 
         "quantitative": {
-            "volatility_pct": volatility,
-            "beta_to_btc": beta,
-            "max_drawdown_pct": quant.get(
+            "volatility_pct": _round_pct(volatility),
+            "beta_to_btc": _round_pct(beta),
+            "max_drawdown_pct": _round_pct(quant.get(
                 "max_drawdown_pct"
-            ),
+            )),
             "history_observations": quant.get(
                 "history_observations"
             ),
