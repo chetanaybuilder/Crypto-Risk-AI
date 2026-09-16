@@ -90,7 +90,16 @@ def fetch_token_security(chain_id, contract_address):
     Missing GoPlus fields remain unknown rather than being treated
     as safe or unsafe.
     """
+    logger.warning(
+        "[Contract Debug] fetch_token_security called with chain_id=%r contract_address=%r",
+        chain_id,
+        contract_address,
+    )
+
     if not chain_id or not contract_address:
+        logger.warning(
+            "[Contract Debug] Missing chain_id or contract_address — returning unavailable."
+        )
         return _unavailable_report(
             "Contract security provider unavailable."
         )
@@ -98,6 +107,10 @@ def fetch_token_security(chain_id, contract_address):
     address = str(contract_address).strip()
 
     if not re.fullmatch(r"0x[a-fA-F0-9]{40}", address):
+        logger.warning(
+            "[Contract Debug] Address failed format check: %r",
+            address,
+        )
         return {
             "status": "Unavailable",
             "confidence": 0,
@@ -116,6 +129,13 @@ def fetch_token_security(chain_id, contract_address):
         url = (
             f"{GOPLUS_API_URL.rstrip('/')}/"
             f"{quote(numeric_chain_id, safe='')}"
+        )
+
+        logger.warning(
+            "[Contract Debug] Requesting GoPlus url=%s chain=%s addr=%s",
+            url,
+            numeric_chain_id,
+            address,
         )
 
         response, status_code, error_reason = _http_get_market(
@@ -152,6 +172,10 @@ def fetch_token_security(chain_id, contract_address):
             )
 
         if not isinstance(payload, dict):
+            logger.warning(
+                "[Contract Debug] Payload not a dict: %r",
+                type(payload),
+            )
             return _unavailable_report(
                 "Contract security data unavailable."
             )
@@ -173,6 +197,10 @@ def fetch_token_security(chain_id, contract_address):
         result = payload.get("result")
 
         if not isinstance(result, dict):
+            logger.warning(
+                "[Contract Debug] 'result' not a dict: %r",
+                result,
+            )
             return _unavailable_report(
                 "Contract security data unavailable."
             )
@@ -186,6 +214,12 @@ def fetch_token_security(chain_id, contract_address):
                     break
 
         if not isinstance(data, dict):
+            logger.warning(
+                "[Contract Debug] No matching address key in result. "
+                "Looked for %s, result keys=%s",
+                address,
+                list(result.keys()),
+            )
             return _unavailable_report(
                 "Contract security data unavailable."
             )
@@ -300,10 +334,12 @@ def fetch_token_security(chain_id, contract_address):
             95,
         )
 
+        # Fixed: status previously always evaluated to "Audited" in
+        # both branches. Now correctly reflects whether red flags exist.
         if red_flags:
-            status = "Audited"
+            status = "Flagged"
         else:
-            status = "Audited"
+            status = "Clean"
 
         security_report = {
             "status": status,
@@ -324,6 +360,13 @@ def fetch_token_security(chain_id, contract_address):
                 "sell_tax": sell_tax,
             },
         }
+
+        logger.warning(
+            "[Contract Debug] Success — status=%s available_fields=%s red_flags=%s",
+            status,
+            available_fields,
+            red_flags,
+        )
 
         return json_safe(security_report)
 

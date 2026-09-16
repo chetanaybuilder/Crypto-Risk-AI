@@ -1491,7 +1491,22 @@ def run_analysis(
         "Evaluating available contract security data.",
     )
 
+    # Debug: confirms exactly what run_analysis received for the
+    # contract fields. Check Render logs for this line after running
+    # an analysis to see whether chain_id/contract_address are even
+    # reaching this function.
+    logger.warning(
+        "[Contract Debug] run_analysis received symbol=%s chain_id=%r contract_address=%r",
+        symbol,
+        chain_id,
+        contract_address,
+    )
+
     if symbol.upper() in L1_WHITELIST:
+        logger.warning(
+            "[Contract Debug] %s is in L1_WHITELIST — treating as native asset, contract check skipped.",
+            symbol.upper(),
+        )
         security = {
             "status": "N/A",
             "label": "Native Layer-1 Asset",
@@ -1512,6 +1527,13 @@ def run_analysis(
         )
 
     else:
+        logger.warning(
+            "[Contract Debug] Skipped GoPlus call — chain_id or contract_address "
+            "missing/falsy for %s (chain_id=%r, contract_address=%r).",
+            symbol,
+            chain_id,
+            contract_address,
+        )
         security = {
             "status": "Unavailable",
             "label": "Address Not Provided",
@@ -1525,6 +1547,10 @@ def run_analysis(
         }
 
     if not isinstance(security, dict):
+        logger.warning(
+            "[Contract Debug] security result was not a dict (%r) — forcing unavailable.",
+            type(security),
+        )
         security = {
             "status": "Unavailable",
             "confidence": 0,
