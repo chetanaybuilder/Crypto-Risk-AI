@@ -1095,7 +1095,7 @@ def build_structured_report(
         not is_native_asset
         and not security_not_applicable
     ):
-        field_checks["contract_data"] = (
+        field_checks["Contract security data"] = (
             True
             if security.get("available")
             else None
