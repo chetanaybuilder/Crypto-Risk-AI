@@ -83,14 +83,22 @@ GEMINI_MODEL = os.getenv(
 ).strip()
 
 
+# FIX: the upper cap here used to be 25000ms (25s), which silently
+# clamped GEMINI_TIMEOUT_MS back down even if a higher value was set
+# in the environment. Production logs showed Gemini calls genuinely
+# needing more than 25s to return (large evidence-packet prompts +
+# cold starts), so every request was timing out on attempt 1 no
+# matter what. Cap raised to 60000ms (60s) — still bounded so a
+# single hung request can't block a worker forever, but no longer
+# silently overriding a deliberately-raised env value.
 GEMINI_TIMEOUT_MS = min(
-    25000,
+    60000,
     max(
         5000,
         int(
             os.getenv(
                 "GEMINI_TIMEOUT_MS",
-                "18000",
+                "40000",
             )
         ),
     ),
@@ -102,14 +110,23 @@ GEMINI_TIMEOUT_SECONDS = (
 )
 
 
+# FIX: default was "0" — meaning every deployment that didn't
+# explicitly set GEMINI_MAX_RETRIES in its environment got zero
+# retries. Combined with the 25s timeout cap above, this meant a
+# single slow Gemini response permanently degraded that report to
+# the deterministic fallback text, with no second attempt. Logs
+# confirmed this exact behavior ("Gemini timeout for ADA (attempt
+# 1/1)"). Default raised to 2; upper cap raised to 3 so an operator
+# who wants more headroom for flaky connectivity can configure it
+# without hitting an invisible ceiling.
 GEMINI_MAX_RETRIES = min(
-    2,
+    3,
     max(
         0,
         int(
             os.getenv(
                 "GEMINI_MAX_RETRIES",
-                "0",
+                "2",
             )
         ),
     ),
@@ -348,12 +365,6 @@ TOKEN_MAP = {
     "TRX": "tron",
     "SHIB": "shiba-inu",
     "TON": "the-open-network",
-    # ------------------------------------------------------------
-    # FIX (Bug 5): expanded the allowlist with more common tickers.
-    # Symbols not listed here are no longer a hard failure — they
-    # are resolved dynamically via CoinGecko's /search endpoint
-    # (see resolve_coin_id) and cached in _coin_resolution_cache.
-    # ------------------------------------------------------------
     "USDT": "tether",
     "USDC": "usd-coin",
     "DAI": "dai",
@@ -396,11 +407,6 @@ TOKEN_MAP = {
 SUPPORTED_ASSETS = frozenset(TOKEN_MAP)
 
 
-# ============================================================
-# Native blockchain assets (not ERC-20 tokens)
-# Derived from TOKEN_MAP via an explicit allowlist. When adding
-# a new native L1 to TOKEN_MAP, also add it here so it's excluded
-# from GoPlus contract-security checks.
 NATIVE_ASSETS = frozenset(
     sym
     for sym in (
@@ -498,20 +504,6 @@ FIELD_LABELS = {
 }
 
 
-# FIX: the pool ceiling used to default to 10, which is too low for
-# this app's real concurrency. A single analysis job alone makes 5+
-# sequential DB round-trips (create job, several progress updates,
-# save_analysis, get_user_history), and that happens concurrently
-# with: threaded=True Flask request handling, ANALYSIS_EXECUTOR
-# workers running jobs in the background, and users polling
-# /api/analyze/status/<job_id> while a job is in flight. Under only
-# light concurrent usage the pool ran dry, get_db_connection()
-# exhausted its retries, and callers saw reports/history "sometimes
-# there, sometimes not" — this was the primary cause of that symptom.
-# Raise the default ceiling and make min/max independently tunable
-# via environment variables; set these to match your Postgres
-# provider's actual connection limit (check your plan — e.g. Neon/
-# Supabase free tiers commonly allow 20-60 concurrent connections).
 DB_POOL_MIN_CONN = max(1, _safe_env_int("DB_POOL_MIN_CONN", 2))
 
 
@@ -522,5 +514,3 @@ DB_CONNECT_RETRIES = max(1, _safe_env_int("DB_CONNECT_RETRIES", 3))
 
 
 DB_CONNECT_RETRY_DELAY = max(0.2, _safe_env_float("DB_CONNECT_RETRY_DELAY", 0.75))
-
-
