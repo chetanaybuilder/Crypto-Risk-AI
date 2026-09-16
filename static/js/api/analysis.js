@@ -381,31 +381,42 @@ export async function runAnalysis(
             token_symbol: normalizedSymbol
         };
 
-        const chainId =
+        const chainid =
             typeof options.chainId === "string"
                 ? options.chainId.trim()
                 : "";
 
-        const contractAddress =
-            typeof options.contractAddress === "string"
-                ? options.contractAddress.trim()
-                : "";
+        // 1. Try reading from options (supporting camelCase or snake_case)
+        let chainId = options.chainId || options.chain_id || options.chain || "";
+        let contractAddress = options.contractAddress || options.contract_address || options.address || "";
 
-        if (chainId && contractAddress) {
-            requestBody.chain_id =
-                chainId;
-
-            requestBody.contract_address =
-                contractAddress;
+        // 2. Fallback: If options were empty, read directly from the HTML inputs
+        if (!chainId) {
+            const chainEl = document.getElementById("chain-id") ||
+                document.querySelector("select[name='chain_id']") ||
+                document.querySelector("select");
+            chainId = chainEl?.value || "";
         }
 
-        const startPayload = await apiRequest(
-            API.analyzeStart,
-            {
-                method: "POST",
-                body: requestBody
-            }
-        );
+        if (!contractAddress) {
+            const addrEl = document.getElementById("contract-address") ||
+                document.querySelector("input[name='contract_address']") ||
+                document.querySelector("input[placeholder*='0x']");
+            contractAddress = addrEl?.value || "";
+        }
+
+        chainId = typeof chainId === "string" ? chainId.trim() : "";
+        contractAddress = typeof contractAddress === "string" ? contractAddress.trim() : "";
+
+        // 3. Attach both fields to the request if present
+        if (chainId && contractAddress) {
+            requestBody.chain_id = chainId;
+            requestBody.contract_address = contractAddress;
+        }
+
+        // [PIPELINE TRACE 1]
+        console.log(`[PIPELINE TRACE 1] Dispatching analysis for ${normalizedSymbol} with chain_id=${chainId} and contract_address=${contractAddress}`);
+
 
         console.log(
             "CryptoRisk analyze/start payload:",

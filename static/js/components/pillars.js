@@ -56,8 +56,13 @@ export function renderPillar(
         score === ""
     ) {
         if (valueElement) {
-            valueElement.textContent =
-                "N/A";
+            if (safePillar.label === "Native Asset") {
+                valueElement.textContent = "N/A - Native Asset";
+            } else if (safePillar.label === "Unavailable") {
+                valueElement.textContent = "Unavailable";
+            } else {
+                valueElement.textContent = "N/A";
+            }
 
             applyRiskClass(
                 valueElement,

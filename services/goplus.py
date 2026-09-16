@@ -143,7 +143,7 @@ def fetch_token_security(chain_id, contract_address):
             params={
                 "contract_addresses": address,
             },
-            timeout=MARKET_TIMEOUT,
+            timeout=5,
         )
 
         if response is None or (
@@ -158,6 +158,8 @@ def fetch_token_security(chain_id, contract_address):
             return _unavailable_report(
                 "Contract security provider unavailable."
             )
+
+        print(f"[PIPELINE TRACE 4] GoPlus response status={status_code} body={response.text[:200]}")
 
         try:
             payload = response.json()

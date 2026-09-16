@@ -204,18 +204,30 @@ export function renderRiskProfile(
      * "Not applicable — native assets have no smart contract to
      * analyze" instead of a bare "—".
      */
+    let contractPillar = Object.assign({}, firstDefined(
+        getPillar(report, "structural"),
+        getPillar(report, "contract")
+    ) || {});
+
+    // Phase 4: Frontend Component Rendering - Verify State Mapping
+    if (report && report.security) {
+        if (report.security.available === true) {
+            contractPillar.score = report.security.score; // (score / 100) logic is handled by formatScore in pillars.js
+            contractPillar.label = "Audited";
+        } else if (["BTC", "ETH", "SOL", "AVAX", "BNB", "DOT", "NEAR"].includes((report.token_symbol || "").toUpperCase())) {
+            contractPillar.score = null;
+            contractPillar.label = "Native Asset";
+            contractPillar.detail = "Not applicable — native assets have no smart contract to analyze.";
+        } else if (report.security.status === "Unavailable" || report.security.available === false) {
+            contractPillar.score = null;
+            contractPillar.label = "Unavailable";
+            contractPillar.detail = "Contract/security signal unavailable — no contract security data.";
+        }
+    }
+
     renderPillar(
         "contract",
-        firstDefined(
-            getPillar(
-                report,
-                "structural"
-            ),
-            getPillar(
-                report,
-                "contract"
-            )
-        )
+        contractPillar
     );
 
     renderPillar(

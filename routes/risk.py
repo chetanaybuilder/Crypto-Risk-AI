@@ -43,7 +43,7 @@ def analyze():
         symbol = normalize_symbol(raw_symbol)
         chain_id = data.get("chain_id") or data.get("chain") or data.get("network")
         contract_address = data.get("contract_address") or data.get("contractAddress")
-        print(f"[DEBUG] Analysis requested for symbol={symbol}, chain={chain_id}, address={contract_address}")
+        print(f"[PIPELINE TRACE 2] Analysis requested for symbol={symbol}, chain={chain_id}, address={contract_address}")
 
         if not symbol:
             return jsonify({

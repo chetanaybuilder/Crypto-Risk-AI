@@ -15,7 +15,7 @@ def execute_analysis_job(job_id):
     contract_address = job.get("contract_address") or job.get("contractAddress")
     user_id = job.get("user_id")
 
-    print(f"[DEBUG] Analysis requested for symbol={symbol}, chain={chain_id}, address={contract_address}")
+    print(f"[PIPELINE TRACE 3] Analysis worker starting for symbol={symbol}, chain={chain_id}, address={contract_address}")
 
     update_analysis_job(job_id, status="running", started=True)
 
