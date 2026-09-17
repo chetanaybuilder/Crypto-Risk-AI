@@ -926,13 +926,14 @@ img {
 .hero-section {
     position: relative;
     z-index: 5;
-    display: grid;
-    grid-template-columns: 1.05fr 0.95fr;
-    gap: 60px;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    max-width: 1360px;
+    text-align: center;
+    gap: 40px;
+    max-width: 900px;
     margin: 0 auto;
-    padding: 110px 48px 80px;
+    padding: 140px 48px 100px;
 }
 
 .hero-eyebrow {
@@ -982,12 +983,13 @@ img {
     font-size: 18px;
     color: var(--text-secondary);
     max-width: 520px;
-    margin-bottom: 40px;
+    margin: 0 auto 40px;
     animation: fadeUp 1s 0.2s var(--ease-out) both;
 }
 
 .hero-actions {
     display: flex;
+    justify-content: center;
     gap: 16px;
     margin-bottom: 48px;
     animation: fadeUp 1.1s 0.3s var(--ease-out) both;
@@ -1162,6 +1164,7 @@ img {
 .hero-trust-row {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 18px;
     flex-wrap: wrap;
     animation: fadeUp 1.2s 0.4s var(--ease-out) both;
