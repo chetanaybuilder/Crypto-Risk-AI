@@ -62,35 +62,32 @@ CryptoRisk AI is an institutional-grade cryptocurrency intelligence and risk ana
 
 ```
 Crypto-Risk-AI/
-├── app.py                   # Application factory & blueprint registration
-├── config.py                # Environment configuration & provider settings
-├── extensions.py            # DB connection pool, OAuth, and executor setup
-├── pre_start.py             # Pre-deployment database migrations & schema setup
-├── gunicorn.conf.py         # Production WSGI server configuration
-├── render.yaml              # Render blueprint infrastructure configuration
-├── requirements.txt         # Pinned Python production dependencies
-├── .env.example             # Configuration template
-├── routes/                  # Modular Flask blueprints
-│   ├── auth.py              # Signup, login, Google OAuth, and JWT session handling
-│   ├── dashboard.py         # Dashboard view and user summary endpoints
-│   ├── health.py            # Health check, versioning, and provider status
-│   ├── history.py           # Saved report lookup, deletion, and management
-│   ├── market.py            # Live market snapshots and price queries
-│   └── risk.py              # Synchronous & async job risk analysis endpoints
-├── services/                # Business logic & external provider integrations
-│   ├── analysis_worker.py   # Background job runner
-│   ├── auth_service.py      # Password hashing, verification, & JWT decode
-│   ├── coingecko.py         # CoinGecko client, caching, and rate limiting
-│   ├── db_service.py        # Database queries & job lifecycle management
-│   ├── goplus.py            # Smart contract token security analysis
-│   └── risk_engine.py       # Quantitative math & AI synthesis orchestrator
-├── static/                  # Static frontend assets
-│   ├── style.css            # Dark mode design system
-│   └── js/                  # ES modules (state, API clients, UI components)
-├── templates/               # Jinja2 templates
-│   ├── index.html           # Landing & authentication page
-│   └── dashboard.html       # Analytics dashboard & interactive terminal
-└── utils/                   # Helpers, mathematical algorithms, and error classes
+├── backend/                     # Server-side domain, APIs, and business logic
+│   ├── app.py                   # Application factory & blueprint registration
+│   ├── config.py                # Environment configuration & provider settings
+│   ├── extensions.py            # DB connection pool, OAuth, and executor setup
+│   ├── pre_start.py             # Pre-deployment database migrations & schema setup
+│   ├── gunicorn.conf.py         # Production WSGI server configuration
+│   ├── requirements.txt         # Pinned Python production dependencies
+│   ├── routes/                  # Modular Flask blueprints (auth, risk, market, history)
+│   ├── services/                # Quantitative risk engine, CoinGecko, GoPlus, Gemini AI
+│   └── utils/                   # Telemetry helpers, mathematical statistics, error models
+│
+├── frontend/                    # Presentation layer and client application
+│   ├── static/                  # Static frontend assets
+│   │   ├── style.css            # Dark luxury design system & responsive layout
+│   │   └── js/                  # ES modules (state store, API clients, UI components)
+│   └── templates/               # Jinja2 templates
+│       ├── index.html           # Landing & authentication page
+│       └── dashboard.html       # Analytics dashboard & interactive terminal
+│
+├── app.py                       # Root application entrypoint proxy
+├── wsgi.py                      # Root WSGI server callable for Gunicorn
+├── pre_start.py                 # Root pre-deployment migration bridge
+├── gunicorn.conf.py             # Root Gunicorn server configuration
+├── requirements.txt             # Root dependency pointer for Render builds
+├── render.yaml                  # Render deployment configuration
+└── .env.example                 # Configuration template
 ```
 
 ---

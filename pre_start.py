@@ -1,28 +1,19 @@
 """
-Pre-Deployment Infrastructure Initialization.
+Root Pre-Deployment Migration Bridge.
 
-Executed as a standalone pre-deploy step in deployment blueprints (e.g. Render,
-Kubernetes init containers) to run idempotent database migrations and verify schema
-integrity before web worker processes fork.
+Executes database schema migrations and connectivity checks via backend.pre_start.
+Compatible with Render preDeployCommand: "python pre_start.py".
 """
 
-import logging
-from extensions import init_db
+import sys
+from pathlib import Path
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("pre_start")
+# Prioritize backend directory on sys.path
+BACKEND_DIR = Path(__file__).resolve().parent / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
-
-def main():
-    """Execute pre-flight schema migrations and connection health validation."""
-    logger.info("Running pre-start schema initialization...")
-    try:
-        init_db()
-        logger.info("Pre-start database initialization completed successfully.")
-    except Exception as exc:
-        logger.exception("Fatal error during pre-start initialization: %s", exc)
-        raise exc
-
+from pre_start import main
 
 if __name__ == "__main__":
     main()
