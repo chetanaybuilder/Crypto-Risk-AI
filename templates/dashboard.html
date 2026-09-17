@@ -1489,11 +1489,20 @@
              reports associated with the user.
         ====================================================== -->
 
-        <section class="history-section">
+        <section class="history-section" id="history-section">
 
-            <div class="section-heading">
+            <!-- Elite Interactive Toggle Header -->
+            <div
+                class="history-toggle-header"
+                id="history-toggle-header"
+                role="button"
+                tabindex="0"
+                aria-expanded="false"
+                aria-controls="history-content"
+                aria-label="Toggle Analysis History"
+            >
 
-                <div>
+                <div class="history-header-left">
 
                     <span class="section-label">
                         PERSISTENT INTELLIGENCE
@@ -1506,17 +1515,41 @@
                 </div>
 
 
-                <!-- Number of saved reports -->
+                <div class="history-header-right">
 
-                <div class="history-counter">
+                    <!-- Number of saved reports -->
 
-                    <span id="history-count">
-                        0
-                    </span>
+                    <div class="history-counter" title="Total saved reports">
 
-                    <small>
-                        REPORTS
-                    </small>
+                        <span id="history-count">
+                            0
+                        </span>
+
+                        <small>
+                            REPORTS
+                        </small>
+
+                    </div>
+
+                    <!-- Rotating Chevron Indicator -->
+
+                    <div class="history-chevron-wrapper" aria-hidden="true">
+
+                        <svg
+                            class="history-toggle-chevron"
+                            width="18"
+                            height="18"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+
+                    </div>
 
                 </div>
 
@@ -1524,65 +1557,77 @@
 
 
             <!-- =================================================
-                 HISTORY TABLE
+                 HISTORY TABLE (COLLAPSIBLE)
                  Displays previously saved analyses and their
                  associated actions.
             ================================================== -->
 
-            <div class="history-table-wrapper">
+            <div
+                class="history-collapse-content"
+                id="history-content"
+                aria-hidden="true"
+            >
 
-                <table class="history-table">
+                <div class="history-collapse-inner">
 
-                    <thead>
+                    <div class="history-table-wrapper">
 
-                        <tr>
+                        <table class="history-table">
 
-                            <th>
-                                ASSET
-                            </th>
+                            <thead>
 
-                            <th>
-                                RISK
-                            </th>
+                                <tr>
 
-                            <th>
-                                OUTLOOK
-                            </th>
+                                    <th>
+                                        ASSET
+                                    </th>
 
-                            <th>
-                                SCORE
-                            </th>
+                                    <th>
+                                        RISK
+                                    </th>
 
-                            <th>
-                                DATE
-                            </th>
+                                    <th>
+                                        OUTLOOK
+                                    </th>
 
-                            <th>
-                                ACTION
-                            </th>
+                                    <th>
+                                        SCORE
+                                    </th>
 
-                        </tr>
+                                    <th>
+                                        DATE
+                                    </th>
 
-                    </thead>
+                                    <th>
+                                        ACTION
+                                    </th>
+
+                                </tr>
+
+                            </thead>
 
 
-                    <!-- Dynamic history rows populated by JavaScript -->
+                            <!-- Dynamic history rows populated by JavaScript -->
 
-                    <tbody id="history-tbody">
+                            <tbody id="history-tbody">
 
-                        <!-- Default state before any saved reports exist -->
+                                <!-- Default state before any saved reports exist -->
 
-                        <tr class="empty-history">
+                                <tr class="empty-history">
 
-                            <td colspan="6">
-                                No analysis history available.
-                            </td>
+                                    <td colspan="6">
+                                        No analysis history available.
+                                    </td>
 
-                        </tr>
+                                </tr>
 
-                    </tbody>
+                            </tbody>
 
-                </table>
+                        </table>
+
+                    </div>
+
+                </div>
 
             </div>
 

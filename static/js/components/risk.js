@@ -91,10 +91,7 @@ export function renderRiskProfile(
             report.risk_confidence
         );
 
-    // FIX (B1): the HTML template already renders a static "/ 100"
-    // label next to #report-risk-score, so appending "/100" here
-    // produced "39/100 /100". Set ONLY the number and let the static
-    // label render once.
+    // Set numeric score value
     setText(
         "#report-risk-score",
         compositeScore !== null
@@ -187,23 +184,7 @@ export function renderRiskProfile(
         marketSensitivity || {}
     );
 
-    /*
-     * FIX (B3): the "Contract" card the user actually sees uses the
-     * #pillar-contract-value / #pillar-contract-bar /
-     * #pillar-contract-detail DOM elements, while the backend
-     * returns the security/structural pillar under the key
-     * "structural" in risk_profile.pillars. Previously the data was
-     * written to #pillar-structural-* elements (which don't exist in
-     * the served template), so the visible Contract card never
-     * updated and always showed its placeholder. The structural
-     * pillar is now rendered directly into the contract elements,
-     * and the dead "contract"-key lookup block was removed.
-     *
-     * Native assets (BTC/ETH/…) return a not-applicable security
-     * object, which buildPillarDetail() renders as
-     * "Not applicable — native assets have no smart contract to
-     * analyze" instead of a bare "—".
-     */
+    // Map structural/security pillar data to contract card elements
     let contractPillar = Object.assign({}, firstDefined(
         getPillar(report, "structural"),
         getPillar(report, "contract")

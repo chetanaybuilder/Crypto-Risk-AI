@@ -17,20 +17,44 @@ from utils.helpers import (
     _http_get_cmc,
     _http_get_market,
 )
-from utils.math_helpers import percentage_change, numeric, optional_numeric
-from typing import Dict, Any, List, Optional
-from config import *
-from extensions import *
-from utils.errors import *
+from typing import Any, Dict, List, Optional
+
+from config import (
+    CMC_API_KEY,
+    CMC_API_URL,
+    COINGECKO_API_KEY,
+    COINGECKO_API_URL,
+    COINGECKO_AUTH_HEADER,
+    COINGECKO_MAX_RETRIES,
+    COINGECKO_PLAN,
+    COIN_RESOLUTION_CACHE_TTL,
+    COIN_RESOLUTION_MISS_TTL,
+    ENABLE_BINANCE_FALLBACK,
+    HISTORY_CACHE_TTL,
+    HISTORY_STALE_MAX_AGE,
+    MARKET_CACHE_TTL,
+    MARKET_CAP_CACHE_TTL,
+    MARKET_STALE_MAX_AGE,
+    MARKET_TIMEOUT,
+    PROVIDER_COOLDOWN_429,
+    PROVIDER_COOLDOWN_DEFAULT,
+    PROVIDER_COOLDOWN_FORBIDDEN,
+    SUPPORTED_HISTORY_DAYS,
+    TOKEN_MAP,
+    _mask_secret,
+)
+from extensions import _cache_lock, _history_cache, _market_cache, _market_cap_cache
+from utils.errors import MarketDataUnavailableError, UnsupportedAssetError
+from utils.math_helpers import numeric, optional_numeric, percentage_change
 
 logger = logging.getLogger(__name__)
+
 
 def _cache_coin_resolution(
     symbol: str,
     coin_id: Optional[str],
 ) -> None:
     """Store a (possibly negative) coin-id resolution result."""
-
     with _cache_lock:
         _coin_resolution_cache[symbol] = {
             "coin_id": coin_id,
@@ -42,28 +66,9 @@ def resolve_coin_id(
     symbol: str,
 ) -> Optional[str]:
     """
-    Resolve a user-supplied ticker to a verified CoinGecko coin id.
-
-    FIX (Bug 5): previously this was a pure TOKEN_MAP lookup and any
-    ticker outside the hardcoded allowlist raised
-    UnsupportedAssetError immediately — a hard, permanent failure
-    that users perceived as "sometimes it just doesn't work". Now:
-
-      1. TOKEN_MAP is checked first (no network call).
-      2. The persistent _coin_resolution_cache is consulted
-         (positive results cached for COIN_RESOLUTION_CACHE_TTL,
-         misses for the shorter COIN_RESOLUTION_MISS_TTL).
-      3. Unknown symbols are resolved dynamically via CoinGecko's
-         /search endpoint and cached.
-      4. UnsupportedAssetError is raised only when a symbol truly
-         cannot be resolved — a clear 400 UNSUPPORTED_ASSET,
-         distinct from the 502 MARKET_DATA_UNAVAILABLE used for
-         provider failures.
-
-    Returns None (without raising) when CoinGecko is on cooldown or
-    the lookup fails transiently, so callers degrade to a
-    market-unavailable response instead of claiming the asset is
-    unsupported.
+    Resolve a user-supplied asset symbol to a verified CoinGecko coin id.
+    Consults TOKEN_MAP first, then resolution cache, then dynamic search API.
+    Raises UnsupportedAssetError if the asset is not recognized.
     """
 
     symbol = normalize_symbol(
@@ -236,12 +241,6 @@ def fetch_coingecko_market(
 
     if not coin_id:
         market = empty_market_data(symbol)
-        # BUG FIX: previously always said "could not resolve symbol",
-        # even when the real reason was an active CoinGecko cooldown
-        # (rate limit / outage). That misleads whoever's reading the
-        # unavailable_reason (logs, frontend, support) into thinking
-        # the symbol itself is bad rather than a transient provider
-        # issue. Report the real cause.
         if _provider_is_cooling("CoinGecko"):
             market["unavailable_reason"] = (
                 "CoinGecko is temporarily cooling down after a provider "
@@ -251,23 +250,9 @@ def fetch_coingecko_market(
             market["unavailable_reason"] = f"CoinGecko could not resolve symbol {symbol}."
         return market
 
-    # CoinGecko is now the single source — wrap the upstream call in a
-    # short retry loop so a single transient hiccup (timeout, 5xx,
-    # connection reset) doesn't take down the whole report. 429s are
-    # NOT retried here except for short Retry-After waits: 429 is
-    # handled by the provider cooldown system (Retry-After), and 4xx
-    # (bad request) means the request itself is bad and retrying would
-    # be pointless.
+    # Execute request with retry loop for transient transport errors
     last_error_reason = None
     last_status_code = None
-    # BUG FIX: response/status_code/error_reason must be initialized
-    # before the loop. If COINGECKO_MAX_RETRIES were ever 0 (bad env
-    # var, misconfiguration, etc.) the loop body below never executes,
-    # and referencing `response` afterward would raise
-    # UnboundLocalError, crashing this entire function instead of
-    # degrading gracefully to an "unavailable" result.
-    # fetch_coingecko_history() (below) already guards against this
-    # correctly — this function didn't, which was the inconsistency.
     response = None
     status_code = None
     error_reason = None
@@ -448,9 +433,6 @@ def fetch_coingecko_market(
         })
 
     except UnsupportedAssetError:
-        # FIX (Bug 5): let "unsupported asset" bubble up so the API
-        # layer can return a distinct 400 UNSUPPORTED_ASSET instead
-        # of a generic 502 market-unavailable response.
         raise
 
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
@@ -529,16 +511,6 @@ def fetch_market_data(
                         default=0,
                     )
 
-                    # BUG FIX: this used to special-case BTC to an
-                    # 86400s (24h) TTL, copied from the *history* cache
-                    # logic below (where a 24h TTL makes sense because
-                    # BTC history is only used as a benchmark series
-                    # for beta calculations). Applied to the *live*
-                    # market snapshot instead, it meant BTC's current
-                    # price/24h change/volume could be shown up to a
-                    # full day stale to users, while every other coin
-                    # refreshed on the normal TTL. Live snapshots
-                    # should always use the normal TTL.
                     effective_ttl = MARKET_CACHE_TTL
                     if (
                         cached.get("available")
@@ -578,8 +550,6 @@ def fetch_market_data(
                             default=0,
                         )
 
-                        # BUG FIX: same as above — no BTC-specific 24h
-                        # TTL for the live snapshot cache.
                         effective_ttl = MARKET_CACHE_TTL
                         if (
                             cached.get("available")
@@ -610,9 +580,6 @@ def fetch_market_data(
             try:
                 market = fetch_coingecko_market(symbol)
             except UnsupportedAssetError:
-                # FIX (Bug 5): propagate so the API layer can return a
-                # distinct 400 UNSUPPORTED_ASSET. Not a provider
-                # failure — do not touch the failure streak.
                 raise
             except Exception as exc:
                 logger.exception(
@@ -668,22 +635,7 @@ def fetch_market_data(
                             "serving the last known snapshot."
                         )
 
-            # --------------------------------------------------------
-            # Binance / CoinMarketCap fallback
-            # --------------------------------------------------------
-            # Only reached when:
-            #   1. CoinGecko live call returned unavailable, AND
-            #   2. Stale cache is missing or too old.
-            # The entire market dict is replaced — fields from two
-            # providers are never mixed within one report.
-            #
-            # FIX: Binance is geoblocked (HTTP 451) from Render's IP
-            # ranges — this is a permanent network-level block, not a
-            # transient failure, so calling it on every CoinGecko
-            # failure only adds latency and log noise with zero chance
-            # of success. Gated behind ENABLE_BINANCE_FALLBACK (default
-            # off); re-enable if you move to a host Binance doesn't block.
-            # --------------------------------------------------------
+            # Fallback providers (Binance / CMC) if CoinGecko is unavailable
             if not market.get("available") and ENABLE_BINANCE_FALLBACK:
                 try:
                     binance_market = fetch_binance_market(symbol)
@@ -766,8 +718,6 @@ def fetch_market_data(
             return market
 
     except UnsupportedAssetError:
-        # FIX (Bug 5): propagate so /api/analyze and /api/market can
-        # return a distinct 400 UNSUPPORTED_ASSET response.
         raise
 
     except Exception as exc:
@@ -1295,11 +1245,7 @@ def fetch_price_history(
         # coin_id is used here as in fetch_coingecko_market() so the
         # historical series and the live snapshot come from one dataset.
         #
-        # FIX: skip the live call entirely if CoinGecko is already on
-        # cooldown (e.g. the market fetch just got 429'd). Firing a
-        # second request into the same rate-limit window wastes a call
-        # against a quota that will fail anyway, and delays falling
-        # through to the stale cache / fallback providers below.
+        # Skip live call if CoinGecko is cooling down
         if _provider_is_cooling("CoinGecko"):
             logger.info(
                 "[HISTORY] symbol=%s CoinGecko cooling down — skipping live call",
@@ -1332,13 +1278,7 @@ def fetch_price_history(
                 )
                 return list(stale_prices)
 
-        # --------------------------------------------------------
-        # Binance history fallback
-        # --------------------------------------------------------
-        # FIX: gated off by default — see ENABLE_BINANCE_FALLBACK note
-        # in fetch_market_data(). Binance returns HTTP 451 (geoblocked)
-        # on Render, so this call never succeeds there; it only adds
-        # latency to the failure path.
+        # Fallback to Binance history if enabled
         if not prices and ENABLE_BINANCE_FALLBACK:
             try:
                 binance_prices = fetch_binance_history(symbol, days)

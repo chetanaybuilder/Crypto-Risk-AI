@@ -1491,22 +1491,15 @@ def run_analysis(
         "Evaluating available contract security data.",
     )
 
-    # Debug: confirms exactly what run_analysis received for the
-    # contract fields. Check Render logs for this line after running
-    # an analysis to see whether chain_id/contract_address are even
-    # reaching this function.
-    logger.warning(
-        "[Contract Debug] run_analysis received symbol=%s chain_id=%r contract_address=%r",
+    logger.info(
+        "Processing security audit for symbol=%s, chain=%s, contract=%s",
         symbol,
         chain_id,
         contract_address,
     )
 
     if symbol.upper() in L1_WHITELIST:
-        logger.warning(
-            "[Contract Debug] %s is in L1_WHITELIST — treating as native asset, contract check skipped.",
-            symbol.upper(),
-        )
+        logger.info("%s is in L1_WHITELIST (native layer-1 asset).", symbol.upper())
         security = {
             "status": "N/A",
             "label": "Native Layer-1 Asset",
@@ -1520,19 +1513,16 @@ def run_analysis(
         }
 
     elif chain_id and contract_address:
-        print(f"[Contract Audit] Calling security API for {contract_address} on chain {chain_id}")
+        logger.info("Auditing contract security for %s on chain %s", contract_address, chain_id)
         security = fetch_token_security(
             chain_id,
             contract_address,
         )
 
     else:
-        logger.warning(
-            "[Contract Debug] Skipped GoPlus call — chain_id or contract_address "
-            "missing/falsy for %s (chain_id=%r, contract_address=%r).",
+        logger.debug(
+            "Contract security check omitted for %s (no chain or contract address provided)",
             symbol,
-            chain_id,
-            contract_address,
         )
         security = {
             "status": "Unavailable",
@@ -1547,10 +1537,7 @@ def run_analysis(
         }
 
     if not isinstance(security, dict):
-        logger.warning(
-            "[Contract Debug] security result was not a dict (%r) — forcing unavailable.",
-            type(security),
-        )
+        logger.warning("Security provider returned invalid structure: %s", type(security))
         security = {
             "status": "Unavailable",
             "confidence": 0,

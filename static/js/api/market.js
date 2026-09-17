@@ -7,10 +7,7 @@ import { normalizeSymbol } from '../utils/dom.js';
    LIVE MARKET POLLING
    ============================================================ */
 
-// FIX (Bug 3): raised from 15s to 30s. With CoinGecko free-tier
-// limits, a 15s interval alone could exhaust quota when a dashboard
-// tab was left open, causing later /api/analyze calls to hit the
-// provider cooldown and return available: false.
+// Live market polling interval (30 seconds to respect rate limits)
 export const LIVE_MARKET_POLL_INTERVAL_MS = 30000;
 
 export let marketBackoffUntil = 0;
@@ -74,25 +71,14 @@ export function startLivePolling(symbol) {
     state.currentSymbol =
         normalizedSymbol;
 
-    /*
-     * FIX (Bug 3): immediate refresh — but ONLY when the tab is
-     * visible AND the last market fetch is older than the polling
-     * interval. This avoids an unnecessary request right after the
-     * tab becomes visible again when a fetch already happened within
-     * the backend's MARKET_CACHE_TTL window.
-     */
+    // Refresh immediately only when visible and outside cooldown window
     if (!document.hidden && canFetchMarketNow(normalizedSymbol)) {
         refreshLiveMarket(
             normalizedSymbol
         );
     }
 
-    /*
-     * FIX (Bug 3): then every 30 seconds (was 15s). Never poll while
-     * the tab is hidden — the visibilitychange handler stops the
-     * timer entirely, and this guard also protects against a missed
-     * visibility event.
-     */
+    // Poll on interval while document is visible
     state.livePollTimer =
         setInterval(() => {
 
@@ -146,9 +132,7 @@ export async function refreshLiveMarket(
     state.isLiveRequestInFlight =
         true;
 
-    // FIX (Bug 3): record when the last market fetch happened so
-    // startLivePolling() can skip the immediate refresh if the tab
-    // becomes visible again within the cache window.
+    // Record fetch timestamp for gate management
     setLastFetchTime(normalizedSymbol, Date.now());
 
     try {

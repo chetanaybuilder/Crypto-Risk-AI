@@ -1,10 +1,13 @@
 import logging
-from services.db_service import get_analysis_job, update_analysis_job, save_analysis
+
+from services.db_service import get_analysis_job, save_analysis, update_analysis_job
 from services.risk_engine import run_analysis
 
 logger = logging.getLogger(__name__)
 
-def execute_analysis_job(job_id):
+
+def execute_analysis_job(job_id: str) -> None:
+    """Worker task executed in the background thread pool to run asynchronous risk analysis."""
     job = get_analysis_job(job_id, user_id=None)
     if not job:
         logger.error("Analysis worker could not find job: %s", job_id)
@@ -15,17 +18,17 @@ def execute_analysis_job(job_id):
     contract_address = job.get("contract_address") or job.get("contractAddress")
     user_id = job.get("user_id")
 
-    print(f"[PIPELINE TRACE 3] Analysis worker starting for symbol={symbol}, chain={chain_id}, address={contract_address}")
+    logger.info("Executing analysis job %s for symbol=%s, chain=%s, address=%s", job_id, symbol, chain_id, contract_address)
 
     update_analysis_job(job_id, status="running", started=True)
 
-    def progress_callback(progress, stage, stage_title, message):
+    def progress_callback(progress: int, stage: str, stage_title: str, message: str) -> None:
         update_analysis_job(
             job_id,
             progress=progress,
             stage=stage,
             stage_title=stage_title,
-            message=message
+            message=message,
         )
 
     try:
@@ -33,10 +36,9 @@ def execute_analysis_job(job_id):
             symbol=symbol,
             chain_id=chain_id,
             contract_address=contract_address,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
         )
-        
-        # Save it as a finalized analysis linked to the user
+
         saved = save_analysis(user_id, symbol, report)
 
         update_analysis_job(
@@ -46,20 +48,20 @@ def execute_analysis_job(job_id):
             report=report,
             meta={"analysis_id": saved},
             completed=True,
-            message="Analysis complete."
+            message="Analysis complete.",
         )
 
     except Exception as exc:
-        logger.exception("Job %s failed.", job_id)
-        
+        logger.exception("Job %s failed: %s", job_id, exc)
+
         error_msg = str(exc)
         if "timeout" in error_msg.lower():
             error_msg = "Data provider timeout. Please try again later."
-            
+
         update_analysis_job(
             job_id,
             status="failed",
             error=error_msg,
             message="Analysis failed.",
-            completed=True
+            completed=True,
         )

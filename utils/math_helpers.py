@@ -3,11 +3,6 @@ import math
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from utils.helpers import (
-    first_defined,
-    json_safe,
-    normalize_symbol,
-)
 
 def numeric(
     value: Any,

@@ -1,120 +1,170 @@
 # CryptoRisk AI
 
-CryptoRisk AI is a production-grade, full-stack intelligence platform that transforms raw cryptocurrency tickers into structured, AI-powered risk assessment reports. Built for high-frequency market participants and researchers, the application cuts through market hype by synthesizing complex uncertainty, downside risks, and actionable signals into an executive-level format.
+CryptoRisk AI is an institutional-grade cryptocurrency intelligence and risk analysis platform. The engine synthesizes quantitative market metrics, smart contract security audits, historical drawdowns, and Google Gemini generative AI reasoning into a multi-pillar risk report for web3 assets.
 
 ---
 
-## Architecture & System Design
+## System Architecture
 
-The project uses a unified architecture where the Flask backend serves both the API and the static frontend assets:
+```
+[ Web Client / Mobile UI ]
+          │ (REST API / Bearer JWT / OAuth)
+          ▼
+┌────────────────────────────────────────────────────────┐
+│                   Flask Application                    │
+│                                                        │
+│  ┌─────────────────┐             ┌──────────────────┐  │
+│  │ Auth & History  │             │ Async Risk Engine│  │
+│  │   Blueprints    │             │ Worker Pools     │  │
+│  └────────┬────────┘             └────────┬─────────┘  │
+└───────────┼───────────────────────────────┼────────────┘
+            │                               │
+    ┌───────┴────────┐       ┌──────────────┴──────────────┐
+    ▼                ▼       ▼              ▼              ▼
+[PostgreSQL]    [Google OIDC] [CoinGecko]  [GoPlus Security] [Google Gemini 2.5]
+(Users, Jobs,   (Sign-In)     (Market &     (Contract Honeypot, (Risk Synthesis &
+ History)                      Liquidity)    Tax, Blacklist)     Regime Modeling)
+```
 
-[ Browser UI ] --(HTTP / OAuth)--> [ Flask App ]
-                                         |
-                           +-------------+-------------+
-                           |                           |
-                           [ Google Gemini API ]       [ PostgreSQL ]
-
-* **Frontend Layer:** HTML5, CSS, and modern JavaScript, served statically by Flask.
-* **Backend Layer:** Python 3.14 and Flask, managing secure user sessions, CSRF protections, and OAuth verification via Authlib.
-* **Intelligence Layer:** Integrates the Google Gemini API to analyze cryptocurrency tickers under strict data policies.
-* **Data Layer:** Persistent relational storage managed via PostgreSQL, maintaining strict foreign-key constraints.
+### Key Architectural Characteristics
+- **Unified Service Architecture:** High-efficiency Flask backend serving both modular RESTful API endpoints and static SPA frontend.
+- **Asynchronous Execution Pipeline:** Thread pool executors decouple compute-heavy multi-provider fetches from web request threads, returning immediate job IDs with polled progress updates.
+- **Multi-Tier Fault Tolerance:** In-memory caching with graceful stale-snapshot fallbacks, automatic rate-limit cooldown management, and defensive parsing guarantees high uptime during external provider degraded states.
+- **Strict Security & Authentication:** Passwords hashed with standard `bcrypt`, tamper-proof HS256 JWT sessions, Google OAuth 2.0 integration, and parameterized PostgreSQL queries via connection pooling.
 
 ---
 
-## Tech Stack
+## Technology Stack
 
 | Layer | Technology |
 | :--- | :--- |
-| **Frontend** | HTML5, Modern CSS3, JavaScript (ES6+) |
-| **Backend** | Python, Flask, Gunicorn |
-| **Authentication** | Google OpenID Connect (OAuth 2.0 via Authlib) |
-| **AI Engine** | Google Gemini API (`gemini-2.5-flash`) |
-| **Database** | PostgreSQL, Psycopg2 |
-| **Project layout** | Single unified Flask application |
+| **Frontend** | Vanilla JavaScript (ES Modules), Custom Modern CSS3 (Dark Luxury Theme), HTML5 |
+| **Backend** | Python 3.14, Flask, Gunicorn (`gthread` async worker model) |
+| **Database** | PostgreSQL with `psycopg2` Threaded Connection Pool & `pgcrypto` UUIDs |
+| **Authentication** | JSON Web Tokens (`PyJWT`), Google OAuth 2.0 (`Authlib`), `bcrypt` |
+| **Market Intelligence**| CoinGecko API (Demo / Pro) with optional CMC / Binance fallback |
+| **Contract Security**| GoPlus Token Security API (EVM Chain Analysis) |
+| **Generative AI** | Google Gemini API (`gemini-2.5-flash`) |
 
 ---
 
 ## Core Features
 
-* **Secure Authentication:** Frictionless Google OAuth login ensuring verified identity mapping and session safety.
-* **Structured Risk Engine:** Generates uniform JSON schemas evaluating asset trends, risk scores, core problems solved, and exact counts of key risks, signals, and watch items.
-* **Persistent User History:** Automatically serializes generated reports to a secure relational database indexed by user identification.
-* **Defensive Error Handling:** Built-in mitigation for API quota exhaustion (`RESOURCE_EXHAUSTED`), malformed JSON recovery, and robust input sanitization.
+- **Multi-Pillar Risk Scoring:** Calculates composite risk index (0–100) combining Volatility, Liquidity, Market Sensitivity (Beta), and Smart Contract Integrity.
+- **Contract Security Scanning:** Automatically analyzes EVM token contracts for honeypots, exorbitant buy/sell taxes, blacklisting capabilities, and ownership privileges via GoPlus.
+- **Native Asset Awareness:** Automatically identifies Layer-1 native assets (BTC, ETH, SOL, AVAX, etc.) and adjusts audit criteria accordingly.
+- **AI Executive Risk Synthesis:** Employs Google Gemini to analyze multi-source data and output structured executive summaries, risk regime assessments, and critical watch items.
+- **Interactive Analysis History:** User analysis history is securely stored in PostgreSQL with collapsible inspection drawers and real-time live market updates.
 
 ---
 
 ## Project Structure
 
+```
 Crypto-Risk-AI/
-├── app.py               # Flask application and API integration
-├── config.py            # Application configuration
-├── extensions.py        # Database and shared state setup
-├── requirements.txt     # Python runtime dependencies
-├── routes/              # Flask blueprints
-├── services/            # Business logic and Gemini integration
-├── static/              # Frontend CSS, JS, and assets
-├── templates/           # Jinja HTML templates
-├── render.yaml          # Render deployment setup
-└── README.md
-
----
-
-## Environment Variables
-
-To run or deploy this project locally, configure the following environment variables in your environment or `.env` file:
-
-SECRET_KEY=your_flask_session_secret
-JWT_SECRET_KEY=your_jwt_secret
-DATABASE_URL=postgresql://user:password@host:port/dbname
-GEMINI_API_KEY=your_google_gemini_api_key
-GOOGLE_CLIENT_ID=your_google_oauth_client_id
-GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
-
----
-
-## Local Development & Setup
-
-1. **Clone the repository:**
-   git clone <your-repository-url>
-   cd <repository-directory>
-
-2. **Set up the environment:**
-   pip install -r requirements.txt
-
-3. **Run the Flask application:**
-   cd Crypto-Risk-Ai
-   python app.py
-
-4. **Access the platform:**
-   Navigate to `http://localhost:5000` in your browser.
-
-## GitHub Setup
-
-For a new GitHub repository, run these commands from the project root:
-
-```bash
-git init
-git add .
-git commit -m "Restructure project into frontend and backend"
-git branch -M main
-git remote add origin https://github.com/<github-username>/<repository-name>.git
-git push -u origin main
+├── app.py                   # Application factory & blueprint registration
+├── config.py                # Environment configuration & provider settings
+├── extensions.py            # DB connection pool, OAuth, and executor setup
+├── pre_start.py             # Pre-deployment database migrations & schema setup
+├── gunicorn.conf.py         # Production WSGI server configuration
+├── render.yaml              # Render blueprint infrastructure configuration
+├── requirements.txt         # Pinned Python production dependencies
+├── .env.example             # Configuration template
+├── routes/                  # Modular Flask blueprints
+│   ├── auth.py              # Signup, login, Google OAuth, and JWT session handling
+│   ├── dashboard.py         # Dashboard view and user summary endpoints
+│   ├── health.py            # Health check, versioning, and provider status
+│   ├── history.py           # Saved report lookup, deletion, and management
+│   ├── market.py            # Live market snapshots and price queries
+│   └── risk.py              # Synchronous & async job risk analysis endpoints
+├── services/                # Business logic & external provider integrations
+│   ├── analysis_worker.py   # Background job runner
+│   ├── auth_service.py      # Password hashing, verification, & JWT decode
+│   ├── coingecko.py         # CoinGecko client, caching, and rate limiting
+│   ├── db_service.py        # Database queries & job lifecycle management
+│   ├── goplus.py            # Smart contract token security analysis
+│   └── risk_engine.py       # Quantitative math & AI synthesis orchestrator
+├── static/                  # Static frontend assets
+│   ├── style.css            # Dark mode design system
+│   └── js/                  # ES modules (state, API clients, UI components)
+├── templates/               # Jinja2 templates
+│   ├── index.html           # Landing & authentication page
+│   └── dashboard.html       # Analytics dashboard & interactive terminal
+└── utils/                   # Helpers, mathematical algorithms, and error classes
 ```
 
-Replace the remote URL with the repository you created on GitHub. Keep `.env` local; it is excluded by `.gitignore` and must not be committed.
+---
 
-## Render Deployment
+## Getting Started
 
-This repository includes `render.yaml` for a Render Blueprint deployment.
+### Prerequisites
+- Python 3.10+
+- PostgreSQL database (local or cloud provider such as Supabase, Neon, or Render)
+- Google Gemini API Key
+- CoinGecko API Key (Demo or Pro)
 
-1. Push the repository to GitHub.
-2. In Render, choose **New > Blueprint** and select this repository.
-3. Deploy the Blueprint. It creates a single Flask backend and PostgreSQL database.
-4. In the web service's Environment settings, add these secret values:
-   - `GEMINI_API_KEY`
-   - `GOOGLE_CLIENT_ID`
-   - `GOOGLE_CLIENT_SECRET`
-5. In Google Cloud Console, add the backend callback URL to the OAuth authorized redirect URIs:
-   `https://cryptorisk-ai-backend.onrender.com/api/auth/google/callback`
+### 1. Clone & Configure Environment
 
-Render uses `gunicorn --chdir Crypto-Risk-Ai app:app --bind 0.0.0.0:$PORT` to serve both the API and the frontend.
+```bash
+git clone https://github.com/chetanaybuilder/Crypto-Risk-AI.git
+cd Crypto-Risk-AI
+cp .env.example .env
+```
+
+Edit `.env` and provide your credentials:
+
+```ini
+FLASK_ENV=development
+SECRET_KEY=your_secure_random_key
+DATABASE_URL=postgresql://user:password@localhost:5432/cryptorisk
+GEMINI_API_KEY=your_gemini_api_key
+COINGECKO_API_KEY=your_coingecko_key
+COINGECKO_PLAN=demo
+```
+
+### 2. Install Dependencies
+
+```bash
+python -m venv .venv
+# On Windows:
+.venv\Scripts\activate
+# On macOS/Linux:
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+### 3. Initialize Database
+
+Run the database migration and schema setup:
+
+```bash
+python pre_start.py
+```
+
+### 4. Run Development Server
+
+```bash
+python app.py
+```
+
+Navigate to `http://localhost:5000` in your browser.
+
+---
+
+## Production Deployment
+
+### Deployment with Render Blueprint
+
+This repository includes a `render.yaml` blueprint defining the web service, background task commands, and PostgreSQL database.
+
+1. Connect your GitHub repository to Render.
+2. Select **New > Blueprint** and link the repository.
+3. In the Render service dashboard, supply secret environment variables (`GEMINI_API_KEY`, `COINGECKO_API_KEY`, and optional Google OAuth credentials).
+4. Render will execute `python pre_start.py` before spawning the Gunicorn server via `gunicorn --config gunicorn.conf.py app:app`.
+
+---
+
+## License
+
+MIT License. See `LICENSE` for details.

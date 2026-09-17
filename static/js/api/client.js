@@ -224,13 +224,8 @@ export async function apiRequest(url, options = {}) {
 
         requestError.payload = payload;
 
-        // FIX (Bug 5/6): surface the backend's error code (e.g.
-        // UNSUPPORTED_ASSET, MARKET_DATA_UNAVAILABLE) on the Error so
-        // the UI can translate it into a friendly message instead of
-        // showing a raw provider error string.
-        requestError.code =
-            payload?.code ||
-            null;
+        // Expose backend error code if provided for client-side message mapping
+        requestError.code = payload?.code || null;
 
         throw requestError;
     }
@@ -275,13 +270,7 @@ export function clearAnalysisError() {
 
 
 /* ============================================================
-   FRIENDLY ERROR MESSAGES
-   ============================================================
-   FIX (Bug 6): the backend/API layer produces raw error strings
-   like "CoinGecko returned HTTP 429; retry_after=12." — meaningless
-   (and scary) to users who don't know what CoinGecko is. This
-   translator maps known error codes / patterns to user-facing text
-   and falls back to the original message for anything unknown.
+   USER-FRIENDLY ERROR FORMATTING
    ============================================================ */
 
 export function friendlyErrorMessage(error) {
@@ -387,12 +376,7 @@ export function renderUser(user) {
 
 /* ============================================================
    PROGRESS SYSTEM
-   ============================================================
-   FIX: this now maps the backend's real `stage` values
-   (market, history, quant, risk, security, stress, evidence,
-   ai, save, complete — see ANALYSIS_STAGES in app.py) onto a
-   visual progress bar, driven by real polled data instead of
-   a fixed-duration fake animation.
+   Maps backend pipeline stages to UI progress metrics
    ============================================================ */
 
 export const PROGRESS_STAGES = {

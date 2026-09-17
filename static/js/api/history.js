@@ -65,15 +65,7 @@ export async function loadHistoryReport(
     stopLivePolling();
 
     try {
-        const payload =
-            await apiRequest(
-                API.history(id)
-            );
-
-        console.log(
-            "History report payload:",
-            payload
-        );
+        const payload = await apiRequest(API.history(id));
 
         const report =
             getReportFromPayload(
@@ -126,7 +118,6 @@ export async function loadHistoryReport(
             error
         );
 
-        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
             friendlyErrorMessage(error) ||
             "Unable to load report."
@@ -177,7 +168,6 @@ export async function deleteReport(id) {
             error
         );
 
-        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
             friendlyErrorMessage(error) ||
             "Unable to delete report."

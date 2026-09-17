@@ -159,7 +159,7 @@ def fetch_token_security(chain_id, contract_address):
                 "Contract security provider unavailable."
             )
 
-        print(f"[PIPELINE TRACE 4] GoPlus response status={status_code} body={response.text[:200]}")
+        logger.debug("GoPlus response status=%s body=%s", status_code, response.text[:200] if response.text else "")
 
         try:
             payload = response.json()
@@ -336,8 +336,6 @@ def fetch_token_security(chain_id, contract_address):
             95,
         )
 
-        # Fixed: status previously always evaluated to "Audited" in
-        # both branches. Now correctly reflects whether red flags exist.
         if red_flags:
             status = "Flagged"
         else:
@@ -363,20 +361,18 @@ def fetch_token_security(chain_id, contract_address):
             },
         }
 
-        logger.warning(
-            "[Contract Debug] Success — status=%s available_fields=%s red_flags=%s",
+        logger.info(
+            "GoPlus contract security resolved: status=%s, fields=%d, red_flags=%d",
             status,
             available_fields,
-            red_flags,
+            len(red_flags),
         )
 
         return json_safe(security_report)
 
     except Exception as exc:
-        print(f"[Contract Audit ERROR] {exc}")
         logger.exception(
-            "Unexpected GoPlus security lookup error "
-            "for chain=%s addr=%s: %s",
+            "Unexpected GoPlus security lookup error for chain=%s addr=%s: %s",
             numeric_chain_id,
             address,
             exc,

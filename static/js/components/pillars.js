@@ -41,15 +41,7 @@ export function renderPillar(
     const detailElement =
         $(`#pillar-${name}-detail`);
 
-    /*
-     * CRITICAL FIX:
-     * Clear every pillar first.
-     *
-     * Without this, if report #1 has
-     * liquidity and report #2 doesn't,
-     * report #1's liquidity score remains
-     * visible.
-     */
+    // Reset pillar state if score is undefined or null
     if (
         score === null ||
         score === undefined ||
@@ -157,12 +149,7 @@ export function buildPillarDetail(
             pillar.interpretation
         );
 
-    /*
-     * FIX (B3): native assets (BTC/ETH/…) have no smart contract, so
-     * the security/structural pillar is "not applicable". That must
-     * never render as a bare "—" (which reads as "broken/unknown").
-     * A not-applicable signal is shown as an explanation instead.
-     */
+    // Native layer-1 assets have no smart contract to audit
     if (pillar.not_applicable === true) {
         return (
             "Not applicable — native assets (e.g. BTC/ETH) have " +

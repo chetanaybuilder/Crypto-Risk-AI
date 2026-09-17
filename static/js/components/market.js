@@ -501,10 +501,6 @@ export function renderReport(
     }
 
     document.body.classList.add('report-active');
-    console.log(
-        "Rendering CryptoRisk report:",
-        report
-    );
 
     state.latestReport =
         report;

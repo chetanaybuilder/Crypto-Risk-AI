@@ -1,26 +1,26 @@
 import logging
 
-from flask import Blueprint, jsonify, g
+from flask import Blueprint, g, jsonify
 
 from services.auth_service import login_required_api
 from services.db_service import (
-    get_analysis_by_id,
-    delete_analysis,
     delete_all_analyses,
-    get_user_history,  # NOTE: was missing — caused NameError on delete
+    delete_analysis,
+    get_analysis_by_id,
+    get_user_history,
 )
 
 logger = logging.getLogger(__name__)
 
-bp = Blueprint('history', __name__)
+bp = Blueprint("history", __name__)
 
 
 @bp.get("/api/history/<analysis_id>")
 @login_required_api
 def history_single(analysis_id):
+    """Retrieve a single saved analysis report by ID."""
     try:
         analysis = get_analysis_by_id(analysis_id, g.current_user["id"])
-
         if not analysis:
             return jsonify({
                 "success": False,
@@ -44,9 +44,9 @@ def history_single(analysis_id):
 @bp.delete("/api/history/<analysis_id>")
 @login_required_api
 def history_delete(analysis_id):
+    """Delete a single analysis report for the authenticated user."""
     try:
         deleted = delete_analysis(analysis_id, g.current_user["id"])
-
         if not deleted:
             return jsonify({
                 "success": False,
@@ -70,9 +70,9 @@ def history_delete(analysis_id):
 @bp.delete("/api/history")
 @login_required_api
 def history_delete_all():
+    """Delete all analysis reports for the authenticated user."""
     try:
         count = delete_all_analyses(g.current_user["id"])
-
         return jsonify({
             "success": True,
             "deleted": count,

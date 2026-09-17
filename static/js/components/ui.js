@@ -2164,6 +2164,41 @@ document.addEventListener(
             );
         }
 
+        const historyToggleHeader =
+            $("#history-toggle-header");
+
+        if (historyToggleHeader) {
+            const toggleHistory = () => {
+                const section =
+                    $("#history-section") ||
+                    historyToggleHeader.closest(".history-section");
+
+                const content =
+                    $("#history-content");
+
+                if (!section || !content) return;
+
+                const isExpanded =
+                    section.classList.contains("is-expanded");
+
+                const nextState =
+                    !isExpanded;
+
+                section.classList.toggle("is-expanded", nextState);
+                content.classList.toggle("is-open", nextState);
+                historyToggleHeader.setAttribute("aria-expanded", String(nextState));
+                content.setAttribute("aria-hidden", String(!nextState));
+            };
+
+            historyToggleHeader.addEventListener("click", toggleHistory);
+            historyToggleHeader.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleHistory();
+                }
+            });
+        }
+
         $all(
             "form[data-auth]"
         ).forEach(
@@ -2179,10 +2214,7 @@ document.addEventListener(
 
         setupVisibilityHandling();
 
-        // FIX (Bug 7): sync the job polling ceiling from the
-        // backend's real ANALYSIS_JOB_TIMEOUT_SECONDS (via /health)
-        // instead of hardcoding it. Fire-and-forget — the fallback
-        // ceiling is already valid.
+        // Synchronize job polling ceiling with backend timeout from /health
         syncJobPollCeiling();
 
         if (

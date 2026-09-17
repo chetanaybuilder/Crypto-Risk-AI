@@ -15,12 +15,7 @@ import { renderHistory } from '../components/history.js';
 
 export const JOB_POLL_INTERVAL_MS = 1500;
 
-// FIX (Bug 7): JOB_POLL_MAX_MS is no longer hardcoded at 340000.
-// It is derived from the backend's real ANALYSIS_JOB_TIMEOUT_SECONDS
-// (exposed via GET /health as "analysis_job_timeout_seconds") plus a
-// 60s headroom, and refreshed at startup by syncJobPollCeiling().
-// The value below is only the fallback for when /health is
-// unreachable (backend default is 150s).
+// Dynamic job poll ceiling synchronized with backend timeout
 export const JOB_POLL_DEFAULT_TIMEOUT_SECONDS = 150;
 export const JOB_POLL_HEADROOM_MS = 60000;
 
@@ -37,13 +32,7 @@ export async function syncJobPollCeiling() {
         );
 
         if (Number.isFinite(seconds) && seconds > 0) {
-            JOB_POLL_MAX_MS =
-                seconds * 1000 + JOB_POLL_HEADROOM_MS;
-
-            console.log(
-                "CryptoRisk job poll ceiling synced from /health:",
-                JOB_POLL_MAX_MS + "ms"
-            );
+            JOB_POLL_MAX_MS = seconds * 1000 + JOB_POLL_HEADROOM_MS;
         }
     } catch (error) {
         console.warn(
@@ -67,15 +56,7 @@ export async function loadDashboard() {
     }
 
     try {
-        const payload =
-            await apiRequest(
-                API.dashboard
-            );
-
-        console.log(
-            "CryptoRisk dashboard payload:",
-            payload
-        );
+        const payload = await apiRequest(API.dashboard);
 
         if (payload.user) {
             renderUser(
@@ -175,7 +156,6 @@ export async function loadDashboard() {
             error
         );
 
-        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
             friendlyErrorMessage(error) ||
             "Unable to load dashboard."
@@ -185,18 +165,7 @@ export async function loadDashboard() {
 
 
 /* ============================================================
-   JOB POLLING (async analyze flow)
-   ============================================================
-   FIX (core bug fix): the backend runs the full pipeline
-   (market fetch, history x2, quant, security, stress, evidence,
-   Gemini) which can legitimately take well over the timeout
-   window of most reverse proxies / browsers when called
-   synchronously via POST /api/analyze. The backend already
-   exposes an async job flow for exactly this reason:
-     POST /api/analyze/start          -> { job_id }
-     GET  /api/analyze/status/<id>    -> { job: { status, progress,
-                                            stage, ... }, latest? }
-   We now use that flow exclusively from the UI.
+   JOB POLLING (Asynchronous Analysis Execution)
    ============================================================ */
 
 export function stopJobPolling() {
@@ -371,12 +340,7 @@ export async function runAnalysis(
     startProgress();
 
     try {
-        // Step 1: start the background job.
-        //
-        // FIX (Bug 2): include the optional contract security fields
-        // when BOTH are provided — the backend runs the GoPlus
-        // structural check only when it receives chain_id AND
-        // contract_address together.
+        // Attach optional contract security parameters if supplied
         const requestBody = {
             token_symbol: normalizedSymbol
         };
@@ -414,20 +378,12 @@ export async function runAnalysis(
             requestBody.contract_address = contractAddress;
         }
 
-        // [PIPELINE TRACE 1]
-        console.log(`[PIPELINE TRACE 1] Dispatching analysis for ${normalizedSymbol} with chain_id=${chainId} and contract_address=${contractAddress}`);
-
         const startPayload = await apiRequest(
             API.analyzeStart,
             {
                 method: "POST",
                 body: requestBody
             }
-        );
-
-        console.log(
-            "CryptoRisk analyze/start payload:",
-            startPayload
         );
 
         const jobId = firstDefined(
@@ -488,9 +444,7 @@ export async function runAnalysis(
         finishProgress();
 
         if (state.currentSymbol) {
-            // FIX (Problem 1): Use the fresh market data from the newly completed 
-            // analysis report to update the live UI immediately. This avoids a 
-            // redundant /api/market call right after a job finishes.
+            // Apply fresh market data from newly completed report
             const jobMarket = getMarket(report);
             if (jobMarket && Object.keys(jobMarket).length > 0) {
                 updateLiveMarket(jobMarket);
@@ -505,8 +459,6 @@ export async function runAnalysis(
             error
         );
 
-        // FIX (Bug 6): translate raw provider errors into
-        // user-friendly messages before showing them.
         showAnalysisError(
             friendlyErrorMessage(error) ||
             "Analysis failed."

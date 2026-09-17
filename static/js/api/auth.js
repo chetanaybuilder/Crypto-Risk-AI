@@ -393,7 +393,6 @@ export async function handleAuthForm(
         window.location.href =
             "/dashboard";
     } catch (error) {
-        // FIX (Bug 6): friendly message instead of raw error string.
         showAnalysisError(
             friendlyErrorMessage(error) ||
             "Authentication failed."

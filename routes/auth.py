@@ -1,27 +1,32 @@
 import logging
 from urllib.parse import quote
 
-from flask import Blueprint, request, jsonify, redirect, url_for, g
-from werkzeug.security import check_password_hash
+from flask import Blueprint, g, jsonify, redirect, request, url_for
 
-from utils.helpers import rate_limit, _client_ip
 from config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
 from extensions import oauth
-from services.auth_service import login_required_api, current_user, create_jwt_for_user
+from services.auth_service import (
+    create_jwt_for_user,
+    current_user,
+    login_required_api,
+    verify_password,
+)
 from services.db_service import (
     create_local_user,
-    get_user_by_email,
     create_or_update_google_user,
+    get_user_by_email,
     row_to_user,
 )
+from utils.helpers import _client_ip, rate_limit
 
 logger = logging.getLogger(__name__)
 
-bp = Blueprint('auth', __name__)
+bp = Blueprint("auth", __name__)
 
 
 @bp.post("/api/auth/signup")
 def signup():
+    """Register a new user account with email and password."""
     try:
         data = request.get_json(silent=True) or {}
 
@@ -38,7 +43,7 @@ def signup():
         if not email or "@" not in email:
             return jsonify({
                 "success": False,
-                "error": "Enter a valid email.",
+                "error": "Enter a valid email address.",
             }), 400
 
         if len(password) < 8:
@@ -73,12 +78,13 @@ def signup():
         logger.exception("Signup failed: %s", exc)
         return jsonify({
             "success": False,
-            "error": "Signup failed.",
+            "error": "Signup failed. Please try again later.",
         }), 500
 
 
 @bp.post("/api/auth/login")
 def login():
+    """Authenticate user with email and password, returning a JWT token."""
     try:
         data = request.get_json(silent=True) or {}
 
@@ -109,16 +115,10 @@ def login():
         if not password_hash:
             return jsonify({
                 "success": False,
-                "error": "This account uses Google sign-in.",
+                "error": "This account was created with Google sign-in.",
             }), 401
 
-        # NOTE: was `bcrypt.check_password_hash(...)`, which does not exist
-        # on the bcrypt module. Switched to werkzeug's check_password_hash,
-        # assuming create_local_user hashes passwords with
-        # werkzeug.security.generate_password_hash. If you are actually
-        # hashing with raw bcrypt (bcrypt.hashpw), use bcrypt.checkpw(
-        # password.encode(), password_hash.encode()) instead.
-        if not check_password_hash(password_hash, password):
+        if not verify_password(password, password_hash):
             return jsonify({
                 "success": False,
                 "error": "Invalid email or password.",
@@ -136,12 +136,13 @@ def login():
         logger.exception("Login failed: %s", exc)
         return jsonify({
             "success": False,
-            "error": "Login failed.",
+            "error": "Login failed. Please try again later.",
         }), 500
 
 
 @bp.get("/api/auth/google")
 def google_login():
+    """Initiate Google OAuth flow."""
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return jsonify({
             "success": False,
@@ -151,7 +152,6 @@ def google_login():
     try:
         redirect_uri = url_for("auth.google_callback", _external=True)
         return oauth.google.authorize_redirect(redirect_uri)
-
     except Exception as exc:
         logger.exception("Google authorization failed: %s", exc)
         return jsonify({
@@ -162,6 +162,7 @@ def google_login():
 
 @bp.get("/api/auth/google/callback")
 def google_callback():
+    """Handle callback from Google OAuth service."""
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return redirect("/?error=google_not_configured")
 
@@ -203,15 +204,17 @@ def google_callback():
 
 @bp.post("/api/auth/logout")
 def logout():
+    """Logout endpoint (token invalidation is handled client-side)."""
     return jsonify({
         "success": True,
-        "message": "Logged out.",
+        "message": "Logged out successfully.",
     })
 
 
 @bp.get("/api/auth/me")
 @login_required_api
 def me():
+    """Return currently authenticated user profile."""
     return jsonify({
         "success": True,
         "user": g.current_user,
