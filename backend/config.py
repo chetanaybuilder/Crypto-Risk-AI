@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 # Load local environment overrides if present
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 
 def _safe_env_int(key: str, default: int) -> int:

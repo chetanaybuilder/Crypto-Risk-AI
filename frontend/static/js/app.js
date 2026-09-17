@@ -10,9 +10,10 @@ import { state } from './state/store.js';
 import { $all } from './utils/dom.js';
 
 export async function initializeDashboard() {
-    consumeQueryToken();
+    const queryToken = consumeQueryToken();
 
-    state.token = getTokenFromStorage();
+    const token = queryToken || state.token || getTokenFromStorage();
+    state.token = token;
 
     if (!state.token) {
         redirectToHome();

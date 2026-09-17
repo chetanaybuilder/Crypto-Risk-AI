@@ -5,7 +5,7 @@
 
 import { initializeDashboard, initializeIndexPage } from '../app.js';
 import { syncJobPollCeiling } from '../api/analysis.js';
-import { logout, handleAnalysisSubmit, handleAuthForm } from '../api/auth.js';
+import { logout, handleAnalysisSubmit, handleAuthForm, consumeQueryToken } from '../api/auth.js';
 import { deleteCurrentReport } from '../api/history.js';
 import { renderMissingSignals } from './dataQuality.js';
 import { handleHistoryClick } from './history.js';
@@ -2107,7 +2107,17 @@ export function initCardTilt() {
     });
 }
 
+let appBootstrapped = false;
+
 function bootstrapApp() {
+    if (appBootstrapped) {
+        return;
+    }
+    appBootstrapped = true;
+
+    // Immediately ingest any OAuth token from URL parameters
+    consumeQueryToken();
+
     const isDashboard = Boolean(document.querySelector("#analysis-form"));
 
     if (isDashboard) {
@@ -2168,8 +2178,8 @@ function bootstrapApp() {
 
         setupKeyboardShortcuts();
         setupVisibilityHandling();
-        syncJobPollCeiling();
         initializeDashboard();
+        syncJobPollCeiling();
     } else {
         $all("form[data-auth]").forEach((form) => {
             form.addEventListener("submit", handleAuthForm);

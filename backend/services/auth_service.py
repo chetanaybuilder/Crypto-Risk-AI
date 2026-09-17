@@ -97,12 +97,12 @@ def current_user() -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        user_id_int = int(user_id)
+        user_id_val = int(user_id)
     except (TypeError, ValueError):
-        return None
+        user_id_val = str(user_id).strip()
 
     from services.db_service import get_user_by_id
-    return get_user_by_id(user_id_int)
+    return get_user_by_id(user_id_val)
 
 
 def login_required_api(function):

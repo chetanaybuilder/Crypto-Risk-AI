@@ -11,7 +11,7 @@ import { refreshHistory } from './history.js';
 import { startLivePolling, setLastFetchTime } from './market.js';
 import { renderReport, getReportFromPayload, getMarket, updateLiveMarket } from '../components/market.js';
 import { show, hide, setText, firstDefined, normalizeSymbol } from '../utils/dom.js';
-import { redirectToHome } from './auth.js';
+import { redirectToHome, getTokenFromStorage } from './auth.js';
 import { renderHistory } from '../components/history.js';
 
 export const JOB_POLL_INTERVAL_MS = 1500;
@@ -51,6 +51,10 @@ export async function syncJobPollCeiling() {
    ============================================================ */
 
 export async function loadDashboard() {
+    if (!state.token) {
+        state.token = getTokenFromStorage();
+    }
+
     if (!state.token) {
         redirectToHome();
         return;
