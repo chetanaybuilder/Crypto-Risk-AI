@@ -1,3 +1,10 @@
+"""
+Historical Analysis Records & Management Endpoints.
+
+Provides authenticated CRUD operations for reviewing, inspecting, and deleting
+persisted risk reports associated with the active user account.
+"""
+
 import logging
 
 from flask import Blueprint, g, jsonify

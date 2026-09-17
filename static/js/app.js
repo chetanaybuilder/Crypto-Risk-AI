@@ -1,3 +1,8 @@
+/**
+ * Application Entrypoint & Lifecycle Controller.
+ * Handles auth token bootstrapping and view-level event binding.
+ */
+
 import { loadDashboard } from './api/analysis.js';
 import { consumeQueryToken, getTokenFromStorage, redirectToHome } from './api/auth.js';
 import { clearAnalysisError } from './api/client.js';

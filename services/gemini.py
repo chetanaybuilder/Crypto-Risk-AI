@@ -27,12 +27,7 @@ from config import (
 from utils.helpers import format_number, json_safe
 from utils.math_helpers import clamp
 
-# Explicit imports instead of `from extensions import *`.
-# `_gemini_generate` is underscore-prefixed, so a wildcard import
-# silently skips it unless extensions.py lists it in __all__ — that
-# was a near-certain NameError the first time Gemini was actually
-# called. Importing explicitly here removes that fragility.
-from extensions import gemini_client, GEMINI_EXECUTOR, _gemini_generate
+from extensions import GEMINI_EXECUTOR, _gemini_generate, gemini_client
 
 logger = logging.getLogger(__name__)
 

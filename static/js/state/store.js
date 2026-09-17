@@ -1,3 +1,7 @@
+/**
+ * Centralized Client-Side State Container.
+ * Manages reactive UI state, active report payload, polling timers, and async job correlation.
+ */
 export const state = {
     token: null,
     user: null,

@@ -1,3 +1,8 @@
+/**
+ * Authentication and Session Management Service.
+ * Coordinates JWT token storage, authorization headers, OAuth query param ingestion, and logout teardown.
+ */
+
 import { runAnalysis } from './analysis.js';
 import { showAnalysisError, friendlyErrorMessage } from './client.js';
 import { firstDefined } from '../utils/dom.js';
@@ -8,10 +13,6 @@ import { clearReportView } from '../components/ui.js';
 import { stopLivePolling } from './market.js';
 import { stopJobPolling } from './analysis.js';
 import { refreshHistory } from './history.js';
-
-/* ============================================================
-   STORAGE
-   ============================================================ */
 
 export const STORAGE_KEYS = {
     token: "token"

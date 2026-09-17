@@ -1,13 +1,14 @@
+/**
+ * Analysis History View Component.
+ * Populates historical analysis audits, summary badges, action triggers, and empty-state placeholders.
+ */
+
 import { firstDefined, isPlainObject } from '../utils/dom.js';
 import { normalizeSeverity, applyRiskClass } from '../utils/formatters.js';
 import { state } from '../state/store.js';
 import { formatDate, formatScore } from '../utils/formatters.js';
 import { setText } from '../utils/dom.js';
 import { loadHistoryReport, deleteReport } from '../api/history.js';
-
-/* ============================================================
-   HISTORY TABLE
-   ============================================================ */
 
 export function renderHistory(
     history

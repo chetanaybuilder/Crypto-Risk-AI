@@ -1,13 +1,14 @@
+/**
+ * Composite Risk Profile and Gauge Component.
+ * Controls score gauge transitions, severity badge classifications, and confidence intervals.
+ */
+
 import { getPillars, getPillar } from './market.js';
 import { renderPillar, buildPillarDetail } from './pillars.js';
 import { formatConfidence, clampScore, applyRiskClass } from '../utils/formatters.js';
 import { getRiskProfile } from './market.js';
 import { formatScore, normalizeSeverity } from '../utils/formatters.js';
 import { firstDefined, setText } from '../utils/dom.js';
-
-/* ============================================================
-   RISK SCORE BAR
-   ============================================================ */
 
 export function updateScoreBar(
     bar,

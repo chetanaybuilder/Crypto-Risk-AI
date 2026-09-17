@@ -1,3 +1,10 @@
+"""
+Background Analysis Worker Task.
+
+Executes within the ThreadPoolExecutor to run end-to-end multi-stage risk analysis
+asynchronously, dispatching incremental progress events and persisting final reports.
+"""
+
 import logging
 
 from services.db_service import get_analysis_job, save_analysis, update_analysis_job

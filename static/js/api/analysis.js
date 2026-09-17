@@ -1,3 +1,8 @@
+/**
+ * Asynchronous Analysis Pipeline API.
+ * Orchestrates job submission, progress tracking, timeout sync, and dashboard data hydration.
+ */
+
 import { stopLivePolling } from './market.js';
 import { state } from '../state/store.js';
 import { apiRequest, API, friendlyErrorMessage, renderUser, applyJobProgress, clearAnalysisError, showAnalysisError, startProgress, finishProgress, abortProgress } from './client.js';
@@ -8,10 +13,6 @@ import { renderReport, getReportFromPayload, getMarket, updateLiveMarket } from 
 import { show, hide, setText, firstDefined, normalizeSymbol } from '../utils/dom.js';
 import { redirectToHome } from './auth.js';
 import { renderHistory } from '../components/history.js';
-
-/* ============================================================
-   JOB POLLING CONFIG
-   ============================================================ */
 
 export const JOB_POLL_INTERVAL_MS = 1500;
 

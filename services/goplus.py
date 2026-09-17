@@ -1,3 +1,10 @@
+"""
+GoPlus Smart Contract Security Telemetry.
+
+Analyzes EVM token contracts for malicious bytecode patterns, honeypots, exorbitant
+trading fees, blacklist mechanisms, and privileged ownership vectors.
+"""
+
 import logging
 import re
 from urllib.parse import quote

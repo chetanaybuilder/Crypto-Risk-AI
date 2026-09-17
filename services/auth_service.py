@@ -1,3 +1,10 @@
+"""
+Authentication Domain Services.
+
+Encapsulates password hashing/verification primitives, JWT token signing/validation,
+and API endpoint authentication guards.
+"""
+
 from functools import wraps
 import logging
 import time

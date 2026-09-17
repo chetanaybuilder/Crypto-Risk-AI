@@ -1,13 +1,14 @@
+/**
+ * Forensic Cards and Data Quality View Component.
+ * Visualizes provider freshness, confidence intervals, degraded source warnings, and primary risk drivers.
+ */
+
 import { getMarket } from './market.js';
 import { normalizeSource } from '../utils/dom.js';
 import { formatConfidence, formatRelativeTime } from '../utils/formatters.js';
 import { getAI, getDataQuality, getSecurity, getRiskProfile } from './market.js';
 import { firstDefined, setText } from '../utils/dom.js';
 import { formatScore } from '../utils/formatters.js';
-
-/* ============================================================
-   FORENSIC / INTELLIGENCE CARDS
-   ============================================================ */
 
 export function renderForensicCards(
     report

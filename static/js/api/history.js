@@ -1,3 +1,8 @@
+/**
+ * Historical Analysis API Client.
+ * Manages fetching analysis history lists, loading individual historical snapshots, and deleting reports.
+ */
+
 import { showAnalysisError, clearAnalysisError, friendlyErrorMessage, renderUser } from './client.js';
 import { setLastFetchTime, stopLivePolling } from './market.js';
 import { getReportFromPayload } from '../components/market.js';
@@ -9,10 +14,6 @@ import { renderReport } from '../components/market.js';
 import { clearReportView } from '../components/ui.js';
 import { startLivePolling } from './market.js';
 import { show, hide, setText } from '../utils/dom.js';
-
-/* ============================================================
-   HISTORY FETCH
-   ============================================================ */
 
 export async function refreshHistory() {
     try {

@@ -1,8 +1,8 @@
+/**
+ * Financial and Telemetry Data Formatters.
+ * Formats currencies, percentages, token timestamps, and risk badge variants.
+ */
 import { firstDefined } from './dom.js';
-
-/* ============================================================
-   FORMATTERS
-   ============================================================ */
 
 export function formatNumber(
     value,

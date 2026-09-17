@@ -1,23 +1,32 @@
+"""
+Dashboard Routing & Initial State Aggregation.
+
+Serves the authenticated dashboard SPA view and provides aggregated initialization
+state (user profile, recent analysis history, and latest report snapshot).
+"""
+
 import logging
 
-from flask import Blueprint, jsonify, render_template, g
+from flask import Blueprint, g, jsonify, render_template
 
 from services.auth_service import login_required_api
-from services.db_service import get_user_history, get_analysis_by_id
+from services.db_service import get_analysis_by_id, get_user_history
 
 logger = logging.getLogger(__name__)
 
-bp = Blueprint('dashboard', __name__)
+bp = Blueprint("dashboard", __name__)
 
 
 @bp.get("/dashboard")
 def dashboard():
+    """Render the dashboard application shell."""
     return render_template("dashboard.html")
 
 
 @bp.get("/api/dashboard")
 @login_required_api
 def dashboard_api():
+    """Fetch initial aggregate state for the dashboard workspace."""
     try:
         history = get_user_history(g.current_user["id"])
 
@@ -36,7 +45,7 @@ def dashboard_api():
         })
 
     except Exception as exc:
-        logger.exception("Dashboard API failed: %s", exc)
+        logger.exception("Dashboard API aggregation failed: %s", exc)
         return jsonify({
             "success": False,
             "error": "Unable to load dashboard.",

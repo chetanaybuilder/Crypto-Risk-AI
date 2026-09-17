@@ -1,11 +1,12 @@
+/**
+ * AI Qualitative Intelligence View Component.
+ * Projects executive summaries, market structure commentary, key risk drivers, and scenario analysis.
+ */
+
 import { $, firstDefined, setText } from '../utils/dom.js';
 import { applyRiskClass } from '../utils/formatters.js';
 import { renderForensicCards } from './dataQuality.js';
 import { getAI, getDataQuality, getSecurity } from './market.js';
-
-/* ============================================================
-   AI REPORT RENDERING
-   ============================================================ */
 
 export function renderAI(report) {
     const ai = getAI(report);

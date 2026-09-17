@@ -1,7 +1,8 @@
 
-/* ============================================================
-   DOM HELPERS
-   ============================================================ */
+/**
+ * DOM Manipulation and Traversal Utilities.
+ * Provides safe node selection, text projection with fallback handling, and dynamic styling helpers.
+ */
 
 export function $(selector) {
     return document.querySelector(selector);

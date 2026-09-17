@@ -1,3 +1,8 @@
+/**
+ * Multi-Pillar Risk Breakdown Component.
+ * Animates score progress bars and renders sub-metrics across Volatility, Liquidity, Beta, Structural, and Leverage.
+ */
+
 import { updateScoreBar } from './risk.js';
 import { state } from '../state/store.js';
 import { isPlainObject } from '../utils/dom.js';
@@ -5,10 +10,6 @@ import { formatScore, applyRiskClass } from '../utils/formatters.js';
 import { getRiskProfile } from './market.js';
 import { normalizeSeverity } from '../utils/formatters.js';
 import { firstDefined } from '../utils/dom.js';
-
-/* ============================================================
-   RISK PILLARS
-   ============================================================ */
 
 export function renderPillar(
     name,

@@ -1,3 +1,11 @@
+"""
+Quantitative Mathematics and Financial Statistics Helpers.
+
+Implements numerically stable scalar sanitization, log/simple return series generation,
+sample standard deviation / volatility annualization, benchmark covariance and beta estimation,
+and maximum drawdown calculations.
+"""
+
 import logging
 import math
 from datetime import date, datetime, timezone

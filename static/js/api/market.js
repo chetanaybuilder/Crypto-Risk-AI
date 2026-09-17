@@ -1,3 +1,8 @@
+/**
+ * Live Market Polling and Telemetry Streamer.
+ * Manages periodic ticker updates, backoff cooldown gates, and concurrent live-request locks.
+ */
+
 import { state } from '../state/store.js';
 import { apiRequest, API } from './client.js';
 import { updateLiveMarket, getMarketFromPayload, setMarketLiveState } from '../components/market.js';

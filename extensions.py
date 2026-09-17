@@ -1,3 +1,10 @@
+"""
+Infrastructure & Shared State Extensions.
+
+Manages the PostgreSQL threaded connection pool, background task executors,
+application in-memory caches, and OAuth client state.
+"""
+
 import logging
 import threading
 import time

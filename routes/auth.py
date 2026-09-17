@@ -1,3 +1,10 @@
+"""
+Authentication & Authorization API Routes.
+
+Handles user registration, credential verification, Google OAuth 2.0 flow,
+token issuance, and session state endpoints.
+"""
+
 import logging
 from urllib.parse import quote
 

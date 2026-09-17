@@ -1,12 +1,20 @@
+"""
+CryptoRisk AI Global Configuration Module.
+
+Centralizes runtime environment variables, provider endpoints, timeout bounds,
+caching policies, and institutional token mapping defaults.
+"""
+
 import os
 from typing import Any
 from dotenv import load_dotenv
 
-# Load .env from project root
+# Load local environment overrides if present
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 
 def _safe_env_int(key: str, default: int) -> int:
+    """Parse integer environment variable with fallback on format error."""
     try:
         return int(os.environ.get(key, default))
     except (TypeError, ValueError):
@@ -14,6 +22,7 @@ def _safe_env_int(key: str, default: int) -> int:
 
 
 def _safe_env_float(key: str, default: float) -> float:
+    """Parse float environment variable with fallback on format error."""
     try:
         return float(os.environ.get(key, default))
     except (TypeError, ValueError):

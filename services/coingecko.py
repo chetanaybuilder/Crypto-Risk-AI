@@ -1,9 +1,17 @@
+"""
+CoinGecko Market Telemetry & Provider Integration Service.
+
+Manages dynamic ticker-to-coin-id resolution, real-time price quotes, historical
+OHLC price candle series, multi-level TTL caching, and provider cooldown state.
+"""
+
+import logging
 import re
 import time
-import logging
-import requests
 from datetime import datetime, timezone
 from urllib.parse import quote
+
+import requests
 from utils.helpers import (
     _coin_resolution_cache,
     _mark_provider_failure,

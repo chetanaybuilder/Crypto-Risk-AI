@@ -1,3 +1,10 @@
+"""
+System Utility and Telemetry Helper Functions.
+
+Provides thread-safe token bucket rate limiters, upstream provider circuit breakers/cooldowns,
+cross-provider symbol resolution caches, and ISO datetime/numeric formatters.
+"""
+
 import logging
 import math
 import re

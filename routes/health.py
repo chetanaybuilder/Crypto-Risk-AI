@@ -1,3 +1,10 @@
+"""
+System Health Diagnostics & Landing Route.
+
+Exposes container liveness/readiness probes, runtime schema versions, and provider
+telemetry for uptime monitoring and infrastructure automation.
+"""
+
 from flask import Blueprint, jsonify, render_template
 
 from config import (
@@ -18,7 +25,7 @@ bp = Blueprint("health", __name__)
 
 @bp.get("/health")
 def health():
-    """Health check endpoint exposing system status, versioning, and provider configuration."""
+    """Liveness probe reporting provider status, worker pool capacity, and configuration state."""
     return jsonify({
         "success": True,
         "status": "healthy",
@@ -38,5 +45,5 @@ def health():
 
 @bp.get("/")
 def index():
-    """Serve landing page."""
+    """Serve public landing and marketing view."""
     return render_template("index.html")

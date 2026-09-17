@@ -1,3 +1,10 @@
+"""
+Database Persistence & Job State Repository.
+
+Provides data-access abstractions for user accounts, analysis history serialization,
+asynchronous job record lifecycle transitions, and active job deduplication.
+"""
+
 import json
 import logging
 import uuid

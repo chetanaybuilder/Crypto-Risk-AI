@@ -1,3 +1,8 @@
+/**
+ * Market Telemetry & Full Report View Controller.
+ * Unpacks report payloads and coordinates downstream pillar rendering, live ticker updates, and staleness badges.
+ */
+
 import { refreshLiveMarket } from '../api/market.js';
 import { toggle, normalizeSymbol } from '../utils/dom.js';
 import { state } from '../state/store.js';
@@ -10,10 +15,6 @@ import { renderAI } from './ai.js';
 import { renderDataQuality } from './dataQuality.js';
 import { updateCurrentReportDeleteButton, clearReportView } from './ui.js';
 import { stopLivePolling, startLivePolling } from '../api/market.js';
-
-/* ============================================================
-   REPORT EXTRACTION
-   ============================================================ */
 
 export function isRiskReport(value) {
     if (

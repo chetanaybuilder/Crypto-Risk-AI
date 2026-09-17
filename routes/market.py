@@ -1,3 +1,10 @@
+"""
+Live Market Telemetry Routes.
+
+Handles on-demand price, 24h volume, volatility, and market cap snapshot queries,
+managing cache freshness and rate-limit preservation.
+"""
+
 import logging
 
 from flask import Blueprint, request, jsonify

@@ -1,10 +1,11 @@
+/**
+ * Stress Testing and Scenario Modeling View Component.
+ * Computes and renders simulated portfolio/asset drawdowns under market stress conditions.
+ */
+
 import { getAI, getStress } from './market.js';
 import { isPlainObject, firstDefined, setText } from '../utils/dom.js';
 import { formatNumber, formatConfidence, applyRiskClass, formatPercent } from '../utils/formatters.js';
-
-/* ============================================================
-   STRESS TEST
-   ============================================================ */
 
 export function getExpectedDrawdown(
     stress

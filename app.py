@@ -1,3 +1,10 @@
+"""
+CryptoRisk AI Application Factory & Entrypoint.
+
+Configures the Flask WSGI application instance, registers security middleware,
+sets up OAuth 2.0 integrations, and mounts domain route blueprints.
+"""
+
 import uuid
 from flask import Flask, g, request
 from flask_cors import CORS
@@ -13,10 +20,11 @@ from routes.market import bp as market_bp
 from routes.risk import bp as risk_bp
 from utils.error_handlers import bp as errors_bp
 
+# Initialize Flask application with static assets
 app = Flask(__name__, static_folder="static")
 app.secret_key = SECRET_KEY
 
-# Register OAuth provider
+# Register Google OAuth 2.0 OpenID Connect client
 oauth.init_app(app)
 oauth.register(
     name="google",
@@ -26,7 +34,7 @@ oauth.register(
     client_kwargs={"scope": "openid email profile"},
 )
 
-# CORS configuration
+# Cross-Origin Resource Sharing for API routes
 CORS(
     app,
     resources={r"/api/*": {"origins": "*"}},
@@ -36,16 +44,18 @@ CORS(
 
 @app.before_request
 def attach_request_id():
+    """Propagate upstream correlation ID or generate a trace UUID for request lifecycle."""
     g.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
 
 @app.after_request
 def attach_response_headers(response):
+    """Expose correlation ID on outbound response headers for client diagnostics."""
     response.headers["X-Request-ID"] = g.get("request_id", "")
     return response
 
 
-# Register route blueprints
+# Domain Blueprint Registrations
 app.register_blueprint(auth_bp)
 app.register_blueprint(market_bp)
 app.register_blueprint(risk_bp)
@@ -55,4 +65,5 @@ app.register_blueprint(health_bp)
 app.register_blueprint(errors_bp)
 
 if __name__ == "__main__":
+    # Local development server entrypoint; production runs via Gunicorn WSGI
     app.run(debug=not IS_PRODUCTION, port=5000)

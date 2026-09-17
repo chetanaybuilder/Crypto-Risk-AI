@@ -1,3 +1,8 @@
+/**
+ * Master UI Interaction Controller.
+ * Manages view transitions, form event listeners, accordion collapsibles, and visual report resets.
+ */
+
 import { initializeDashboard, initializeIndexPage } from '../app.js';
 import { syncJobPollCeiling } from '../api/analysis.js';
 import { logout, handleAnalysisSubmit, handleAuthForm } from '../api/auth.js';
@@ -8,10 +13,6 @@ import { state } from '../state/store.js';
 import { hide, show, setText } from '../utils/dom.js';
 import { stopLivePolling, startLivePolling } from '../api/market.js';
 import { stopJobPolling } from '../api/analysis.js';
-
-/* ============================================================
-   EMPTY REPORT STATE
-   ============================================================ */
 
 export function clearReportView() {
     state.latestReport = null;

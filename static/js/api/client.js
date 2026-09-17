@@ -1,13 +1,14 @@
+/**
+ * Core HTTP Client and API Routing Gateway.
+ * Provides authenticated request dispatch, error interception, and endpoint resolution.
+ */
+
 import { stopJobPolling } from './analysis.js';
 import { clearToken, getAuthHeaders } from './auth.js';
 import { stopLivePolling } from './market.js';
 import { firstDefined, isPlainObject } from '../utils/dom.js';
 import { state } from '../state/store.js';
 import { show, hide, setText } from '../utils/dom.js';
-
-/* ============================================================
-   API ENDPOINTS
-   ============================================================ */
 
 export const API = {
     market: (symbol) => `/api/market/${encodeURIComponent(symbol)}`,

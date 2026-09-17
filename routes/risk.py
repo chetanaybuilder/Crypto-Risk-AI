@@ -1,3 +1,10 @@
+"""
+Risk Analysis Pipeline & Async Job Orchestration Routes.
+
+Exposes synchronous risk evaluation and asynchronous background execution
+endpoints (job submission, status polling, and state transition monitoring).
+"""
+
 import logging
 from datetime import datetime, timezone
 

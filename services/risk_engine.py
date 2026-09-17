@@ -1,3 +1,12 @@
+"""
+Quantitative Risk Engine Module.
+
+Orchestrates multi-pillar risk scoring across volatility, liquidity, market beta,
+structural/smart contract security, and leverage indicators. Implements dynamic weight
+normalization for degraded or missing telemetry, deterministic stress-testing models,
+and interfaces with generative AI for qualitative risk narrative synthesis.
+"""
+
 import logging
 import math
 
