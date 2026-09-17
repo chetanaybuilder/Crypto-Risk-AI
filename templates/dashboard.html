@@ -316,86 +316,103 @@
                 autocomplete="off"
             >
 
-                <div class="token-input-wrapper">
+                <div class="form-primary-row">
 
-                    <span class="token-prefix">
-                        $
-                    </span>
+                    <div class="token-input-wrapper">
 
-                    <input
-                        type="text"
-                        id="token-symbol"
-                        name="token_symbol"
-                        placeholder="BTC"
-                        maxlength="15"
-                        autocomplete="off"
-                        spellcheck="false"
-                        required
+                        <span class="token-prefix">
+                            $
+                        </span>
+
+                        <input
+                            type="text"
+                            id="token-symbol"
+                            name="token_symbol"
+                            placeholder="BTC"
+                            maxlength="15"
+                            autocomplete="off"
+                            spellcheck="false"
+                            required
+                        >
+
+                    </div>
+
+
+                    <!-- Starts the asset analysis request -->
+
+                    <button
+                        type="submit"
+                        class="analyze-button"
+                        id="analyze-button"
                     >
 
-                </div>
+                        <span class="button-text">
+                            Analyze Asset
+                        </span>
 
-                <!-- FIX (Bug 2): optional contract security inputs.
-                     The backend runs the GoPlus structural check only
-                     when BOTH a chain and a contract address are
-                     provided. Leave blank for native assets. -->
+                        <!-- Loading indicator controlled by JavaScript -->
 
-                <div class="optional-token-fields">
+                        <span
+                            class="button-loader"
+                            id="button-loader"
+                            aria-hidden="true"
+                        ></span>
 
-                    <select
-                        id="chain-id"
-                        name="chain_id"
-                        aria-label="Blockchain (optional)"
-                    >
-                        <option value="">Chain (optional)</option>
-                        <option value="eth">Ethereum (eth)</option>
-                        <option value="bsc">BNB Chain (bsc)</option>
-                        <option value="polygon">Polygon</option>
-                        <option value="arbitrum">Arbitrum</option>
-                        <option value="optimism">Optimism</option>
-                        <option value="base">Base</option>
-                        <option value="avalanche">Avalanche</option>
-                    </select>
-
-                    <input
-                        type="text"
-                        id="contract-address"
-                        name="contract_address"
-                        placeholder="0x… contract address (optional)"
-                        maxlength="42"
-                        autocomplete="off"
-                        spellcheck="false"
-                        aria-label="Contract address (optional)"
-                    >
-                    
-                    <small class="text-muted text-xs block mt-1">
-                        ℹ️ Required for ERC-20 tokens (e.g., USDT, LINK). Leave blank for native layer-1 coins (BTC, ETH, SOL).
-                    </small>
+                    </button>
 
                 </div>
 
 
-                <!-- Starts the asset analysis request -->
+                <!-- Single cohesive contract address or network input -->
 
-                <button
-                    type="submit"
-                    class="analyze-button"
-                    id="analyze-button"
-                >
+                <div class="contract-input-section">
 
-                    <span class="button-text">
-                        Analyze Asset
-                    </span>
+                    <div class="contract-input-wrapper">
 
-                    <!-- Loading indicator controlled by JavaScript -->
+                        <span class="contract-input-icon" aria-hidden="true">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                            </svg>
+                        </span>
 
-                    <span
-                        class="button-loader"
-                        id="button-loader"
-                        aria-hidden="true"
-                    ></span>
+                        <input
+                            type="text"
+                            id="contract-address"
+                            name="contract_address"
+                            placeholder="Contract address or network (e.g., 0x… or Ethereum)"
+                            maxlength="66"
+                            autocomplete="off"
+                            spellcheck="false"
+                            aria-label="Contract address or network (optional)"
+                        >
 
-                </button>
+                        <input
+                            type="hidden"
+                            id="chain-id"
+                            name="chain_id"
+                            value="eth"
+                        >
+
+                    </div>
+
+                    <div class="contract-helper-text">
+
+                        <span class="helper-info-icon" aria-hidden="true">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                        </span>
+
+                        <span class="helper-message">
+                            Required for ERC-20 tokens (e.g., USDT, LINK). Leave blank for native layer-1 coins (BTC, ETH, SOL).
+                        </span>
+
+                    </div>
+
+                </div>
 
             </form>
 

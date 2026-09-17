@@ -186,54 +186,72 @@ export async function handleAnalysisSubmit(
         return;
     }
 
-    // FIX (Bug 2): optional contract security inputs. The backend
-    // runs the GoPlus structural check only when BOTH chain_id and
-    // contract_address are provided; leaving them blank is fine and
-    // is reported as "not applicable" (not a missing signal).
+    // Optional contract security / network inputs. Supports single
+    // cohesive input: 0x contract address, network name, or combined.
     const chainIdInput =
         $("#chain-id");
 
     const contractAddressInput =
         $("#contract-address");
 
-    const chainIdValue = chainIdInput
-        ? String(chainIdInput.value || "").trim()
-        : "";
-
-    const contractAddressValue = contractAddressInput
+    const rawContractOrNetwork = contractAddressInput
         ? String(contractAddressInput.value || "").trim()
         : "";
 
-    if (
-        contractAddressValue &&
-        !/^0x[a-fA-F0-9]{40}$/.test(
-            contractAddressValue
-        )
-    ) {
-        showAnalysisError(
-            "Enter a valid contract address (0x followed by 40 hex characters) or leave it blank."
-        );
+    let chainIdValue = chainIdInput
+        ? String(chainIdInput.value || "").trim()
+        : "";
 
-        if (contractAddressInput) {
-            contractAddressInput.focus();
+    let contractAddressValue = "";
+
+    if (rawContractOrNetwork) {
+        const combinedMatch =
+            rawContractOrNetwork.match(/^([a-zA-Z0-9_\-]+)[:\s]+(0x[a-fA-F0-9]{40})$/i) ||
+            rawContractOrNetwork.match(/^(0x[a-fA-F0-9]{40})[\s\(\[]+([a-zA-Z0-9_\-]+)[\)\]]*$/i);
+
+        if (combinedMatch) {
+            if (combinedMatch[1].startsWith("0x")) {
+                contractAddressValue = combinedMatch[1];
+                chainIdValue = combinedMatch[2].toLowerCase();
+            } else {
+                chainIdValue = combinedMatch[1].toLowerCase();
+                contractAddressValue = combinedMatch[2];
+            }
+        } else if (/^0x[a-fA-F0-9]{40}$/i.test(rawContractOrNetwork)) {
+            contractAddressValue = rawContractOrNetwork;
+            if (!chainIdValue) {
+                chainIdValue = "eth";
+            }
+        } else {
+            const knownChains = [
+                "eth", "ethereum", "bsc", "bnb",
+                "polygon", "arbitrum", "optimism",
+                "base", "avalanche", "avax"
+            ];
+            const lower = rawContractOrNetwork.toLowerCase();
+
+            if (knownChains.includes(lower)) {
+                chainIdValue = lower;
+                contractAddressValue = "";
+            } else {
+                showAnalysisError(
+                    "Enter a valid contract address (0x...) or network, or leave it blank."
+                );
+
+                if (contractAddressInput) {
+                    contractAddressInput.focus();
+                }
+
+                return;
+            }
         }
-
-        return;
+    } else {
+        chainIdValue = "";
+        contractAddressValue = "";
     }
 
-    if (
-        contractAddressValue &&
-        !chainIdValue
-    ) {
-        showAnalysisError(
-            "Select a chain for the contract security check, or leave the address blank."
-        );
-
-        if (chainIdInput) {
-            chainIdInput.focus();
-        }
-
-        return;
+    if (chainIdInput) {
+        chainIdInput.value = chainIdValue;
     }
 
     const button =
