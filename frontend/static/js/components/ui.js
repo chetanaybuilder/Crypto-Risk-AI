@@ -2107,83 +2107,49 @@ export function initCardTilt() {
     });
 }
 
-document.addEventListener(
-    "DOMContentLoaded",
-    () => {
+function bootstrapApp() {
+    const isDashboard = Boolean(document.querySelector("#analysis-form"));
+
+    if (isDashboard) {
         if (typeof ParallaxHeist !== "undefined") {
             ParallaxHeist.init();
         }
         initCardTilt();
 
-        const analysisForm =
-            $("#analysis-form");
-
+        const analysisForm = $("#analysis-form");
         if (analysisForm) {
-            analysisForm.addEventListener(
-                "submit",
-                handleAnalysisSubmit
-            );
+            analysisForm.addEventListener("submit", handleAnalysisSubmit);
         }
 
-        const logoutButtons =
-            $all(
-                "[data-action='logout'], #logout-button"
-            );
+        const logoutButtons = $all("[data-action='logout'], #logout-button");
+        logoutButtons.forEach((button) => {
+            button.addEventListener("click", (event) => {
+                event.preventDefault();
+                logout();
+            });
+        });
 
-        logoutButtons.forEach(
-            (button) => {
-                button.addEventListener(
-                    "click",
-                    (event) => {
-                        event.preventDefault();
-
-                        logout();
-                    }
-                );
-            }
-        );
-
-        const deleteButton =
-            $("#delete-current-report");
-
+        const deleteButton = $("#delete-current-report");
         if (deleteButton) {
-            deleteButton.addEventListener(
-                "click",
-                async () => {
-                    await deleteCurrentReport();
-                }
-            );
+            deleteButton.addEventListener("click", async () => {
+                await deleteCurrentReport();
+            });
         }
 
-        const historyBody =
-            $("#history-tbody");
-
+        const historyBody = $("#history-tbody");
         if (historyBody) {
-            historyBody.addEventListener(
-                "click",
-                handleHistoryClick
-            );
+            historyBody.addEventListener("click", handleHistoryClick);
         }
 
-        const historyToggleHeader =
-            $("#history-toggle-header");
-
+        const historyToggleHeader = $("#history-toggle-header");
         if (historyToggleHeader) {
             const toggleHistory = () => {
-                const section =
-                    $("#history-section") ||
-                    historyToggleHeader.closest(".history-section");
-
-                const content =
-                    $("#history-content");
-
+                const section = $("#history-section") || historyToggleHeader.closest(".history-section");
+                const content = $("#history-content");
                 if (!section || !content) return;
 
-                const isExpanded =
-                    section.classList.contains("is-expanded");
-
-                const nextState =
-                    !isExpanded;
+                const isExpanded = section.classList.contains("is-expanded");
+                const nextState = !isExpanded;
 
                 section.classList.toggle("is-expanded", nextState);
                 content.classList.toggle("is-open", nextState);
@@ -2200,35 +2166,23 @@ document.addEventListener(
             });
         }
 
-        $all(
-            "form[data-auth]"
-        ).forEach(
-            (form) => {
-                form.addEventListener(
-                    "submit",
-                    handleAuthForm
-                );
-            }
-        );
-
         setupKeyboardShortcuts();
-
         setupVisibilityHandling();
-
-        // Synchronize job polling ceiling with backend timeout from /health
         syncJobPollCeiling();
-
-        if (
-            document.querySelector(
-                "#analysis-form"
-            )
-        ) {
-            initializeDashboard();
-        } else {
-            initializeIndexPage();
-        }
+        initializeDashboard();
+    } else {
+        $all("form[data-auth]").forEach((form) => {
+            form.addEventListener("submit", handleAuthForm);
+        });
+        initializeIndexPage();
     }
-);
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootstrapApp);
+} else {
+    bootstrapApp();
+}
 
 
 
