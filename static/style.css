@@ -150,6 +150,46 @@ img {
    AMBIENT BACKGROUND LAYERS — Gothic Halloween Atmosphere
 ============================================================ */
 
+/* ============================================================
+   HORROR CINEMATIC BACKGROUND
+============================================================ */
+
+.horror-bg-container {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.horror-bg-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    background-image: url('../images/horror_bitcoin_bg.jpg');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    z-index: 1;
+}
+
+.horror-bg-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: linear-gradient(
+        to bottom,
+        rgba(5, 5, 5, 0.4) 0%,
+        rgba(20, 0, 0, 0.6) 50%,
+        rgba(5, 5, 5, 0.95) 100%
+    ), radial-gradient(
+        ellipse at center,
+        transparent 0%,
+        rgba(0, 0, 0, 0.7) 100%
+    );
+}
+
 .ambient-canvas {
     position: fixed;
     inset: 0;
