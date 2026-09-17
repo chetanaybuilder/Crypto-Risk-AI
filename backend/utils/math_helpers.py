@@ -8,8 +8,45 @@ and maximum drawdown calculations.
 
 import logging
 import math
+import re
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def first_defined(*values):
+    """Return the first value that is not None."""
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def normalize_symbol(symbol: Any) -> str:
+    """Normalize a token symbol to uppercase alphanumeric characters."""
+    if symbol is None:
+        return ""
+    try:
+        normalized = str(symbol).strip().upper()
+    except Exception:
+        return ""
+    return re.sub(r"[^A-Z0-9]", "", normalized)
+
+
+def json_safe(value: Any) -> Any:
+    """Ensure a data structure contains only finite, JSON-serializable types."""
+    if value is None:
+        return None
+    if isinstance(value, (int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(x) for x in value]
+    return str(value)
 
 
 def numeric(

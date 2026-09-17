@@ -666,14 +666,14 @@ def _clear_provider_success(
         )
 def _get_symbol_fetch_lock(
     symbol: str,
-) -> Lock:
+) -> threading.Lock:
     """Return a per-symbol lock used to deduplicate concurrent fetches."""
     with _symbol_fetch_locks_guard:
         lock = _symbol_fetch_locks.get(
             symbol
         )
         if lock is None:
-            lock = Lock()
+            lock = threading.Lock()
             _symbol_fetch_locks[symbol] = lock
         return lock
 def utc_now_iso() -> str:
