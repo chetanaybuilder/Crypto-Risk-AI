@@ -151,10 +151,7 @@ def login():
 def google_login():
     """Initiate Google OAuth flow."""
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        return jsonify({
-            "success": False,
-            "error": "Google OAuth is not configured.",
-        }), 503
+        return redirect("/?error=google_not_configured")
 
     try:
         redirect_uri = url_for("auth.google_callback", _external=True)

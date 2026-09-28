@@ -24,6 +24,12 @@ export async function initializeDashboard() {
 }
 
 export function initializeIndexPage() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error") === "google_not_configured") {
+        alert("Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.");
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     const googleLinks = $all('a[href="/api/auth/google"]');
     googleLinks.forEach((link) => {
         link.addEventListener("click", () => {
