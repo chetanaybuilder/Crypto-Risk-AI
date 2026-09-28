@@ -40,7 +40,7 @@ def signup():
         email = str(data.get("email", "")).strip().lower()
 
         # Rate limit: max 3 signup attempts per 15 minutes per IP
-        blocked = rate_limit(3, 900, "signup")(_client_ip())
+        blocked = rate_limit(3, 900, "signup")(lambda: _client_ip())
         if blocked is not None:
             return blocked
 
@@ -99,7 +99,7 @@ def login():
         password = str(data.get("password", ""))
 
         # Rate limit: max 5 login attempts per 15 minutes per IP+email
-        blocked = rate_limit(5, 900, "login")(f"{_client_ip()}:{email}")
+        blocked = rate_limit(5, 900, "login")(lambda: f"{_client_ip()}:{email}")
         if blocked is not None:
             return blocked
 
