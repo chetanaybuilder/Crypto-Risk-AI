@@ -116,6 +116,11 @@ html {
     }
 }
 
+body.animations-paused *, body.animations-paused *::before, body.animations-paused *::after {
+    animation-play-state: paused !important;
+    transition: none !important;
+}
+
 body {
     background: var(--void);
     color: var(--text-primary);

@@ -43,6 +43,13 @@ app = Flask(
 )
 app.secret_key = SECRET_KEY
 
+# Set static file cache age to 1 year
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 31536000
+app.config['COMPRESS_ALGORITHM'] = ['br', 'gzip']
+
+from flask_compress import Compress
+Compress(app)
+
 # Register Google OAuth 2.0 OpenID Connect client
 oauth.init_app(app)
 oauth.register(

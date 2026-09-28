@@ -38,3 +38,20 @@ export function initializeIndexPage() {
     });
 }
 
+// Automatically initialize based on the current page context
+if (document.body.classList.contains('dashboard-page')) {
+    initializeDashboard();
+} else if (document.body.classList.contains('landing-page')) {
+    initializeIndexPage();
+}
+
+// Delay non-essential animations until after first paint
+const enableAnimations = () => {
+    document.body.classList.remove('animations-paused');
+};
+
+if (window.requestIdleCallback) {
+    window.requestIdleCallback(enableAnimations);
+} else {
+    setTimeout(enableAnimations, 0);
+}

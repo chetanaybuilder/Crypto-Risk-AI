@@ -87,12 +87,20 @@ export async function apiRequest(url, options = {}) {
 
     let response;
 
+    const timeoutMs = options.timeout || 15000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    requestOptions.signal = controller.signal;
+
     try {
         response = await fetch(
             resolvedUrl,
             requestOptions
         );
+        clearTimeout(timeoutId);
     } catch (error) {
+        clearTimeout(timeoutId);
+        
         console.error(
             "Network error:",
             error

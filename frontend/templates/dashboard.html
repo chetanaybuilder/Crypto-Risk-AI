@@ -31,21 +31,29 @@
          terminal interface.
     ========================================================== -->
 
-    <link
-        rel="preconnect"
-        href="https://fonts.googleapis.com"
-    >
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800;900&family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800;900&family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 
-    <link
-        rel="preconnect"
-        href="https://fonts.gstatic.com"
-        crossorigin
-    >
-
-    <link
-        href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800;900&family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
-        rel="stylesheet"
-    >
+    <!-- Preload JS modules -->
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/app.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/api/analysis.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/api/auth.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/api/client.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/api/history.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/api/market.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/components/ai.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/components/dataQuality.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/components/history.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/components/market.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/components/pillars.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/components/risk.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/components/stress.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/components/ui.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/state/store.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/utils/dom.js') }}">
+    <link rel="modulepreload" href="{{ url_for('static', filename='js/utils/formatters.js') }}">
 
 
     <!-- =========================================================
@@ -62,7 +70,7 @@
 </head>
 
 
-<body class="dashboard-page">
+<body class="dashboard-page animations-paused">
 
     <!-- =========================================================
          NAVIGATION
@@ -1697,6 +1705,7 @@
     <script
         type="module"
         src="{{ url_for('static', filename='js/app.js') }}"
+        defer
     ></script>
 
 </body>
