@@ -9,7 +9,7 @@ import logging
 import re
 from urllib.parse import quote
 
-from config import GOPLUS_API_URL, MARKET_TIMEOUT
+from config import GOPLUS_API_URL
 from utils.helpers import (
     _http_get_market,
     format_number,
@@ -42,6 +42,7 @@ CHAIN_ID_MAP = {
     "avalanche": "43114",
     "avax": "43114",
 }
+
 
 def goplus_bool(value):
     """
@@ -107,9 +108,7 @@ def fetch_token_security(chain_id, contract_address):
         logger.warning(
             "[Contract Debug] Missing chain_id or contract_address — returning unavailable."
         )
-        return _unavailable_report(
-            "Contract security provider unavailable."
-        )
+        return _unavailable_report("Contract security provider unavailable.")
 
     address = str(contract_address).strip()
 
@@ -133,10 +132,7 @@ def fetch_token_security(chain_id, contract_address):
     numeric_chain_id = CHAIN_ID_MAP.get(raw_chain, raw_chain)
 
     try:
-        url = (
-            f"{GOPLUS_API_URL.rstrip('/')}/"
-            f"{quote(numeric_chain_id, safe='')}"
-        )
+        url = f"{GOPLUS_API_URL.rstrip('/')}/{quote(numeric_chain_id, safe='')}"
 
         logger.warning(
             "[Contract Debug] Requesting GoPlus url=%s chain=%s addr=%s",
@@ -153,20 +149,20 @@ def fetch_token_security(chain_id, contract_address):
             timeout=5,
         )
 
-        if response is None or (
-            status_code is not None and status_code >= 400
-        ):
+        if response is None or (status_code is not None and status_code >= 400):
             logger.warning(
                 "GoPlus security lookup failed for chain=%s addr=%s: %s",
                 numeric_chain_id,
                 address,
                 error_reason or f"HTTP {status_code}",
             )
-            return _unavailable_report(
-                "Contract security provider unavailable."
-            )
+            return _unavailable_report("Contract security provider unavailable.")
 
-        logger.debug("GoPlus response status=%s body=%s", status_code, response.text[:200] if response.text else "")
+        logger.debug(
+            "GoPlus response status=%s body=%s",
+            status_code,
+            response.text[:200] if response.text else "",
+        )
 
         try:
             payload = response.json()
@@ -185,9 +181,7 @@ def fetch_token_security(chain_id, contract_address):
                 "[Contract Debug] Payload not a dict: %r",
                 type(payload),
             )
-            return _unavailable_report(
-                "Contract security data unavailable."
-            )
+            return _unavailable_report("Contract security data unavailable.")
 
         api_code = payload.get("code")
 
@@ -199,9 +193,7 @@ def fetch_token_security(chain_id, contract_address):
                 address,
                 payload.get("message"),
             )
-            return _unavailable_report(
-                "Contract security data unavailable."
-            )
+            return _unavailable_report("Contract security data unavailable.")
 
         result = payload.get("result")
 
@@ -210,9 +202,7 @@ def fetch_token_security(chain_id, contract_address):
                 "[Contract Debug] 'result' not a dict: %r",
                 result,
             )
-            return _unavailable_report(
-                "Contract security data unavailable."
-            )
+            return _unavailable_report("Contract security data unavailable.")
 
         data = result.get(address)
 
@@ -229,98 +219,56 @@ def fetch_token_security(chain_id, contract_address):
                 address,
                 list(result.keys()),
             )
-            return _unavailable_report(
-                "Contract security data unavailable."
-            )
+            return _unavailable_report("Contract security data unavailable.")
 
         flags = []
         red_flags = []
 
-        honeypot = goplus_bool(
-            data.get("is_honeypot")
-        )
+        honeypot = goplus_bool(data.get("is_honeypot"))
 
         if honeypot is True:
-            flags.append(
-                "Potential honeypot behavior detected."
-            )
-            red_flags.append(
-                "Honeypot risk signal."
-            )
+            flags.append("Potential honeypot behavior detected.")
+            red_flags.append("Honeypot risk signal.")
 
-        open_source = goplus_bool(
-            data.get("is_open_source")
-        )
+        open_source = goplus_bool(data.get("is_open_source"))
 
         if open_source is False:
-            flags.append(
-                "Contract source is not verified."
-            )
-            red_flags.append(
-                "Unverified contract source."
-            )
+            flags.append("Contract source is not verified.")
+            red_flags.append("Unverified contract source.")
 
-        ownership_recovery = goplus_bool(
-            data.get("can_take_back_ownership")
-        )
+        ownership_recovery = goplus_bool(data.get("can_take_back_ownership"))
 
         if ownership_recovery is True:
-            flags.append(
-                "Ownership recovery capability detected."
-            )
-            red_flags.append(
-                "Ownership-control risk."
-            )
+            flags.append("Ownership recovery capability detected.")
+            red_flags.append("Ownership-control risk.")
 
-        owner_change = goplus_bool(
-            data.get("owner_change_balance")
-        )
+        owner_change = goplus_bool(data.get("owner_change_balance"))
 
         if owner_change is True:
-            flags.append(
-                "Owner balance-change capability detected."
-            )
-            red_flags.append(
-                "Owner-controlled balance risk."
-            )
+            flags.append("Owner balance-change capability detected.")
+            red_flags.append("Owner-controlled balance risk.")
 
-        blacklist = goplus_bool(
-            data.get("is_blacklisted")
-        )
+        blacklist = goplus_bool(data.get("is_blacklisted"))
 
         if blacklist is True:
-            flags.append(
-                "Blacklist functionality detected."
-            )
-            red_flags.append(
-                "Blacklist/control risk."
-            )
+            flags.append("Blacklist functionality detected.")
+            red_flags.append("Blacklist/control risk.")
 
-        buy_tax = goplus_number(
-            data.get("buy_tax")
-        )
+        buy_tax = goplus_number(data.get("buy_tax"))
 
-        sell_tax = goplus_number(
-            data.get("sell_tax")
-        )
+        sell_tax = goplus_number(data.get("sell_tax"))
 
         if buy_tax is not None and buy_tax > 0.05:
             flags.append(
-                f"Elevated buy tax detected: "
-                f"{format_number(buy_tax * 100, 2)}%."
+                f"Elevated buy tax detected: {format_number(buy_tax * 100, 2)}%."
             )
-            red_flags.append(
-                "Elevated buy tax."
-            )
+            red_flags.append("Elevated buy tax.")
 
         if sell_tax is not None and sell_tax > 0.05:
             flags.append(
-                f"Elevated sell tax detected: "
-                f"{format_number(sell_tax * 100, 2)}%."
+                f"Elevated sell tax detected: {format_number(sell_tax * 100, 2)}%."
             )
-            red_flags.append(
-                "Elevated sell tax."
-            )
+            red_flags.append("Elevated sell tax.")
 
         explicit_fields = [
             honeypot,
@@ -332,10 +280,7 @@ def fetch_token_security(chain_id, contract_address):
             sell_tax,
         ]
 
-        available_fields = sum(
-            value is not None
-            for value in explicit_fields
-        )
+        available_fields = sum(value is not None for value in explicit_fields)
 
         confidence = clamp(
             40 + available_fields * 8,
@@ -385,6 +330,4 @@ def fetch_token_security(chain_id, contract_address):
             exc,
         )
 
-        return _unavailable_report(
-            "Contract security provider unavailable."
-        )
+        return _unavailable_report("Contract security provider unavailable.")

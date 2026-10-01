@@ -9,50 +9,38 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from typing import Optional
 from urllib.parse import quote
-
-import requests
-from utils.helpers import (
-    _coin_resolution_cache,
-    _mark_provider_failure,
-    utc_now_iso,
-    normalize_symbol,
-    json_safe,
-    _get_symbol_fetch_lock,
-    _clear_provider_success,
-    empty_market_data,
-    _provider_is_cooling,
-    _http_get_cmc,
-    _http_get_market,
-)
-from typing import Any, Dict, List, Optional
 
 from config import (
     CMC_API_KEY,
-    CMC_API_URL,
-    COINGECKO_API_KEY,
-    COINGECKO_API_URL,
-    COINGECKO_AUTH_HEADER,
-    COINGECKO_MAX_RETRIES,
-    COINGECKO_PLAN,
     COIN_RESOLUTION_CACHE_TTL,
     COIN_RESOLUTION_MISS_TTL,
+    COINGECKO_API_URL,
+    COINGECKO_MAX_RETRIES,
     ENABLE_BINANCE_FALLBACK,
     HISTORY_CACHE_TTL,
     HISTORY_STALE_MAX_AGE,
     MARKET_CACHE_TTL,
-    MARKET_CAP_CACHE_TTL,
     MARKET_STALE_MAX_AGE,
     MARKET_TIMEOUT,
-    PROVIDER_COOLDOWN_429,
-    PROVIDER_COOLDOWN_DEFAULT,
-    PROVIDER_COOLDOWN_FORBIDDEN,
     SUPPORTED_HISTORY_DAYS,
     TOKEN_MAP,
-    _mask_secret,
 )
 from extensions import _cache_lock, _history_cache, _market_cache, _market_cap_cache
-from utils.errors import MarketDataUnavailableError, UnsupportedAssetError
+from utils.errors import UnsupportedAssetError
+from utils.helpers import (
+    _clear_provider_success,
+    _coin_resolution_cache,
+    _get_symbol_fetch_lock,
+    _http_get_market,
+    _mark_provider_failure,
+    _provider_is_cooling,
+    empty_market_data,
+    json_safe,
+    normalize_symbol,
+    utc_now_iso,
+)
 from utils.math_helpers import numeric, optional_numeric, percentage_change
 
 logger = logging.getLogger(__name__)
@@ -79,9 +67,7 @@ def resolve_coin_id(
     Raises UnsupportedAssetError if the asset is not recognized.
     """
 
-    symbol = normalize_symbol(
-        symbol
-    )
+    symbol = normalize_symbol(symbol)
 
     if not symbol:
         return None
@@ -99,7 +85,6 @@ def resolve_coin_id(
         cached = _coin_resolution_cache.get(symbol)
 
     if isinstance(cached, dict):
-
         try:
             cached_at = float(cached.get("cached_at") or 0)
         except (TypeError, ValueError):
@@ -107,20 +92,14 @@ def resolve_coin_id(
 
         cached_id = cached.get("coin_id")
 
-        ttl = (
-            COIN_RESOLUTION_CACHE_TTL
-            if cached_id
-            else COIN_RESOLUTION_MISS_TTL
-        )
+        ttl = COIN_RESOLUTION_CACHE_TTL if cached_id else COIN_RESOLUTION_MISS_TTL
 
         if now - cached_at < ttl:
-
             if cached_id:
                 return cached_id
 
             raise UnsupportedAssetError(
-                f"Unsupported asset '{symbol}'. "
-                "This token isn't supported yet."
+                f"Unsupported asset '{symbol}'. This token isn't supported yet."
             )
 
     # 3. Dynamic resolution via CoinGecko /search. While CoinGecko
@@ -130,20 +109,13 @@ def resolve_coin_id(
         return None
 
     try:
-
         response, status_code, error_reason = _http_get_market(
             f"{COINGECKO_API_URL}/search",
             params={"query": symbol},
             timeout=MARKET_TIMEOUT,
         )
 
-        if (
-            response is None
-            or (
-                status_code is not None
-                and status_code >= 400
-            )
-        ):
+        if response is None or (status_code is not None and status_code >= 400):
             # Transient provider failure — do NOT cache a negative
             # result; leave un-resolved and treat as unavailable.
             logger.info(
@@ -156,23 +128,17 @@ def resolve_coin_id(
 
         payload = response.json()
 
-        matches = (
-            payload.get("coins")
-            if isinstance(payload, dict)
-            else None
-        )
+        matches = payload.get("coins") if isinstance(payload, dict) else None
 
         resolved_id = None
 
         if isinstance(matches, list):
-
             # Only accept an EXACT symbol match (case-insensitive).
             # /search returns fuzzy matches; blindly taking the first
             # entry would silently analyze the wrong asset.
             wanted = symbol.lower()
 
             for entry in matches:
-
                 if not isinstance(entry, dict):
                     continue
 
@@ -181,16 +147,13 @@ def resolve_coin_id(
                 if not entry_id:
                     continue
 
-                entry_symbol = str(
-                    entry.get("symbol", "")
-                ).strip().lower()
+                entry_symbol = str(entry.get("symbol", "")).strip().lower()
 
                 if entry_symbol == wanted:
                     resolved_id = entry_id
                     break
 
         if resolved_id:
-
             _cache_coin_resolution(symbol, resolved_id)
 
             logger.info(
@@ -206,8 +169,7 @@ def resolve_coin_id(
         _cache_coin_resolution(symbol, None)
 
         raise UnsupportedAssetError(
-            f"Unsupported asset '{symbol}'. "
-            "This token isn't supported yet."
+            f"Unsupported asset '{symbol}'. This token isn't supported yet."
         )
 
     except UnsupportedAssetError:
@@ -242,7 +204,9 @@ def fetch_coingecko_market(
     # Skip if currently on cooldown.
     if not bypass_cooldown and _provider_is_cooling("CoinGecko"):
         market = empty_market_data(symbol)
-        market["unavailable_reason"] = "CoinGecko is temporarily cooling down after a provider failure."
+        market["unavailable_reason"] = (
+            "CoinGecko is temporarily cooling down after a provider failure."
+        )
         return market
 
     coin_id = resolve_coin_id(symbol)
@@ -255,7 +219,9 @@ def fetch_coingecko_market(
                 f"failure; could not resolve symbol {symbol}."
             )
         else:
-            market["unavailable_reason"] = f"CoinGecko could not resolve symbol {symbol}."
+            market["unavailable_reason"] = (
+                f"CoinGecko could not resolve symbol {symbol}."
+            )
         return market
 
     # Execute request with retry loop for transient transport errors
@@ -297,7 +263,9 @@ def fetch_coingecko_market(
             retryable = True
         elif status_code == 429:
             # Check if we can wait out the cooldown within the job timeout
-            match = re.search(r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or ""))
+            match = re.search(
+                r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or "")
+            )
             if match:
                 retry_after_val = float(match.group(1))
                 if retry_after_val <= 2.0:
@@ -375,33 +343,21 @@ def fetch_coingecko_market(
             return market
 
         field_errors = {}
-        price = _read_market_number(
-            coin, "current_price", "CoinGecko", field_errors
-        )
-        volume = _read_market_number(
-            coin, "total_volume", "CoinGecko", field_errors
-        )
-        market_cap = _read_market_number(
-            coin, "market_cap", "CoinGecko", field_errors
-        )
+        price = _read_market_number(coin, "current_price", "CoinGecko", field_errors)
+        volume = _read_market_number(coin, "total_volume", "CoinGecko", field_errors)
+        market_cap = _read_market_number(coin, "market_cap", "CoinGecko", field_errors)
         change_24h = _read_market_number(
             coin, "price_change_percentage_24h", "CoinGecko", field_errors
         )
         change_7d = _read_market_number(
             coin, "price_change_percentage_7d_in_currency", "CoinGecko", field_errors
         )
-        high_24h = _read_market_number(
-            coin, "high_24h", "CoinGecko", field_errors
-        )
-        low_24h = _read_market_number(
-            coin, "low_24h", "CoinGecko", field_errors
-        )
+        high_24h = _read_market_number(coin, "high_24h", "CoinGecko", field_errors)
+        low_24h = _read_market_number(coin, "low_24h", "CoinGecko", field_errors)
 
         if price is None:
             market = empty_market_data(symbol)
-            market["unavailable_reason"] = (
-                "CoinGecko returned no usable price."
-            )
+            market["unavailable_reason"] = "CoinGecko returned no usable price."
             return market
 
         _clear_provider_success("CoinGecko")
@@ -421,24 +377,26 @@ def fetch_coingecko_market(
             price,
         )
 
-        return json_safe({
-            "symbol": symbol,
-            "coin_id": coin_id,
-            "price": price,
-            "price_change_24h_pct": change_24h,
-            "price_change_7d_pct": change_7d,
-            "volume_24h": volume,
-            "market_cap": market_cap,
-            "high_24h": high_24h,
-            "low_24h": low_24h,
-            "source": "CoinGecko",
-            "timestamp": timestamp,
-            "source_timestamps": {
-                "CoinGecko": timestamp,
-            },
-            "available": True,
-            "field_errors": field_errors,
-        })
+        return json_safe(
+            {
+                "symbol": symbol,
+                "coin_id": coin_id,
+                "price": price,
+                "price_change_24h_pct": change_24h,
+                "price_change_7d_pct": change_7d,
+                "volume_24h": volume,
+                "market_cap": market_cap,
+                "high_24h": high_24h,
+                "low_24h": low_24h,
+                "source": "CoinGecko",
+                "timestamp": timestamp,
+                "source_timestamps": {
+                    "CoinGecko": timestamp,
+                },
+                "available": True,
+                "field_errors": field_errors,
+            }
+        )
 
     except UnsupportedAssetError:
         raise
@@ -494,7 +452,6 @@ def fetch_market_data(
     """CoinGecko-only market fetcher with stale-cache fallback."""
 
     try:
-
         symbol = normalize_symbol(symbol)
 
         if not symbol:
@@ -520,10 +477,7 @@ def fetch_market_data(
                     )
 
                     effective_ttl = MARKET_CACHE_TTL
-                    if (
-                        cached.get("available")
-                        and (now - cached_at) < effective_ttl
-                    ):
+                    if cached.get("available") and (now - cached_at) < effective_ttl:
                         result = dict(cached)
                         result.pop("_cached_at", None)
 
@@ -603,13 +557,8 @@ def fetch_market_data(
             # Cache market cap from a successful snapshot so that a
             # later stale-serve path can report it even if CoinGecko
             # is down on the next request.
-            if (
-                isinstance(market, dict)
-                and market.get("available")
-            ):
-                primary_cap = optional_numeric(
-                    market.get("market_cap")
-                )
+            if isinstance(market, dict) and market.get("available"):
+                primary_cap = optional_numeric(market.get("market_cap"))
                 if primary_cap is not None:
                     with _cache_lock:
                         _market_cap_cache[symbol] = {
@@ -647,7 +596,9 @@ def fetch_market_data(
             if not market.get("available") and ENABLE_BINANCE_FALLBACK:
                 try:
                     binance_market = fetch_binance_market(symbol)
-                    if isinstance(binance_market, dict) and binance_market.get("available"):
+                    if isinstance(binance_market, dict) and binance_market.get(
+                        "available"
+                    ):
                         market = binance_market
                         market["is_fallback_provider"] = True
                         logger.info(
@@ -655,7 +606,9 @@ def fetch_market_data(
                             symbol,
                         )
                 except Exception as exc:
-                    logger.warning("[MARKET] Binance fallback failed for %s: %s", symbol, exc)
+                    logger.warning(
+                        "[MARKET] Binance fallback failed for %s: %s", symbol, exc
+                    )
 
             if not market.get("available") and CMC_API_KEY:
                 try:
@@ -729,7 +682,6 @@ def fetch_market_data(
         raise
 
     except Exception as exc:
-
         logger.warning(
             "fetch_market_data failed unexpectedly: %s",
             exc,
@@ -761,24 +713,21 @@ def _price_series_change(
                 points between latest and anchor, or None if unusable.
     """
 
-    if not isinstance(
-        prices,
-        list,
-    ) or not prices:
+    if (
+        not isinstance(
+            prices,
+            list,
+        )
+        or not prices
+    ):
         return None, None
 
     clean = []
 
     for raw in prices:
+        value = optional_numeric(raw)
 
-        value = optional_numeric(
-            raw
-        )
-
-        if (
-            value is not None
-            and value > 0
-        ):
+        if value is not None and value > 0:
             clean.append(value)
 
     if len(clean) < 2:
@@ -837,7 +786,6 @@ def enrich_market_7d(
     """
 
     try:
-
         market = (
             dict(market)
             if isinstance(
@@ -847,14 +795,10 @@ def enrich_market_7d(
             else {}
         )
 
-        if market.get(
-            "price_change_7d_pct"
-        ) is not None:
+        if market.get("price_change_7d_pct") is not None:
             return json_safe(market)
 
-        symbol = normalize_symbol(
-            symbol
-        )
+        symbol = normalize_symbol(symbol)
 
         if not symbol:
             return json_safe(market)
@@ -877,17 +821,11 @@ def enrich_market_7d(
         )
 
         if change_7d is None:
-            change_7d = optional_numeric(
-                market.get(
-                    "change_7d_pct"
-                )
-            )
+            change_7d = optional_numeric(market.get("change_7d_pct"))
             actual_lookback = None
 
         if change_7d is not None:
-            market[
-                "price_change_7d_pct"
-            ] = round(
+            market["price_change_7d_pct"] = round(
                 float(change_7d),
                 2,
             )
@@ -895,24 +833,18 @@ def enrich_market_7d(
             # if the "7d" change was computed over a shorter
             # period due to partial history data.
             if actual_lookback is not None and actual_lookback < 7:
-                market[
-                    "price_change_7d_actual_days"
-                ] = actual_lookback
-                market[
-                    "price_change_7d_is_partial"
-                ] = True
+                market["price_change_7d_actual_days"] = actual_lookback
+                market["price_change_7d_is_partial"] = True
 
         return json_safe(market)
 
     except Exception as exc:
-
         logger.debug(
             "enrich_market_7d failed: %s",
             exc,
         )
 
         try:
-
             if isinstance(
                 market,
                 dict,
@@ -945,13 +877,9 @@ def fetch_coingecko_history(
     ``_prices_only(series)`` to extract them.
     """
 
-    symbol = normalize_symbol(
-        symbol
-    )
+    symbol = normalize_symbol(symbol)
 
-    coin_id = resolve_coin_id(
-        symbol
-    )
+    coin_id = resolve_coin_id(symbol)
 
     if not coin_id:
         return []
@@ -963,8 +891,7 @@ def fetch_coingecko_history(
     status_code = None
     for attempt in range(1, COINGECKO_MAX_RETRIES + 1):
         response, status_code, error_reason = _http_get_market(
-            f"{COINGECKO_API_URL}/coins/"
-            f"{quote(coin_id, safe='')}/market_chart",
+            f"{COINGECKO_API_URL}/coins/{quote(coin_id, safe='')}/market_chart",
             params={
                 "vs_currency": "usd",
                 "days": _safe_lookback(
@@ -983,12 +910,12 @@ def fetch_coingecko_history(
 
         retryable = False
         smart_wait = None
-        if response is None:
-            retryable = True
-        elif status_code is not None and status_code >= 500:
+        if response is None or status_code is not None and status_code >= 500:
             retryable = True
         elif status_code == 429:
-            match = re.search(r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or ""))
+            match = re.search(
+                r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or "")
+            )
             if match:
                 retry_after_val = float(match.group(1))
                 if retry_after_val <= 2.0:
@@ -1034,7 +961,6 @@ def fetch_coingecko_history(
         return []
 
     try:
-
         payload = response.json()
 
         if not isinstance(
@@ -1057,7 +983,6 @@ def fetch_coingecko_history(
         result = []
 
         for item in prices:
-
             if (
                 not isinstance(
                     item,
@@ -1067,18 +992,11 @@ def fetch_coingecko_history(
             ):
                 continue
 
-            timestamp_ms = optional_numeric(
-                item[0]
-            )
+            timestamp_ms = optional_numeric(item[0])
 
-            price = optional_numeric(
-                item[1]
-            )
+            price = optional_numeric(item[1])
 
-            if (
-                price is None
-                or price <= 0
-            ):
+            if price is None or price <= 0:
                 continue
 
             # P2: preserve the CoinGecko-provided timestamp so beta
@@ -1087,10 +1005,12 @@ def fetch_coingecko_history(
             if timestamp_ms is None:
                 timestamp_ms = 0
 
-            result.append({
-                "timestamp": int(timestamp_ms),
-                "price": price,
-            })
+            result.append(
+                {
+                    "timestamp": int(timestamp_ms),
+                    "price": price,
+                }
+            )
 
         return result
 
@@ -1100,7 +1020,6 @@ def fetch_coingecko_history(
         AttributeError,
         KeyError,
     ) as exc:
-
         logger.warning(
             "CoinGecko history parsing failed: %s",
             exc,
@@ -1109,7 +1028,6 @@ def fetch_coingecko_history(
         return []
 
     except Exception as exc:
-
         logger.warning(
             "CoinGecko history failed unexpectedly: %s",
             exc,
@@ -1164,10 +1082,7 @@ def fetch_price_history(
 ) -> list:
 
     try:
-
-        symbol = normalize_symbol(
-            symbol
-        )
+        symbol = normalize_symbol(symbol)
 
         if not symbol:
             return []
@@ -1183,28 +1098,25 @@ def fetch_price_history(
             ),
         )
 
-        cache_key = (
-            f"{symbol}:{days}"
-        )
+        cache_key = f"{symbol}:{days}"
 
         now = time.time()
         stale_prices = None
         cached_at = 0
 
         try:
-
             with _cache_lock:
+                cached = _history_cache.get(cache_key)
 
-                cached = _history_cache.get(
-                    cache_key
+            if (
+                isinstance(
+                    cached,
+                    dict,
                 )
-
-            if isinstance(
-                cached,
-                dict,
-            ) and cached:
+                and cached
+            ):
                 stale_prices = cached.get("prices", [])
-                
+
                 cached_at = numeric(
                     cached.get(
                         "_cached_at",
@@ -1222,11 +1134,7 @@ def fetch_price_history(
                 # removed.
                 effective_ttl = 86400 if symbol.upper() == "BTC" else HISTORY_CACHE_TTL
 
-                if (
-                    now - cached_at
-                    < effective_ttl
-                ):
-
+                if now - cached_at < effective_ttl:
                     cached_prices = stale_prices
 
                     if isinstance(
@@ -1241,7 +1149,6 @@ def fetch_price_history(
                         return list(cached_prices)
 
         except Exception as exc:
-
             logger.debug(
                 "History cache read failed: %s",
                 exc,
@@ -1299,7 +1206,9 @@ def fetch_price_history(
                         len(prices),
                     )
             except Exception as exc:
-                logger.warning("[HISTORY] Binance history fallback failed for %s: %s", symbol, exc)
+                logger.warning(
+                    "[HISTORY] Binance history fallback failed for %s: %s", symbol, exc
+                )
 
         # --------------------------------------------------------
         # CoinMarketCap history fallback
@@ -1331,20 +1240,14 @@ def fetch_price_history(
         # temporarily (e.g., 451/429), causing volatility, beta and
         # 7d change to stay missing even after the provider recovers.
         if prices:
-
             try:
-
                 with _cache_lock:
-
-                    _history_cache[
-                        cache_key
-                    ] = {
+                    _history_cache[cache_key] = {
                         "prices": list(prices),
                         "_cached_at": now,
                     }
 
             except Exception as exc:
-
                 logger.debug(
                     "History cache write failed: %s",
                     exc,
@@ -1353,7 +1256,6 @@ def fetch_price_history(
         return list(prices)
 
     except Exception as exc:
-
         logger.warning(
             "fetch_price_history failed: %s",
             exc,
@@ -1426,9 +1328,7 @@ def _align_series_by_date(
     asset_map = _series_date_map(asset_series)
     btc_map = _series_date_map(btc_series)
 
-    common_days = sorted(
-        set(asset_map.keys()) & set(btc_map.keys())
-    )
+    common_days = sorted(set(asset_map.keys()) & set(btc_map.keys()))
 
     asset_aligned = [asset_map[d] for d in common_days]
     btc_aligned = [btc_map[d] for d in common_days]

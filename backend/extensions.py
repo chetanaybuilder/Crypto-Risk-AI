@@ -15,7 +15,6 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 from authlib.integrations.flask_client import OAuth
-
 from config import (
     ANALYSIS_EXECUTOR_WORKERS,
     DATABASE_URL,
@@ -29,18 +28,18 @@ from config import (
 )
 
 __all__ = [
-    "oauth",
-    "_cache_lock",
-    "_market_cache",
-    "_market_cap_cache",
-    "_history_cache",
     "ANALYSIS_EXECUTOR",
     "GEMINI_EXECUTOR",
-    "gemini_client",
+    "_cache_lock",
     "_gemini_generate",
+    "_history_cache",
+    "_market_cache",
+    "_market_cap_cache",
+    "gemini_client",
     "get_db_connection",
     "init_db",
     "logger",
+    "oauth",
 ]
 
 logger = logging.getLogger(__name__)
@@ -87,7 +86,9 @@ if genai and GEMINI_API_KEY:
 def _gemini_generate(prompt: str) -> str:
     """Synchronous wrapper for Gemini generation to run inside thread pools."""
     if gemini_client is None:
-        raise RuntimeError("Gemini AI is not configured (missing API key or client library).")
+        raise RuntimeError(
+            "Gemini AI is not configured (missing API key or client library)."
+        )
 
     response = gemini_client.models.generate_content(
         model=GEMINI_MODEL,
@@ -102,12 +103,16 @@ def _validate_db_pool_config() -> None:
         min_conn = int(DB_POOL_MIN_CONN)
         max_conn = int(DB_POOL_MAX_CONN)
     except (TypeError, ValueError) as exc:
-        raise RuntimeError("DB_POOL_MIN_CONN and DB_POOL_MAX_CONN must be valid integers.") from exc
+        raise RuntimeError(
+            "DB_POOL_MIN_CONN and DB_POOL_MAX_CONN must be valid integers."
+        ) from exc
 
     if min_conn < 1:
         raise RuntimeError("DB_POOL_MIN_CONN must be at least 1.")
     if max_conn < min_conn:
-        raise RuntimeError("DB_POOL_MAX_CONN must be greater than or equal to DB_POOL_MIN_CONN.")
+        raise RuntimeError(
+            "DB_POOL_MAX_CONN must be greater than or equal to DB_POOL_MIN_CONN."
+        )
 
 
 def _init_db_pool():
@@ -134,7 +139,11 @@ def _init_db_pool():
                 sslmode="require",
                 connect_timeout=10,
             )
-            logger.info("PostgreSQL connection pool initialized (min=%s, max=%s).", DB_POOL_MIN_CONN, DB_POOL_MAX_CONN)
+            logger.info(
+                "PostgreSQL connection pool initialized (min=%s, max=%s).",
+                DB_POOL_MIN_CONN,
+                DB_POOL_MAX_CONN,
+            )
             return _db_pool
         except Exception:
             _db_pool = None
@@ -165,16 +174,22 @@ class _PooledConnection:
             if exc_type is not None:
                 self.rollback()
         except Exception:
-            logger.debug("Rollback during connection context exit failed.", exc_info=True)
+            logger.debug(
+                "Rollback during connection context exit failed.", exc_info=True
+            )
         finally:
             self.close()
         return False
 
     def _ensure_open(self):
         if self._closed:
-            raise RuntimeError("Database connection has already been returned to the pool.")
+            raise RuntimeError(
+                "Database connection has already been returned to the pool."
+            )
         if self._conn is None or self._conn.closed:
-            raise RuntimeError("Underlying database connection is closed or unavailable.")
+            raise RuntimeError(
+                "Underlying database connection is closed or unavailable."
+            )
 
     def cursor(self, *args, **kwargs):
         self._ensure_open()
@@ -215,7 +230,10 @@ class _PooledConnection:
                 try:
                     conn.rollback()
                 except Exception:
-                    logger.warning("Could not reset transaction state before returning DB connection.", exc_info=True)
+                    logger.warning(
+                        "Could not reset transaction state before returning DB connection.",
+                        exc_info=True,
+                    )
                     try:
                         pool.putconn(conn, close=True)
                     except Exception:
@@ -287,7 +305,9 @@ def get_db_connection():
             if conn is not None:
                 _discard_pooled_connection(pool, conn)
 
-            logger.warning("DB connection attempt %s/%s failed: %s", attempt + 1, retries, exc)
+            logger.warning(
+                "DB connection attempt %s/%s failed: %s", attempt + 1, retries, exc
+            )
             if attempt < retries - 1:
                 sleep_seconds = retry_delay * (attempt + 1)
                 if sleep_seconds > 0:
@@ -425,7 +445,9 @@ def init_db():
             try:
                 connection.rollback()
             except Exception:
-                logger.debug("Database rollback after init failure failed.", exc_info=True)
+                logger.debug(
+                    "Database rollback after init failure failed.", exc_info=True
+                )
         logger.exception("Database initialization failed: %s", exc)
         raise
     finally:

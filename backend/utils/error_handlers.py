@@ -6,6 +6,7 @@ with correlation tracking for REST clients while allowing static views to render
 """
 
 import logging
+
 from flask import Blueprint, g, jsonify, request
 
 logger = logging.getLogger(__name__)
@@ -20,11 +21,13 @@ def _is_api_request() -> bool:
 
 def _api_error(message: str, status_code: int):
     """Construct standard JSON error payload with correlation ID."""
-    return jsonify({
-        "success": False,
-        "error": message,
-        "request_id": g.get("request_id"),
-    }), status_code
+    return jsonify(
+        {
+            "success": False,
+            "error": message,
+            "request_id": g.get("request_id"),
+        }
+    ), status_code
 
 
 @bp.app_errorhandler(400)

@@ -5,7 +5,6 @@ Provides zero-downtime deployment compatibility for WSGI hosts (e.g. Render, Her
 configured to launch from the repository root via 'gunicorn app:app'.
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -18,4 +17,5 @@ from backend.app import app
 
 if __name__ == "__main__":
     from config import IS_PRODUCTION
+
     app.run(debug=not IS_PRODUCTION, port=5000)

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-risk-ai"
+version = "1.0.0"
+description = "AI-powered cryptocurrency risk synthesis and analysis"
+authors = [{name = "Chetanay Batra"}]
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0"
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["backend"]

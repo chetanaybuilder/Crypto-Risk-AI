@@ -11,23 +11,22 @@ fallback report instead of propagating an exception to callers.
 """
 
 import json
-import time
-import re
 import logging
-from typing import Optional
+import re
+import time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from typing import Optional
 
 from config import (
+    AI_LIST_FIELDS,
     AI_STRING_FIELDS,
     FIELD_LABELS,
     GEMINI_MAX_RETRIES,
     GEMINI_TIMEOUT_SECONDS,
-    AI_LIST_FIELDS,
 )
+from extensions import GEMINI_EXECUTOR, _gemini_generate, gemini_client
 from utils.helpers import format_number, json_safe
 from utils.math_helpers import clamp
-
-from extensions import GEMINI_EXECUTOR, _gemini_generate, gemini_client
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +210,7 @@ def fallback_ai_report(symbol, risk_profile, stress, security=None):
                 else "."
             )
             + " The analysis is based on the available "
-              "market, volatility, liquidity and stress signals."
+            "market, volatility, liquidity and stress signals."
         ),
         "synthesis": (
             "Gemini AI interpretation is temporarily unavailable. "
@@ -405,7 +404,7 @@ def extract_json_object(text):
         return None
 
     try:
-        return json.loads(text[start:end + 1])
+        return json.loads(text[start : end + 1])
     except Exception:
         return None
 
@@ -592,7 +591,7 @@ def _run_gemini_interpretation(
                     pass
 
             if attempt < max_retries:
-                delay = _RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                delay = _RETRY_BASE_DELAY_SECONDS * (2**attempt)
                 time.sleep(delay)
                 continue
 
@@ -611,7 +610,7 @@ def _run_gemini_interpretation(
             )
 
             if attempt < max_retries:
-                delay = _RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                delay = _RETRY_BASE_DELAY_SECONDS * (2**attempt)
                 time.sleep(delay)
                 continue
 
@@ -624,9 +623,8 @@ def _run_gemini_interpretation(
         last_error,
     )
 
-    fallback["data_quality_note"] += (
-        " Gemini interpretation was unavailable"
-        + (f" ({last_error})." if last_error else ".")
+    fallback["data_quality_note"] += " Gemini interpretation was unavailable" + (
+        f" ({last_error})." if last_error else "."
     )
 
     return json_safe(fallback)

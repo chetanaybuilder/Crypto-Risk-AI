@@ -31,12 +31,11 @@ from utils.helpers import (
     utc_now_iso,
 )
 from utils.math_helpers import (
-    clamp,
-    numeric,
-    optional_numeric,
     calculate_quant_metrics,
+    clamp,
     extract_beta_value,
     extract_volatility_value,
+    optional_numeric,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,18 +91,10 @@ def score_liquidity(volume_24h, market_cap):
     volume_24h = optional_numeric(volume_24h)
     market_cap = optional_numeric(market_cap)
 
-    if (
-        volume_24h is None
-        or not math.isfinite(volume_24h)
-        or volume_24h < 0
-    ):
+    if volume_24h is None or not math.isfinite(volume_24h) or volume_24h < 0:
         return None
 
-    if (
-        market_cap is None
-        or not math.isfinite(market_cap)
-        or market_cap <= 0
-    ):
+    if market_cap is None or not math.isfinite(market_cap) or market_cap <= 0:
         if volume_24h >= 1_000_000_000:
             return 20
 
@@ -207,19 +198,11 @@ def score_structural_risk(security):
 
     honeypot = raw_signals.get("honeypot")
     blacklist = raw_signals.get("blacklist")
-    ownership_recovery = raw_signals.get(
-        "ownership_recovery"
-    )
-    owner_balance_change = raw_signals.get(
-        "owner_balance_change"
-    )
+    ownership_recovery = raw_signals.get("ownership_recovery")
+    owner_balance_change = raw_signals.get("owner_balance_change")
     open_source = raw_signals.get("open_source")
-    buy_tax = optional_numeric(
-        raw_signals.get("buy_tax")
-    )
-    sell_tax = optional_numeric(
-        raw_signals.get("sell_tax")
-    )
+    buy_tax = optional_numeric(raw_signals.get("buy_tax"))
+    sell_tax = optional_numeric(raw_signals.get("sell_tax"))
 
     if honeypot is True:
         score += 45
@@ -301,25 +284,16 @@ def calculate_composite_risk(
     total_weight = 0.0
 
     for key, raw_value in values.items():
-        weight = optional_numeric(
-            RISK_WEIGHTS.get(key)
-        )
+        weight = optional_numeric(RISK_WEIGHTS.get(key))
 
-        if (
-            weight is None
-            or not math.isfinite(weight)
-            or weight <= 0
-        ):
+        if weight is None or not math.isfinite(weight) or weight <= 0:
             continue
 
         total_weight += weight
 
         value = optional_numeric(raw_value)
 
-        if (
-            value is None
-            or not math.isfinite(value)
-        ):
+        if value is None or not math.isfinite(value):
             continue
 
         value = clamp(value, 0, 100)
@@ -372,45 +346,27 @@ def build_risk_profile(
         market,
     )
 
-    beta = extract_beta_value(
-        quant
-    )
+    beta = extract_beta_value(quant)
 
-    volume = optional_numeric(
-        market.get("volume_24h")
-    )
+    volume = optional_numeric(market.get("volume_24h"))
 
-    market_cap = optional_numeric(
-        market.get("market_cap")
-    )
+    market_cap = optional_numeric(market.get("market_cap"))
 
-    volatility_score = score_volatility(
-        volatility
-    )
+    volatility_score = score_volatility(volatility)
 
     liquidity_score = score_liquidity(
         volume,
         market_cap,
     )
 
-    sensitivity_score = score_beta(
-        beta
-    )
+    sensitivity_score = score_beta(beta)
 
-    structural_score = score_structural_risk(
-        security
-    )
+    structural_score = score_structural_risk(security)
 
-    if (
-        isinstance(security, dict)
-        and security.get("not_applicable")
-    ):
+    if isinstance(security, dict) and security.get("not_applicable"):
         structural_detail = "Not applicable."
 
-    elif (
-        isinstance(security, dict)
-        and security.get("available")
-    ):
+    elif isinstance(security, dict) and security.get("available"):
         structural_detail = security.get(
             "status",
             "Security assessment available.",
@@ -436,12 +392,9 @@ def build_risk_profile(
         "volatility": {
             "score": volatility_score,
             "label": risk_label(volatility_score),
-            "weight": RISK_WEIGHTS.get(
-                "volatility"
-            ),
+            "weight": RISK_WEIGHTS.get("volatility"),
             "detail": (
-                f"Annualized realized volatility: "
-                f"{format_number(volatility, 1)}%"
+                f"Annualized realized volatility: {format_number(volatility, 1)}%"
                 if volatility is not None
                 else "Volatility data unavailable."
             ),
@@ -449,23 +402,14 @@ def build_risk_profile(
         "liquidity": {
             "score": liquidity_score,
             "label": risk_label(liquidity_score),
-            "weight": RISK_WEIGHTS.get(
-                "liquidity"
-            ),
+            "weight": RISK_WEIGHTS.get("liquidity"),
             "detail": (
-                "Liquidity estimated from 24h "
-                "volume-to-market-cap turnover."
-                if (
-                    liquidity_score is not None
-                    and market_cap is not None
-                )
+                "Liquidity estimated from 24h volume-to-market-cap turnover."
+                if (liquidity_score is not None and market_cap is not None)
                 else (
                     "Liquidity estimated from 24h volume "
                     "only; market cap is unavailable."
-                    if (
-                        liquidity_score is not None
-                        and market_cap is None
-                    )
+                    if (liquidity_score is not None and market_cap is None)
                     else "Liquidity data unavailable."
                 )
             ),
@@ -473,9 +417,7 @@ def build_risk_profile(
         "market_sensitivity": {
             "score": sensitivity_score,
             "label": risk_label(sensitivity_score),
-            "weight": RISK_WEIGHTS.get(
-                "market_sensitivity"
-            ),
+            "weight": RISK_WEIGHTS.get("market_sensitivity"),
             "detail": (
                 f"BTC beta: {format_number(beta, 2)}"
                 if beta is not None
@@ -485,9 +427,7 @@ def build_risk_profile(
         "structural": {
             "score": structural_score,
             "label": risk_label(structural_score),
-            "weight": RISK_WEIGHTS.get(
-                "structural"
-            ),
+            "weight": RISK_WEIGHTS.get("structural"),
             "detail": structural_detail,
         },
     }
@@ -525,44 +465,35 @@ def calculate_stress_test(
     """
     beta = optional_numeric(beta)
 
-    if (
-        beta is None
-        or not math.isfinite(beta)
-    ):
-        return json_safe({
-            "available": False,
-            "unavailable_reason": (
-                "Beta unavailable — no historical BTC data."
-            ),
-            "benchmark": "BTC",
-            "base_scenario": {},
-            "scenarios": [],
-            "expected_downside_pct": None,
-            "drawdown_pct": None,
-            "resilience_score": None,
-            "resilience_label": "Unavailable",
-            "verdict": (
-                "Unavailable — no BTC benchmark history"
-            ),
-            "confidence": None,
-            "assumed_parameters": [],
-            "used_default_beta": False,
-            "used_default_volatility": False,
-            "used_default_liquidity": False,
-            "methodology": (
-                "BTC-relative scenario analysis requires "
-                "a measured BTC beta."
-            ),
-        })
+    if beta is None or not math.isfinite(beta):
+        return json_safe(
+            {
+                "available": False,
+                "unavailable_reason": ("Beta unavailable — no historical BTC data."),
+                "benchmark": "BTC",
+                "base_scenario": {},
+                "scenarios": [],
+                "expected_downside_pct": None,
+                "drawdown_pct": None,
+                "resilience_score": None,
+                "resilience_label": "Unavailable",
+                "verdict": ("Unavailable — no BTC benchmark history"),
+                "confidence": None,
+                "assumed_parameters": [],
+                "used_default_beta": False,
+                "used_default_volatility": False,
+                "used_default_liquidity": False,
+                "methodology": (
+                    "BTC-relative scenario analysis requires a measured BTC beta."
+                ),
+            }
+        )
 
     beta = max(beta, -5.0)
     beta = min(beta, 5.0)
 
     volatility = optional_numeric(volatility)
-    volatility_is_assumed = (
-        volatility is None
-        or not math.isfinite(volatility)
-    )
+    volatility_is_assumed = volatility is None or not math.isfinite(volatility)
 
     if volatility_is_assumed:
         volatility = 60.0
@@ -573,14 +504,9 @@ def calculate_stress_test(
         250,
     )
 
-    liquidity_score = optional_numeric(
-        liquidity_score
-    )
+    liquidity_score = optional_numeric(liquidity_score)
 
-    liquidity_is_assumed = (
-        liquidity_score is None
-        or not math.isfinite(liquidity_score)
-    )
+    liquidity_is_assumed = liquidity_score is None or not math.isfinite(liquidity_score)
 
     if liquidity_is_assumed:
         liquidity_score = 50.0
@@ -607,11 +533,7 @@ def calculate_stress_test(
             2.5,
         )
 
-        volatility_adjustment = (
-            abs(beta_move)
-            * volatility_factor
-            * 0.08
-        )
+        volatility_adjustment = abs(beta_move) * volatility_factor * 0.08
 
         # Liquidity adjustment:
         #
@@ -622,29 +544,17 @@ def calculate_stress_test(
             1,
         )
 
-        liquidity_adjustment = (
-            abs(beta_move)
-            * liquidity_factor
-            * 0.08
-        )
+        liquidity_adjustment = abs(beta_move) * liquidity_factor * 0.08
 
         # Only increase downside magnitude when the beta-derived
         # scenario itself is negative.
         if beta_move < 0:
-            estimated_move = (
-                beta_move
-                - volatility_adjustment
-                - liquidity_adjustment
-            )
+            estimated_move = beta_move - volatility_adjustment - liquidity_adjustment
         else:
             # For inverse/negative-beta assets, uncertainty should
             # reduce the positive hedge effect rather than create
             # an artificial downside prediction.
-            estimated_move = (
-                beta_move
-                - volatility_adjustment
-                + liquidity_adjustment
-            )
+            estimated_move = beta_move - volatility_adjustment + liquidity_adjustment
 
         estimated_move = clamp(
             estimated_move,
@@ -658,31 +568,27 @@ def calculate_stress_test(
         )
 
         resilience = clamp(
-            100
-            - downside_magnitude * 1.8
-            - max(liquidity_score - 50, 0) * 0.20,
+            100 - downside_magnitude * 1.8 - max(liquidity_score - 50, 0) * 0.20,
             0,
             100,
         )
 
-        scenarios.append({
-            "btc_shock_pct": btc_shock,
-            "estimated_asset_move_pct": round(
-                estimated_move,
-                2,
-            ),
-            "resilience_score": round(
-                resilience,
-                1,
-            ),
-        })
+        scenarios.append(
+            {
+                "btc_shock_pct": btc_shock,
+                "estimated_asset_move_pct": round(
+                    estimated_move,
+                    2,
+                ),
+                "resilience_score": round(
+                    resilience,
+                    1,
+                ),
+            }
+        )
 
     ten_percent_case = next(
-        (
-            item
-            for item in scenarios
-            if item["btc_shock_pct"] == -10
-        ),
+        (item for item in scenarios if item["btc_shock_pct"] == -10),
         scenarios[0],
     )
 
@@ -702,9 +608,7 @@ def calculate_stress_test(
         90,
     )
 
-    resilience_score = ten_percent_case.get(
-        "resilience_score"
-    )
+    resilience_score = ten_percent_case.get("resilience_score")
 
     if resilience_score >= 65:
         verdict = "Relatively resilient"
@@ -718,9 +622,7 @@ def calculate_stress_test(
         verdict = "High downside sensitivity"
         resilience_label = "Fragile"
 
-    expected_drawdown = ten_percent_case.get(
-        "estimated_asset_move_pct"
-    )
+    expected_drawdown = ten_percent_case.get("estimated_asset_move_pct")
 
     assumed_parameters = []
 
@@ -747,14 +649,10 @@ def calculate_stress_test(
         ),
         "verdict": verdict,
         "expected_drawdown_pct": (
-            round(expected_drawdown, 2)
-            if expected_drawdown is not None
-            else None
+            round(expected_drawdown, 2) if expected_drawdown is not None else None
         ),
         "drawdown_pct": (
-            round(expected_drawdown, 2)
-            if expected_drawdown is not None
-            else None
+            round(expected_drawdown, 2) if expected_drawdown is not None else None
         ),
         "resilience_label": resilience_label,
         "resilience_score": round(
@@ -782,119 +680,115 @@ def build_risk_drivers(
     Produce concise, evidence-backed risk drivers.
     """
     if not isinstance(risk_profile, dict):
-        return [{
-            "title": "Risk profile unavailable",
-            "severity": "Unavailable",
-            "detail": (
-                "Insufficient quantitative data to identify "
-                "dominant risk drivers."
-            ),
-        }]
+        return [
+            {
+                "title": "Risk profile unavailable",
+                "severity": "Unavailable",
+                "detail": (
+                    "Insufficient quantitative data to identify dominant risk drivers."
+                ),
+            }
+        ]
 
-    pillars = risk_profile.get(
-        "pillars",
-        {}
-    )
+    pillars = risk_profile.get("pillars", {})
 
     if not isinstance(pillars, dict):
         pillars = {}
 
     drivers = []
 
-    volatility = pillars.get(
-        "volatility",
-        {}
-    )
-    liquidity = pillars.get(
-        "liquidity",
-        {}
-    )
-    sensitivity = pillars.get(
-        "market_sensitivity",
-        {}
-    )
-    structural = pillars.get(
-        "structural",
-        {}
-    )
+    volatility = pillars.get("volatility", {})
+    liquidity = pillars.get("liquidity", {})
+    sensitivity = pillars.get("market_sensitivity", {})
+    structural = pillars.get("structural", {})
 
     if (
         isinstance(volatility, dict)
         and volatility.get("score") is not None
         and volatility["score"] >= 70
     ):
-        drivers.append({
-            "title": "High volatility",
-            "severity": volatility.get(
-                "label",
-                "High",
-            ),
-            "detail": volatility.get(
-                "detail",
-                "Volatility is elevated.",
-            ),
-        })
+        drivers.append(
+            {
+                "title": "High volatility",
+                "severity": volatility.get(
+                    "label",
+                    "High",
+                ),
+                "detail": volatility.get(
+                    "detail",
+                    "Volatility is elevated.",
+                ),
+            }
+        )
 
     if (
         isinstance(liquidity, dict)
         and liquidity.get("score") is not None
         and liquidity["score"] >= 65
     ):
-        drivers.append({
-            "title": "Liquidity pressure",
-            "severity": liquidity.get(
-                "label",
-                "High",
-            ),
-            "detail": liquidity.get(
-                "detail",
-                "Liquidity conditions are weaker.",
-            ),
-        })
+        drivers.append(
+            {
+                "title": "Liquidity pressure",
+                "severity": liquidity.get(
+                    "label",
+                    "High",
+                ),
+                "detail": liquidity.get(
+                    "detail",
+                    "Liquidity conditions are weaker.",
+                ),
+            }
+        )
 
     if (
         isinstance(sensitivity, dict)
         and sensitivity.get("score") is not None
         and sensitivity["score"] >= 70
     ):
-        drivers.append({
-            "title": "High BTC sensitivity",
-            "severity": sensitivity.get(
-                "label",
-                "High",
-            ),
-            "detail": sensitivity.get(
-                "detail",
-                "Asset shows elevated BTC sensitivity.",
-            ),
-        })
+        drivers.append(
+            {
+                "title": "High BTC sensitivity",
+                "severity": sensitivity.get(
+                    "label",
+                    "High",
+                ),
+                "detail": sensitivity.get(
+                    "detail",
+                    "Asset shows elevated BTC sensitivity.",
+                ),
+            }
+        )
 
     if (
         isinstance(structural, dict)
         and structural.get("score") is not None
         and structural["score"] >= 65
     ):
-        drivers.append({
-            "title": "Structural risk",
-            "severity": structural.get(
-                "label",
-                "High",
-            ),
-            "detail": structural.get(
-                "detail",
-                "Contract/security signals require attention.",
-            ),
-        })
+        drivers.append(
+            {
+                "title": "Structural risk",
+                "severity": structural.get(
+                    "label",
+                    "High",
+                ),
+                "detail": structural.get(
+                    "detail",
+                    "Contract/security signals require attention.",
+                ),
+            }
+        )
 
     if not drivers:
-        drivers.append({
-            "title": "No dominant quantitative red flag",
-            "severity": "Moderate",
-            "detail": (
-                "Current available signals do not show "
-                "a single dominant risk driver."
-            ),
-        })
+        drivers.append(
+            {
+                "title": "No dominant quantitative red flag",
+                "severity": "Moderate",
+                "detail": (
+                    "Current available signals do not show "
+                    "a single dominant risk driver."
+                ),
+            }
+        )
 
     return drivers[:6]
 
@@ -919,6 +813,7 @@ def _format_fiat(value):
     except (TypeError, ValueError):
         return None
 
+
 def _round_pct(value):
     if value is None:
         return None
@@ -926,6 +821,7 @@ def _round_pct(value):
         return round(float(value), 2)
     except (TypeError, ValueError):
         return None
+
 
 def build_evidence_pack(
     symbol,
@@ -947,59 +843,31 @@ def build_evidence_pack(
         market,
     )
 
-    beta = extract_beta_value(
-        quant
-    )
+    beta = extract_beta_value(quant)
 
     evidence = {
         "asset": symbol.upper(),
-
         "market": {
             "price_usd": _format_fiat(market.get("price")),
-            "change_24h_pct": _round_pct(market.get(
-                "price_change_24h_pct"
-            )),
-            "change_7d_pct": _round_pct(market.get(
-                "price_change_7d_pct"
-            )),
-            "volume_24h_usd": _format_fiat(market.get(
-                "volume_24h"
-            )),
-            "market_cap_usd": _format_fiat(market.get(
-                "market_cap"
-            )),
-            "high_24h_usd": _format_fiat(market.get(
-                "high_24h"
-            )),
-            "low_24h_usd": _format_fiat(market.get(
-                "low_24h"
-            )),
+            "change_24h_pct": _round_pct(market.get("price_change_24h_pct")),
+            "change_7d_pct": _round_pct(market.get("price_change_7d_pct")),
+            "volume_24h_usd": _format_fiat(market.get("volume_24h")),
+            "market_cap_usd": _format_fiat(market.get("market_cap")),
+            "high_24h_usd": _format_fiat(market.get("high_24h")),
+            "low_24h_usd": _format_fiat(market.get("low_24h")),
             "source": market.get("source"),
         },
-
         "quantitative": {
             "volatility_pct": _round_pct(volatility),
             "beta_to_btc": _round_pct(beta),
-            "max_drawdown_pct": _round_pct(quant.get(
-                "max_drawdown_pct"
-            )),
-            "history_observations": quant.get(
-                "history_observations"
-            ),
-            "volatility_detail": quant.get(
-                "volatility"
-            ),
-            "beta_detail": quant.get(
-                "beta"
-            ),
-            "liquidity_detail": quant.get(
-                "liquidity"
-            ),
+            "max_drawdown_pct": _round_pct(quant.get("max_drawdown_pct")),
+            "history_observations": quant.get("history_observations"),
+            "volatility_detail": quant.get("volatility"),
+            "beta_detail": quant.get("beta"),
+            "liquidity_detail": quant.get("liquidity"),
         },
-
         "risk_profile": risk_profile,
         "stress_test": stress,
-
         "security": (
             security
             if isinstance(security, dict)
@@ -1008,9 +876,7 @@ def build_evidence_pack(
                 "status": "Unavailable",
             }
         ),
-
         "risk_drivers": risk_drivers,
-
         "data_quality": market.get(
             "data_quality",
             {},
@@ -1034,9 +900,7 @@ def _field_error_label(field_name):
         "history": "Price history",
         "history_observations": "Price history",
         "btc_history": "BTC benchmark history",
-        "btc_history_observations": (
-            "BTC benchmark history"
-        ),
+        "btc_history_observations": ("BTC benchmark history"),
         "contract_security": "Contract security",
     }
 
@@ -1063,28 +927,14 @@ def build_structured_report(
     market = market if isinstance(market, dict) else {}
     quant = quant if isinstance(quant, dict) else {}
     ai = ai if isinstance(ai, dict) else {}
-    risk_profile = (
-        risk_profile
-        if isinstance(risk_profile, dict)
-        else {}
-    )
-    security = (
-        security
-        if isinstance(security, dict)
-        else {}
-    )
+    risk_profile = risk_profile if isinstance(risk_profile, dict) else {}
+    security = security if isinstance(security, dict) else {}
 
-    composite_score = risk_profile.get(
-        "composite_score"
-    )
+    composite_score = risk_profile.get("composite_score")
 
-    is_native_asset = (
-        symbol.upper() in L1_WHITELIST
-    )
+    is_native_asset = symbol.upper() in L1_WHITELIST
 
-    security_not_applicable = (
-        security.get("not_applicable") is True
-    )
+    security_not_applicable = security.get("not_applicable") is True
 
     field_checks = {
         "Live price": market.get("price"),
@@ -1092,22 +942,13 @@ def build_structured_report(
         "Market cap": market.get("market_cap"),
         "24h high": market.get("high_24h"),
         "24h low": market.get("low_24h"),
-        "Price history": quant.get(
-            "history_observations"
-        ),
-        "BTC benchmark history": quant.get(
-            "btc_history_observations"
-        ),
+        "Price history": quant.get("history_observations"),
+        "BTC benchmark history": quant.get("btc_history_observations"),
     }
 
-    if (
-        not is_native_asset
-        and not security_not_applicable
-    ):
+    if not is_native_asset and not security_not_applicable:
         field_checks["Contract security data"] = (
-            True
-            if security.get("available")
-            else None
+            True if security.get("available") else None
         )
 
     available_fields = []
@@ -1119,17 +960,13 @@ def build_structured_report(
         else:
             missing_signals.append(name)
 
-    field_errors = market.get(
-        "field_errors"
-    )
+    field_errors = market.get("field_errors")
 
     if not isinstance(field_errors, dict):
         field_errors = {}
 
     for error_field in field_errors:
-        label = _field_error_label(
-            error_field
-        )
+        label = _field_error_label(error_field)
 
         if label not in missing_signals:
             missing_signals.append(label)
@@ -1142,9 +979,7 @@ def build_structured_report(
 
     missing_signals = deduped_missing
 
-    source_timestamps = market.get(
-        "source_timestamps"
-    )
+    source_timestamps = market.get("source_timestamps")
 
     if not isinstance(source_timestamps, dict):
         source_timestamps = {}
@@ -1160,31 +995,18 @@ def build_structured_report(
 
     dq["available_fields"] = available_fields
     dq["field_errors"] = dict(field_errors)
-    dq["source_timestamps"] = dict(
-        source_timestamps
-    )
+    dq["source_timestamps"] = dict(source_timestamps)
     dq["missing_signals"] = missing_signals
     dq["not_applicable"] = (
-        ["Contract security"]
-        if (
-            is_native_asset
-            or security_not_applicable
-        )
-        else []
+        ["Contract security"] if (is_native_asset or security_not_applicable) else []
     )
 
     field_count = len(field_checks)
     populated_count = len(available_fields)
 
-    field_confidence = (
-        populated_count / field_count * 100
-        if field_count
-        else 0
-    )
+    field_confidence = populated_count / field_count * 100 if field_count else 0
 
-    risk_confidence = optional_numeric(
-        risk_profile.get("confidence")
-    )
+    risk_confidence = optional_numeric(risk_profile.get("confidence"))
 
     if risk_confidence is None:
         risk_confidence = 0
@@ -1211,9 +1033,7 @@ def build_structured_report(
 
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
-
         "token_symbol": symbol.upper(),
-
         "asset": {
             "symbol": symbol.upper(),
             "name": market.get(
@@ -1221,32 +1041,23 @@ def build_structured_report(
                 symbol.upper(),
             ),
         },
-
         "outlook": risk_profile.get(
             "label",
             "Unavailable",
         ),
-
         "risk_score": composite_score,
-
         "risk_label": risk_profile.get(
             "label",
             "Unavailable",
         ),
-
         "risk_confidence": risk_profile.get(
             "confidence",
             0,
         ),
-
         "market": market,
-
         "quantitative": quant,
-
         "risk_profile": risk_profile,
-
         "risk_drivers": risk_drivers,
-
         "security": (
             security
             if security
@@ -1258,20 +1069,13 @@ def build_structured_report(
                 "confidence": 0,
             }
         ),
-
         "stress": stress,
         "stress_test": stress,
-
         "evidence": evidence,
-
         "ai": ai,
-
         "data_quality": dq,
-
         "analysis_meta": {
-            "engine": (
-                "CryptoRisk AI Quantitative Engine"
-            ),
+            "engine": ("CryptoRisk AI Quantitative Engine"),
             "ai_engine": ai.get(
                 "provider",
                 "unknown",
@@ -1353,9 +1157,7 @@ def run_analysis(
     symbol = normalize_symbol(symbol)
 
     if not symbol:
-        raise ValueError(
-            "Token symbol is required."
-        )
+        raise ValueError("Token symbol is required.")
 
     # --------------------------------------------------------
     # Stage 1 — Market
@@ -1375,10 +1177,7 @@ def run_analysis(
         skip_7d_enrich=True,
     )
 
-    if (
-        not isinstance(market, dict)
-        or not market.get("available")
-    ):
+    if not isinstance(market, dict) or not market.get("available"):
         unavailable_reason = (
             market.get(
                 "unavailable_reason",
@@ -1392,8 +1191,9 @@ def run_analysis(
             symbol,
             unavailable_reason,
         )
-        
+
         from utils.errors import MarketDataUnavailableError
+
         raise MarketDataUnavailableError(unavailable_reason)
 
     report_progress(
@@ -1522,7 +1322,9 @@ def run_analysis(
         }
 
     elif chain_id and contract_address:
-        logger.info("Auditing contract security for %s on chain %s", contract_address, chain_id)
+        logger.info(
+            "Auditing contract security for %s on chain %s", contract_address, chain_id
+        )
         security = fetch_token_security(
             chain_id,
             contract_address,
@@ -1546,7 +1348,9 @@ def run_analysis(
         }
 
     if not isinstance(security, dict):
-        logger.warning("Security provider returned invalid structure: %s", type(security))
+        logger.warning(
+            "Security provider returned invalid structure: %s", type(security)
+        )
         security = {
             "status": "Unavailable",
             "confidence": 0,
@@ -1591,21 +1395,14 @@ def run_analysis(
         "Testing BTC-linked downside scenarios.",
     )
 
-    beta_value = extract_beta_value(
-        quant
-    )
+    beta_value = extract_beta_value(quant)
 
     volatility_value = extract_volatility_value(
         quant,
         market,
     )
 
-    liquidity_score = (
-        risk_profile
-        .get("pillars", {})
-        .get("liquidity", {})
-        .get("score")
-    )
+    liquidity_score = risk_profile.get("pillars", {}).get("liquidity", {}).get("score")
 
     stress = calculate_stress_test(
         beta_value,
@@ -1669,9 +1466,7 @@ def run_analysis(
         risk_profile,
         stress,
         security,
-        gemini_max_retries_override=(
-            gemini_max_retries_override
-        ),
+        gemini_max_retries_override=(gemini_max_retries_override),
     )
 
     if not isinstance(ai, dict):
@@ -1692,8 +1487,7 @@ def run_analysis(
         (
             "Interpretation validated and normalized."
             if not ai.get("fallback_used")
-            else
-            "AI unavailable; deterministic analysis retained."
+            else "AI unavailable; deterministic analysis retained."
         ),
     )
 

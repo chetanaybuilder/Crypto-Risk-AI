@@ -8,10 +8,9 @@ endpoints (job submission, status polling, and state transition monitoring).
 import logging
 from datetime import datetime, timezone
 
-from flask import Blueprint, g, jsonify, request
-
 from config import ANALYSIS_JOB_TIMEOUT_SECONDS
 from extensions import get_db_connection
+from flask import Blueprint, g, jsonify, request
 from services.auth_service import login_required_api
 from services.coingecko import resolve_coin_id
 from services.db_service import (
@@ -42,22 +41,31 @@ def analyze():
         raw_symbol = data.get("token_symbol") or data.get("symbol")
 
         if not is_valid_symbol(raw_symbol):
-            return jsonify({
-                "success": False,
-                "error": "Invalid token symbol. Use 1-15 letters or digits.",
-            }), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Invalid token symbol. Use 1-15 letters or digits.",
+                }
+            ), 400
 
         symbol = normalize_symbol(raw_symbol)
         chain_id = data.get("chain_id") or data.get("chain") or data.get("network")
         contract_address = data.get("contract_address") or data.get("contractAddress")
 
-        logger.info("Synchronous analysis requested for symbol=%s, chain=%s, contract=%s", symbol, chain_id, contract_address)
+        logger.info(
+            "Synchronous analysis requested for symbol=%s, chain=%s, contract=%s",
+            symbol,
+            chain_id,
+            contract_address,
+        )
 
         if not symbol:
-            return jsonify({
-                "success": False,
-                "error": "Token symbol is required.",
-            }), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Token symbol is required.",
+                }
+            ), 400
 
         report = run_analysis(
             symbol,
@@ -79,53 +87,63 @@ def analyze():
             logger.warning("get_user_history failed: %s", db_exc)
             history = []
 
-        return jsonify({
-            "success": True,
-            "analysis": {
-                "id": analysis_id,
-                "token_symbol": symbol,
-                "report": report,
-                "created_at": utc_now_iso(),
-            },
-            "latest": report,
-            "history": history,
-            "user": g.current_user,
-            "meta": {
-                "analysis_id": analysis_id,
-                "mode": "synchronous",
-                "ai_provider": report.get("ai", {}).get("provider"),
-                "fallback_used": report.get("ai", {}).get("fallback_used", False),
-            },
-        })
+        return jsonify(
+            {
+                "success": True,
+                "analysis": {
+                    "id": analysis_id,
+                    "token_symbol": symbol,
+                    "report": report,
+                    "created_at": utc_now_iso(),
+                },
+                "latest": report,
+                "history": history,
+                "user": g.current_user,
+                "meta": {
+                    "analysis_id": analysis_id,
+                    "mode": "synchronous",
+                    "ai_provider": report.get("ai", {}).get("provider"),
+                    "fallback_used": report.get("ai", {}).get("fallback_used", False),
+                },
+            }
+        )
 
     except MarketDataUnavailableError as exc:
         logger.exception("Market data unavailable during analysis: %s", exc)
-        return jsonify({
-            "success": False,
-            "error": str(exc),
-            "code": "MARKET_DATA_UNAVAILABLE",
-        }), 502
+        return jsonify(
+            {
+                "success": False,
+                "error": str(exc),
+                "code": "MARKET_DATA_UNAVAILABLE",
+            }
+        ), 502
 
     except UnsupportedAssetError as exc:
         logger.warning("Unsupported asset requested: %s - %s", raw_symbol, exc)
-        return jsonify({
-            "success": False,
-            "error": str(exc),
-            "code": "UNSUPPORTED_ASSET",
-        }), 400
+        return jsonify(
+            {
+                "success": False,
+                "error": str(exc),
+                "code": "UNSUPPORTED_ASSET",
+            }
+        ), 400
 
     except ValueError as exc:
-        return jsonify({
-            "success": False,
-            "error": str(exc),
-        }), 400
+        return jsonify(
+            {
+                "success": False,
+                "error": str(exc),
+            }
+        ), 400
 
     except Exception as exc:
         logger.exception("Synchronous analysis failed: %s", exc)
-        return jsonify({
-            "success": False,
-            "error": "Analysis failed. Please try again.",
-        }), 500
+        return jsonify(
+            {
+                "success": False,
+                "error": "Analysis failed. Please try again.",
+            }
+        ), 500
 
 
 @bp.post("/api/analyze/start")
@@ -139,32 +157,45 @@ def start_analysis():
         raw_symbol = data.get("token_symbol") or data.get("symbol")
 
         if not is_valid_symbol(raw_symbol):
-            return jsonify({
-                "success": False,
-                "error": "Invalid token symbol. Use 1-15 letters or digits.",
-            }), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Invalid token symbol. Use 1-15 letters or digits.",
+                }
+            ), 400
 
         symbol = normalize_symbol(raw_symbol)
         chain_id = data.get("chain_id") or data.get("chain") or data.get("network")
         contract_address = data.get("contract_address") or data.get("contractAddress")
 
-        logger.info("Async analysis requested for symbol=%s, chain=%s, contract=%s", symbol, chain_id, contract_address)
+        logger.info(
+            "Async analysis requested for symbol=%s, chain=%s, contract=%s",
+            symbol,
+            chain_id,
+            contract_address,
+        )
 
         if not symbol:
-            return jsonify({
-                "success": False,
-                "error": "Token symbol is required.",
-            }), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Token symbol is required.",
+                }
+            ), 400
 
         try:
             resolve_coin_id(symbol)
         except UnsupportedAssetError as exc:
-            logger.warning("Unsupported asset requested (job start): %s - %s", symbol, exc)
-            return jsonify({
-                "success": False,
-                "error": str(exc),
-                "code": "UNSUPPORTED_ASSET",
-            }), 400
+            logger.warning(
+                "Unsupported asset requested (job start): %s - %s", symbol, exc
+            )
+            return jsonify(
+                {
+                    "success": False,
+                    "error": str(exc),
+                    "code": "UNSUPPORTED_ASSET",
+                }
+            ), 400
 
         connection = None
         active_job = None
@@ -200,12 +231,14 @@ def start_analysis():
                 connection.close()
 
         if active_job:
-            return jsonify({
-                "success": True,
-                "existing_job": True,
-                "job_id": active_job,
-                "message": "An analysis for this asset is already running.",
-            }), 200
+            return jsonify(
+                {
+                    "success": True,
+                    "existing_job": True,
+                    "job_id": active_job,
+                    "message": "An analysis for this asset is already running.",
+                }
+            ), 200
 
         job_id = create_analysis_job(
             g.current_user["id"],
@@ -216,30 +249,38 @@ def start_analysis():
 
         submitted = submit_analysis_job(job_id)
         if not submitted:
-            return jsonify({
-                "success": False,
-                "error": "Unable to start analysis worker.",
-            }), 500
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Unable to start analysis worker.",
+                }
+            ), 500
 
         job = get_analysis_job(job_id, g.current_user["id"])
-        return jsonify({
-            "success": True,
-            "job_id": job_id,
-            "job": job,
-        }), 202
+        return jsonify(
+            {
+                "success": True,
+                "job_id": job_id,
+                "job": job,
+            }
+        ), 202
 
     except ValueError as exc:
-        return jsonify({
-            "success": False,
-            "error": str(exc),
-        }), 400
+        return jsonify(
+            {
+                "success": False,
+                "error": str(exc),
+            }
+        ), 400
 
     except Exception as exc:
         logger.exception("Could not start analysis: %s", exc)
-        return jsonify({
-            "success": False,
-            "error": "Unable to start analysis.",
-        }), 500
+        return jsonify(
+            {
+                "success": False,
+                "error": "Unable to start analysis.",
+            }
+        ), 500
 
 
 @bp.get("/api/analyze/status/<job_id>")
@@ -249,17 +290,21 @@ def analysis_status(job_id):
     try:
         job = get_analysis_job(job_id, g.current_user["id"])
         if not job:
-            return jsonify({
-                "success": False,
-                "error": "Analysis job not found.",
-            }), 404
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Analysis job not found.",
+                }
+            ), 404
 
         # Detect stale or timed out jobs
         if job["status"] in {"queued", "running", "saving"}:
             updated_at = job.get("updated_at")
             if updated_at:
                 try:
-                    updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                    updated_dt = datetime.fromisoformat(
+                        updated_at.replace("Z", "+00:00")
+                    )
                     age = (datetime.now(timezone.utc) - updated_dt).total_seconds()
 
                     if age > ANALYSIS_JOB_TIMEOUT_SECONDS:
@@ -300,24 +345,28 @@ def analysis_status(job_id):
             analysis_id = meta.get("analysis_id")
             history = get_user_history(g.current_user["id"])
 
-            response.update({
-                "latest": job["report"],
-                "analysis": {
-                    "id": analysis_id,
-                    "token_symbol": job["token_symbol"],
-                    "report": job["report"],
-                    "created_at": job["completed_at"],
-                },
-                "history": history,
-                "user": g.current_user,
-                "meta": meta,
-            })
+            response.update(
+                {
+                    "latest": job["report"],
+                    "analysis": {
+                        "id": analysis_id,
+                        "token_symbol": job["token_symbol"],
+                        "report": job["report"],
+                        "created_at": job["completed_at"],
+                    },
+                    "history": history,
+                    "user": g.current_user,
+                    "meta": meta,
+                }
+            )
 
         return jsonify(response)
 
     except Exception as exc:
         logger.exception("Analysis status failed: %s", exc)
-        return jsonify({
-            "success": False,
-            "error": "Unable to read analysis status.",
-        }), 500
+        return jsonify(
+            {
+                "success": False,
+                "error": "Unable to read analysis status.",
+            }
+        ), 500

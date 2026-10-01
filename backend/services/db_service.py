@@ -11,7 +11,6 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 import psycopg2
-
 from config import MAX_HISTORY_ROWS
 from extensions import ANALYSIS_EXECUTOR, get_db_connection
 from services.auth_service import hash_password
@@ -86,7 +85,9 @@ def get_user_by_email(email: str):
             connection.close()
 
 
-def create_local_user(email: str, password: str, name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def create_local_user(
+    email: str, password: str, name: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """Create a new local user with bcrypt hashed password."""
     if not email or not password:
         raise ValueError("Email and password are required.")
@@ -254,7 +255,9 @@ def get_analysis_by_id(analysis_id: Any, user_id: Any) -> Optional[Dict[str, Any
             connection.close()
 
 
-def get_user_history(user_id: Any, limit: int = MAX_HISTORY_ROWS) -> List[Dict[str, Any]]:
+def get_user_history(
+    user_id: Any, limit: int = MAX_HISTORY_ROWS
+) -> List[Dict[str, Any]]:
     """Retrieve past analysis reports for a given user."""
     connection = None
     safe_limit = max(1, min(MAX_HISTORY_ROWS, int(limit)))
@@ -277,13 +280,15 @@ def get_user_history(user_id: Any, limit: int = MAX_HISTORY_ROWS) -> List[Dict[s
             history = []
             for row in rows:
                 report = row[2] or {}
-                history.append({
-                    "id": str(row[0]),
-                    "token_symbol": row[1],
-                    "risk_score": report.get("risk_score"),
-                    "risk_label": report.get("risk_label"),
-                    "created_at": row[3].isoformat() if row[3] else None,
-                })
+                history.append(
+                    {
+                        "id": str(row[0]),
+                        "token_symbol": row[1],
+                        "risk_score": report.get("risk_score"),
+                        "risk_label": report.get("risk_label"),
+                        "created_at": row[3].isoformat() if row[3] else None,
+                    }
+                )
             return history
     finally:
         if connection:
@@ -352,7 +357,10 @@ def row_to_job(row) -> Optional[Dict[str, Any]]:
 
 
 def create_analysis_job(
-    user_id: Any, token_symbol: str, chain_id: Optional[str] = None, contract_address: Optional[str] = None
+    user_id: Any,
+    token_symbol: str,
+    chain_id: Optional[str] = None,
+    contract_address: Optional[str] = None,
 ) -> str:
     """Create a new async analysis job record or return existing active job ID."""
     symbol = normalize_symbol(token_symbol)
@@ -410,7 +418,9 @@ def create_analysis_job(
             connection.close()
 
 
-def get_analysis_job(job_id: str, user_id: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+def get_analysis_job(
+    job_id: str, user_id: Optional[Any] = None
+) -> Optional[Dict[str, Any]]:
     """Retrieve an analysis job by ID and optional user filter."""
     connection = None
     try:

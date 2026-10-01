@@ -5,7 +5,6 @@ Configures the Flask WSGI application instance, registers security middleware,
 sets up OAuth 2.0 integrations, and mounts domain route blueprints.
 """
 
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -21,12 +20,17 @@ if str(BACKEND_DIR) not in sys.path:
 # Resolve dynamic paths for frontend templates and static assets
 ROOT_DIR = BACKEND_DIR.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
-template_folder = str(FRONTEND_DIR / "templates") if (FRONTEND_DIR / "templates").exists() else "templates"
-static_folder = str(FRONTEND_DIR / "static") if (FRONTEND_DIR / "static").exists() else "static"
+template_folder = (
+    str(FRONTEND_DIR / "templates")
+    if (FRONTEND_DIR / "templates").exists()
+    else "templates"
+)
+static_folder = (
+    str(FRONTEND_DIR / "static") if (FRONTEND_DIR / "static").exists() else "static"
+)
 
 from config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, IS_PRODUCTION, SECRET_KEY
 from extensions import oauth
-
 from routes.auth import bp as auth_bp
 from routes.dashboard import bp as dashboard_bp
 from routes.health import bp as health_bp
@@ -44,10 +48,11 @@ app = Flask(
 app.secret_key = SECRET_KEY
 
 # Set static file cache age to 1 year
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 31536000
-app.config['COMPRESS_ALGORITHM'] = ['br', 'gzip']
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 31536000
+app.config["COMPRESS_ALGORITHM"] = ["br", "gzip"]
 
 from flask_compress import Compress
+
 Compress(app)
 
 # Register Google OAuth 2.0 OpenID Connect client

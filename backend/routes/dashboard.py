@@ -8,7 +8,6 @@ state (user profile, recent analysis history, and latest report snapshot).
 import logging
 
 from flask import Blueprint, g, jsonify, render_template
-
 from services.auth_service import login_required_api
 from services.db_service import get_analysis_by_id, get_user_history
 
@@ -37,16 +36,20 @@ def dashboard_api():
             if latest_analysis:
                 latest = latest_analysis.get("report")
 
-        return jsonify({
-            "success": True,
-            "user": g.current_user,
-            "latest": latest,
-            "history": history,
-        })
+        return jsonify(
+            {
+                "success": True,
+                "user": g.current_user,
+                "latest": latest,
+                "history": history,
+            }
+        )
 
     except Exception as exc:
         logger.exception("Dashboard API aggregation failed: %s", exc)
-        return jsonify({
-            "success": False,
-            "error": "Unable to load dashboard.",
-        }), 500
+        return jsonify(
+            {
+                "success": False,
+                "error": "Unable to load dashboard.",
+            }
+        ), 500

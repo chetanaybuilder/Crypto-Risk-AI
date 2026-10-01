@@ -10,22 +10,19 @@ import math
 import re
 import threading
 import time
-import urllib.parse
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import requests
-from flask import abort, jsonify, request
-
 from config import (
     CLEANUP_INTERVAL_SECONDS,
     CMC_API_KEY,
-    COINGECKO_API_KEY,
-    COINGECKO_AUTH_HEADER,
     COIN_RESOLUTION_CACHE_TTL,
     COIN_RESOLUTION_MISS_TTL,
+    COINGECKO_API_KEY,
+    COINGECKO_AUTH_HEADER,
     MARKET_STALE_MAX_AGE,
     MARKET_TIMEOUT,
     MAX_TOKEN_SYMBOL_LENGTH,
@@ -34,6 +31,7 @@ from config import (
     PROVIDER_COOLDOWN_FORBIDDEN,
 )
 from extensions import _cache_lock, _history_cache, _market_cache, _market_cap_cache
+from flask import jsonify, request
 from utils.math_helpers import numeric, optional_numeric
 
 logger = logging.getLogger(__name__)
@@ -45,6 +43,8 @@ _provider_cooldown_lock = threading.Lock()
 _provider_cooldown = {}
 _provider_failure_counts = {}
 _coin_resolution_cache = {}
+
+
 def _rate_limit_check(
     bucket: str,
     max_attempts: int,
@@ -85,14 +85,11 @@ def _rate_limit_check(
         entries[:] = [
             timestamp
             for timestamp in entries
-            if isinstance(timestamp, (int, float))
-            and timestamp > window_start
+            if isinstance(timestamp, (int, float)) and timestamp > window_start
         ]
         if len(entries) >= max_attempts:
             oldest = min(entries)
-            retry_after = int(
-                oldest + window_seconds - now
-            ) + 1
+            retry_after = int(oldest + window_seconds - now) + 1
             return (
                 False,
                 0,
@@ -105,6 +102,8 @@ def _rate_limit_check(
             remaining,
             0,
         )
+
+
 def _client_ip() -> str:
     """
     Return the best-effort client IP.
@@ -123,6 +122,8 @@ def _client_ip() -> str:
         if client_ip:
             return client_ip
     return request.remote_addr or "unknown"
+
+
 def rate_limit(
     max_attempts: int,
     window_seconds: int,
@@ -141,6 +142,7 @@ def rate_limit(
         if blocked is not None:
             return blocked
     """
+
     def resolver(resolver_fn):
         if not callable(resolver_fn):
             logger.warning(
@@ -160,9 +162,7 @@ def rate_limit(
             return _api_rate_limit_response(
                 1,
             )
-        bucket = (
-            f"{bucket_prefix}:{resolved_bucket}"
-        )
+        bucket = f"{bucket_prefix}:{resolved_bucket}"
         allowed, remaining, retry_after = _rate_limit_check(
             bucket,
             max_attempts,
@@ -170,8 +170,7 @@ def rate_limit(
         )
         if not allowed:
             logger.warning(
-                "[RATE LIMIT] bucket=%s blocked "
-                "(retry_after=%ds)",
+                "[RATE LIMIT] bucket=%s blocked (retry_after=%ds)",
                 bucket,
                 retry_after,
             )
@@ -179,7 +178,10 @@ def rate_limit(
                 retry_after,
             )
         return None
+
     return resolver
+
+
 def _api_rate_limit_response(
     retry_after: int,
 ):
@@ -188,18 +190,17 @@ def _api_rate_limit_response(
         1,
         int(retry_after),
     )
-    response = jsonify({
-        "success": False,
-        "error": (
-            "Too many attempts. "
-            f"Try again in {retry_after} seconds."
-        ),
-    })
-    response.status_code = 429
-    response.headers["Retry-After"] = str(
-        retry_after
+    response = jsonify(
+        {
+            "success": False,
+            "error": (f"Too many attempts. Try again in {retry_after} seconds."),
+        }
     )
+    response.status_code = 429
+    response.headers["Retry-After"] = str(retry_after)
     return response
+
+
 def _periodic_cache_cleanup() -> None:
     """
     Purge expired entries from in-process caches and rate-limit state.
@@ -228,19 +229,14 @@ def _periodic_cache_cleanup() -> None:
                     ),
                     default=0,
                 )
-                if (
-                    now - cached_at
-                    > MARKET_STALE_MAX_AGE
-                ):
+                if now - cached_at > MARKET_STALE_MAX_AGE:
                     expired_market_keys.append(key)
             for key in expired_market_keys:
                 _market_cache.pop(
                     key,
                     None,
                 )
-            expired_markets = len(
-                expired_market_keys
-            )
+            expired_markets = len(expired_market_keys)
     except Exception as exc:
         logger.warning(
             "[CLEANUP] market cache cleanup failed: %s",
@@ -260,29 +256,27 @@ def _periodic_cache_cleanup() -> None:
                     ),
                     default=0,
                 )
-                if (
-                    now - cached_at
-                    > MARKET_STALE_MAX_AGE
-                ):
+                if now - cached_at > MARKET_STALE_MAX_AGE:
                     expired_history_keys.append(key)
             for key in expired_history_keys:
                 _history_cache.pop(
                     key,
                     None,
                 )
-            expired_history = len(
-                expired_history_keys
-            )
+            expired_history = len(expired_history_keys)
     except Exception as exc:
         logger.warning(
             "[CLEANUP] history cache cleanup failed: %s",
             exc,
         )
     try:
-        resolution_ttl = max(
-            COIN_RESOLUTION_CACHE_TTL,
-            COIN_RESOLUTION_MISS_TTL,
-        ) * 2
+        resolution_ttl = (
+            max(
+                COIN_RESOLUTION_CACHE_TTL,
+                COIN_RESOLUTION_MISS_TTL,
+            )
+            * 2
+        )
         with _cache_lock:
             expired_resolution_keys = []
             for key, value in _coin_resolution_cache.items():
@@ -296,19 +290,14 @@ def _periodic_cache_cleanup() -> None:
                     ),
                     default=0,
                 )
-                if (
-                    now - cached_at
-                    > resolution_ttl
-                ):
+                if now - cached_at > resolution_ttl:
                     expired_resolution_keys.append(key)
             for key in expired_resolution_keys:
                 _coin_resolution_cache.pop(
                     key,
                     None,
                 )
-            expired_resolutions = len(
-                expired_resolution_keys
-            )
+            expired_resolutions = len(expired_resolution_keys)
     except Exception as exc:
         logger.warning(
             "[CLEANUP] resolution cache cleanup failed: %s",
@@ -328,19 +317,14 @@ def _periodic_cache_cleanup() -> None:
                     ),
                     default=0,
                 )
-                if (
-                    now - cached_at
-                    > MARKET_STALE_MAX_AGE
-                ):
+                if now - cached_at > MARKET_STALE_MAX_AGE:
                     expired_cap_keys.append(key)
             for key in expired_cap_keys:
                 _market_cap_cache.pop(
                     key,
                     None,
                 )
-            expired_caps = len(
-                expired_cap_keys
-            )
+            expired_caps = len(expired_cap_keys)
     except Exception as exc:
         logger.warning(
             "[CLEANUP] market-cap cache cleanup failed: %s",
@@ -371,9 +355,7 @@ def _periodic_cache_cleanup() -> None:
                     key,
                     None,
                 )
-            expired_cooldowns = len(
-                expired_cooldown_keys
-            )
+            expired_cooldowns = len(expired_cooldown_keys)
     except Exception as exc:
         logger.warning(
             "[CLEANUP] provider cooldown cleanup failed: %s",
@@ -390,11 +372,11 @@ def _periodic_cache_cleanup() -> None:
                     timestamp
                     for timestamp in entries
                     if isinstance(timestamp, (int, float))
-                    and timestamp > now - max(
+                    and timestamp
+                    > now
+                    - max(
                         1,
-                        int(
-                            CLEANUP_INTERVAL_SECONDS
-                        ),
+                        int(CLEANUP_INTERVAL_SECONDS),
                     )
                 ]
                 if cleaned_entries:
@@ -406,9 +388,7 @@ def _periodic_cache_cleanup() -> None:
                     bucket,
                     None,
                 )
-            expired_rate_limit_buckets = len(
-                empty_or_expired_buckets
-            )
+            expired_rate_limit_buckets = len(empty_or_expired_buckets)
     except Exception as exc:
         logger.warning(
             "[CLEANUP] rate-limit cleanup failed: %s",
@@ -435,6 +415,8 @@ def _periodic_cache_cleanup() -> None:
             expired_cooldowns,
             expired_rate_limit_buckets,
         )
+
+
 def _schedule_cache_cleanup() -> None:
     """
     Run one cleanup cycle and schedule the next cycle.
@@ -452,9 +434,7 @@ def _schedule_cache_cleanup() -> None:
         try:
             interval = max(
                 1,
-                int(
-                    CLEANUP_INTERVAL_SECONDS
-                ),
+                int(CLEANUP_INTERVAL_SECONDS),
             )
             timer = Timer(
                 interval,
@@ -467,6 +447,8 @@ def _schedule_cache_cleanup() -> None:
                 "[CLEANUP] failed to schedule next cleanup: %s",
                 exc,
             )
+
+
 def _mask_secret(
     value: str,
 ) -> str:
@@ -476,19 +458,16 @@ def _mask_secret(
     value = str(value)
     if len(value) <= 8:
         return f"***({len(value)} chars)"
-    return (
-        f"{value[:4]}…{value[-4:]} "
-        f"({len(value)} chars)"
-    )
+    return f"{value[:4]}…{value[-4:]} ({len(value)} chars)"
+
+
 def _provider_is_cooling(
     name: str,
 ) -> bool:
     """Return True when a provider is currently on cooldown."""
     now = time.time()
     with _provider_cooldown_lock:
-        entry = _provider_cooldown.get(
-            name
-        )
+        entry = _provider_cooldown.get(name)
         if isinstance(entry, dict):
             until = numeric(
                 entry.get(
@@ -525,22 +504,17 @@ def _provider_is_cooling(
                 None,
             )
         return False
+
+
 def _mark_provider_failure(
     name: str,
     status_code,
     reason: str,
 ) -> None:
     """Record a provider failure and start an appropriate cooldown."""
-    normalized_status = optional_numeric(
-        status_code
-    )
-    if (
-        normalized_status is not None
-        and normalized_status.is_integer()
-    ):
-        normalized_status = int(
-            normalized_status
-        )
+    normalized_status = optional_numeric(status_code)
+    if normalized_status is not None and normalized_status.is_integer():
+        normalized_status = int(normalized_status)
     if normalized_status == 429:
         retry_after = None
         match = re.search(
@@ -549,9 +523,7 @@ def _mark_provider_failure(
         )
         if match:
             try:
-                retry_after = float(
-                    match.group(1)
-                )
+                retry_after = float(match.group(1))
             except (
                 TypeError,
                 ValueError,
@@ -559,9 +531,7 @@ def _mark_provider_failure(
                 retry_after = None
         now = time.time()
         with _provider_cooldown_lock:
-            previous = _provider_cooldown.get(
-                name
-            )
+            previous = _provider_cooldown.get(name)
             previous_until = (
                 numeric(
                     previous.get(
@@ -576,10 +546,7 @@ def _mark_provider_failure(
                 )
                 else 0
             )
-            if (
-                previous is None
-                or now >= previous_until
-            ):
+            if previous is None or now >= previous_until:
                 _provider_failure_counts.pop(
                     name,
                     None,
@@ -596,7 +563,8 @@ def _mark_provider_failure(
             120,
             PROVIDER_COOLDOWN_429
             * (
-                2 ** min(
+                2
+                ** min(
                     failures - 1,
                     4,
                 )
@@ -608,19 +576,14 @@ def _mark_provider_failure(
         )
         seconds = max(
             backoff,
-            math.ceil(
-                retry_after_seconds
-            ),
+            math.ceil(retry_after_seconds),
         )
     elif normalized_status in (
         403,
         451,
     ):
         seconds = PROVIDER_COOLDOWN_FORBIDDEN
-    elif (
-        normalized_status is not None
-        and normalized_status >= 500
-    ):
+    elif normalized_status is not None and normalized_status >= 500:
         seconds = PROVIDER_COOLDOWN_DEFAULT
     else:
         seconds = PROVIDER_COOLDOWN_DEFAULT
@@ -636,9 +599,7 @@ def _mark_provider_failure(
     with _provider_cooldown_lock:
         _provider_cooldown[name] = {
             "until": time.time() + seconds,
-            "reason": str(
-                reason or "provider failure"
-            ),
+            "reason": str(reason or "provider failure"),
         }
     logger.warning(
         "[MARKET] %s marked on cooldown for %ds (%s)",
@@ -646,6 +607,8 @@ def _mark_provider_failure(
         seconds,
         reason,
     )
+
+
 def _clear_provider_success(
     name: str,
 ) -> None:
@@ -664,23 +627,24 @@ def _clear_provider_success(
             name,
             None,
         )
+
+
 def _get_symbol_fetch_lock(
     symbol: str,
 ) -> threading.Lock:
     """Return a per-symbol lock used to deduplicate concurrent fetches."""
     with _symbol_fetch_locks_guard:
-        lock = _symbol_fetch_locks.get(
-            symbol
-        )
+        lock = _symbol_fetch_locks.get(symbol)
         if lock is None:
             lock = threading.Lock()
             _symbol_fetch_locks[symbol] = lock
         return lock
+
+
 def utc_now_iso() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
-    return datetime.now(
-        timezone.utc
-    ).isoformat()
+    return datetime.now(timezone.utc).isoformat()
+
 
 def clean_text(
     value: Any,
@@ -704,6 +668,8 @@ def clean_text(
     if not text:
         return default
     return text[:max_length]
+
+
 def normalize_symbol(
     symbol: Any,
 ) -> str:
@@ -711,9 +677,7 @@ def normalize_symbol(
     if symbol is None:
         return ""
     try:
-        normalized = str(
-            symbol
-        ).strip().upper()
+        normalized = str(symbol).strip().upper()
     except Exception:
         return ""
     normalized = re.sub(
@@ -721,16 +685,14 @@ def normalize_symbol(
         "",
         normalized,
     )
-    return normalized[
-        :MAX_TOKEN_SYMBOL_LENGTH
-    ]
+    return normalized[:MAX_TOKEN_SYMBOL_LENGTH]
+
+
 def is_valid_symbol(
     symbol: Any,
 ) -> bool:
     """Return True when a normalized symbol matches the allowed format."""
-    normalized = normalize_symbol(
-        symbol
-    )
+    normalized = normalize_symbol(symbol)
     if not normalized:
         return False
     return bool(
@@ -739,6 +701,8 @@ def is_valid_symbol(
             normalized,
         )
     )
+
+
 def json_safe(
     value: Any,
 ) -> Any:
@@ -769,22 +733,14 @@ def json_safe(
         value,
         float,
     ):
-        return (
-            value
-            if math.isfinite(value)
-            else None
-        )
+        return value if math.isfinite(value) else None
     if isinstance(
         value,
         Decimal,
     ):
         try:
             number = float(value)
-            return (
-                number
-                if math.isfinite(number)
-                else None
-            )
+            return number if math.isfinite(number) else None
         except (
             ArithmeticError,
             TypeError,
@@ -808,9 +764,7 @@ def json_safe(
         dict,
     ):
         try:
-            items = list(
-                value.items()
-            )
+            items = list(value.items())
         except Exception:
             return None
         safe_dict = {}
@@ -819,9 +773,7 @@ def json_safe(
                 safe_key = str(key)
             except Exception:
                 continue
-            safe_dict[safe_key] = json_safe(
-                item
-            )
+            safe_dict[safe_key] = json_safe(item)
         return safe_dict
     if isinstance(
         value,
@@ -836,22 +788,19 @@ def json_safe(
             items = list(value)
         except Exception:
             return []
-        return [
-            json_safe(item)
-            for item in items
-        ]
+        return [json_safe(item) for item in items]
     try:
         return str(value)
     except Exception:
         return None
+
+
 def empty_market_data(
     symbol: str,
 ) -> dict:
     """Return a consistent unavailable-market payload."""
     return {
-        "symbol": normalize_symbol(
-            symbol
-        ),
+        "symbol": normalize_symbol(symbol),
         "price": None,
         "price_change_24h_pct": None,
         "price_change_7d_pct": None,
@@ -860,12 +809,12 @@ def empty_market_data(
         "high_24h": None,
         "low_24h": None,
         "source": "unavailable",
-        "unavailable_reason": (
-            "CoinGecko did not return a usable market snapshot."
-        ),
+        "unavailable_reason": ("CoinGecko did not return a usable market snapshot."),
         "timestamp": utc_now_iso(),
         "available": False,
     }
+
+
 def first_defined(*values):
     """
     Return the first value that is not None.
@@ -875,6 +824,8 @@ def first_defined(*values):
         if value is not None:
             return value
     return None
+
+
 def format_number(
     value,
     decimals=2,
@@ -924,10 +875,7 @@ def _http_get_market(
         response = requests.get(
             url,
             params=params,
-            timeout=(
-                timeout
-                or MARKET_TIMEOUT
-            ),
+            timeout=(timeout or MARKET_TIMEOUT),
             headers=headers,
         )
 
@@ -949,14 +897,12 @@ def _http_get_market(
                     )
                 except (TypeError, ValueError, OverflowError):
                     retry_after = None
-        retry_suffix = (
-            f"; retry_after={retry_after}"
-            if retry_after
-            else ""
-        )
+        retry_suffix = f"; retry_after={retry_after}" if retry_after else ""
 
-        return response, response.status_code, (
-            f"HTTP {response.status_code}{retry_suffix}"
+        return (
+            response,
+            response.status_code,
+            (f"HTTP {response.status_code}{retry_suffix}"),
         )
 
     except requests.exceptions.Timeout:
@@ -989,10 +935,7 @@ def _http_get_cmc(
         response = requests.get(
             url,
             params=params,
-            timeout=(
-                timeout
-                or MARKET_TIMEOUT
-            ),
+            timeout=(timeout or MARKET_TIMEOUT),
             headers=headers,
         )
 
@@ -1006,14 +949,12 @@ def _http_get_cmc(
                 retry_after = str(max(0, float(retry_after)))
             except (TypeError, ValueError):
                 retry_after = None
-        retry_suffix = (
-            f"; retry_after={retry_after}"
-            if retry_after
-            else ""
-        )
+        retry_suffix = f"; retry_after={retry_after}" if retry_after else ""
 
-        return response, response.status_code, (
-            f"HTTP {response.status_code}{retry_suffix}"
+        return (
+            response,
+            response.status_code,
+            (f"HTTP {response.status_code}{retry_suffix}"),
         )
 
     except requests.exceptions.Timeout:

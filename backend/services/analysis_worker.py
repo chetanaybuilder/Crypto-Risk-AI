@@ -25,11 +25,19 @@ def execute_analysis_job(job_id: str) -> None:
     contract_address = job.get("contract_address") or job.get("contractAddress")
     user_id = job.get("user_id")
 
-    logger.info("Executing analysis job %s for symbol=%s, chain=%s, address=%s", job_id, symbol, chain_id, contract_address)
+    logger.info(
+        "Executing analysis job %s for symbol=%s, chain=%s, address=%s",
+        job_id,
+        symbol,
+        chain_id,
+        contract_address,
+    )
 
     update_analysis_job(job_id, status="running", started=True)
 
-    def progress_callback(progress: int, stage: str, stage_title: str, message: str) -> None:
+    def progress_callback(
+        progress: int, stage: str, stage_title: str, message: str
+    ) -> None:
         update_analysis_job(
             job_id,
             progress=progress,

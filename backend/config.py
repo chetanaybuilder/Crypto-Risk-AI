@@ -6,7 +6,7 @@ caching policies, and institutional token mapping defaults.
 """
 
 import os
-from typing import Any
+
 from dotenv import load_dotenv
 
 # Load local environment overrides if present
@@ -54,7 +54,9 @@ GEMINI_EXECUTOR_WORKERS = max(1, _safe_env_int("GEMINI_WORKERS", 2))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", SECRET_KEY).strip()
-JWT_ACCESS_TOKEN_EXPIRES_DAYS = max(1, _safe_env_int("JWT_ACCESS_TOKEN_EXPIRES_DAYS", 7))
+JWT_ACCESS_TOKEN_EXPIRES_DAYS = max(
+    1, _safe_env_int("JWT_ACCESS_TOKEN_EXPIRES_DAYS", 7)
+)
 
 # Market Data & Provider Caching
 MARKET_TIMEOUT = max(3, _safe_env_int("MARKET_TIMEOUT", 12))
@@ -79,9 +81,9 @@ else:
     COINGECKO_AUTH_HEADER = "x-cg-demo-api-key"
 
 # Fallback Market Providers (Optional)
-ENABLE_BINANCE_FALLBACK = (
-    os.getenv("ENABLE_BINANCE_FALLBACK", "false").strip().lower() in ("1", "true", "yes")
-)
+ENABLE_BINANCE_FALLBACK = os.getenv(
+    "ENABLE_BINANCE_FALLBACK", "false"
+).strip().lower() in ("1", "true", "yes")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "").strip()
 CMC_API_URL = os.getenv("CMC_API_URL", "https://pro-api.coinmarketcap.com/v1").strip()
 
@@ -95,7 +97,9 @@ GOPLUS_API_URL = "https://api.gopluslabs.io/api/v1/token_security"
 
 # Job Execution & Pipeline
 JOB_TTL_SECONDS = max(300, _safe_env_int("JOB_TTL_SECONDS", 1800))
-ANALYSIS_JOB_TIMEOUT_SECONDS = max(60, _safe_env_int("ANALYSIS_JOB_TIMEOUT_SECONDS", 150))
+ANALYSIS_JOB_TIMEOUT_SECONDS = max(
+    60, _safe_env_int("ANALYSIS_JOB_TIMEOUT_SECONDS", 150)
+)
 ANALYSIS_EXECUTOR_WORKERS = max(1, _safe_env_int("ANALYSIS_WORKERS", 5))
 CLEANUP_INTERVAL_SECONDS = max(60, _safe_env_int("CLEANUP_INTERVAL_SECONDS", 600))
 MAX_HISTORY_ROWS = 50
@@ -179,15 +183,17 @@ TOKEN_MAP = {
 
 SUPPORTED_ASSETS = frozenset(TOKEN_MAP)
 
-L1_WHITELIST = frozenset([
-    "BTC",
-    "ETH",
-    "SOL",
-    "AVAX",
-    "BNB",
-    "DOT",
-    "NEAR",
-])
+L1_WHITELIST = frozenset(
+    [
+        "BTC",
+        "ETH",
+        "SOL",
+        "AVAX",
+        "BNB",
+        "DOT",
+        "NEAR",
+    ]
+)
 
 ANALYSIS_STAGES = {
     "market": 12,

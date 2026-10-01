@@ -7,6 +7,7 @@ integrity before web worker processes fork.
 """
 
 import logging
+
 from extensions import init_db
 
 logging.basicConfig(level=logging.INFO)

@@ -5,16 +5,15 @@ Encapsulates password hashing/verification primitives, JWT token signing/validat
 and API endpoint authentication guards.
 """
 
-from functools import wraps
 import logging
 import time
+from functools import wraps
 from typing import Any, Dict, Optional
 
 import bcrypt
 import jwt
-from flask import g, jsonify, request
-
 from config import JWT_ACCESS_TOKEN_EXPIRES_DAYS, JWT_SECRET_KEY
+from flask import g, jsonify, request
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +31,12 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
     try:
         if password_hash.startswith(("$2a$", "$2b$", "$2y$")):
-            return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+            return bcrypt.checkpw(
+                password.encode("utf-8"), password_hash.encode("utf-8")
+            )
 
         from werkzeug.security import check_password_hash
+
         return check_password_hash(password_hash, password)
     except Exception as exc:
         logger.warning("Password verification failed: %s", exc)
@@ -102,19 +104,23 @@ def current_user() -> Optional[Dict[str, Any]]:
         user_id_val = str(user_id).strip()
 
     from services.db_service import get_user_by_id
+
     return get_user_by_id(user_id_val)
 
 
 def login_required_api(function):
     """Decorator to require JWT authentication on API endpoints."""
+
     @wraps(function)
     def wrapper(*args, **kwargs):
         user = current_user()
         if not user:
-            return jsonify({
-                "success": False,
-                "error": "Authentication required.",
-            }), 401
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Authentication required.",
+                }
+            ), 401
 
         g.current_user = user
         return function(*args, **kwargs)

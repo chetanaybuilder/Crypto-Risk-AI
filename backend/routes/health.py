@@ -5,8 +5,6 @@ Exposes container liveness/readiness probes, runtime schema versions, and provid
 telemetry for uptime monitoring and infrastructure automation.
 """
 
-from flask import Blueprint, jsonify, render_template
-
 from config import (
     ANALYSIS_EXECUTOR_WORKERS,
     ANALYSIS_JOB_TIMEOUT_SECONDS,
@@ -18,6 +16,7 @@ from config import (
     GEMINI_API_KEY,
     REPORT_SCHEMA_VERSION,
 )
+from flask import Blueprint, jsonify, render_template
 from utils.helpers import utc_now_iso
 
 bp = Blueprint("health", __name__)
@@ -26,21 +25,23 @@ bp = Blueprint("health", __name__)
 @bp.get("/health")
 def health():
     """Liveness probe reporting provider status, worker pool capacity, and configuration state."""
-    return jsonify({
-        "success": True,
-        "status": "healthy",
-        "service": APP_NAME,
-        "version": APP_VERSION,
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "timestamp": utc_now_iso(),
-        "gemini_configured": bool(GEMINI_API_KEY),
-        "analysis_workers": ANALYSIS_EXECUTOR_WORKERS,
-        "analysis_job_timeout_seconds": ANALYSIS_JOB_TIMEOUT_SECONDS,
-        "coingecko_plan": COINGECKO_PLAN,
-        "coingecko_key_configured": bool(COINGECKO_API_KEY),
-        "coingecko_base_url": COINGECKO_API_URL,
-        "market_data_provider": "CoinGecko",
-    })
+    return jsonify(
+        {
+            "success": True,
+            "status": "healthy",
+            "service": APP_NAME,
+            "version": APP_VERSION,
+            "schema_version": REPORT_SCHEMA_VERSION,
+            "timestamp": utc_now_iso(),
+            "gemini_configured": bool(GEMINI_API_KEY),
+            "analysis_workers": ANALYSIS_EXECUTOR_WORKERS,
+            "analysis_job_timeout_seconds": ANALYSIS_JOB_TIMEOUT_SECONDS,
+            "coingecko_plan": COINGECKO_PLAN,
+            "coingecko_key_configured": bool(COINGECKO_API_KEY),
+            "coingecko_base_url": COINGECKO_API_URL,
+            "market_data_provider": "CoinGecko",
+        }
+    )
 
 
 @bp.get("/")
