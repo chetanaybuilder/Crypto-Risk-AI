@@ -220,10 +220,14 @@ def google_callback():
         if not google_id or not email:
             return redirect("/?error=google_account_invalid")
 
+        # Verify Google account email has been verified
+        if not userinfo.get("email_verified", False):
+            return redirect("/?error=google_email_not_verified")
+
         user = create_or_update_google_user(google_id, email, name, picture)
         jwt_token = create_jwt_for_user(user)
 
-        return redirect("/dashboard?token=" + quote(jwt_token, safe=""))
+        return redirect("/dashboard#token=" + quote(jwt_token, safe=""))
 
     except Exception as exc:
         logger.exception("Google OAuth callback failed: %s", exc)

@@ -6,10 +6,11 @@ endpoints (job submission, status polling, and state transition monitoring).
 """
 
 import logging
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 
 from config import ANALYSIS_JOB_TIMEOUT_SECONDS
-from extensions import get_db_connection
+from extensions import ANALYSIS_EXECUTOR, get_db_connection
 from flask import Blueprint, g, jsonify, request
 from services.auth_service import login_required_api
 from services.coingecko import resolve_coin_id
@@ -32,6 +33,8 @@ bp = Blueprint("risk", __name__)
 
 
 @bp.post("/api/analyze")
+@bp.post("/api/risk/analyze")
+@bp.post("/api/risk")
 @login_required_api
 def analyze():
     """Execute synchronous risk analysis for an asset."""
@@ -40,7 +43,7 @@ def analyze():
         data = request.get_json(silent=True) or {}
         raw_symbol = data.get("token_symbol") or data.get("symbol")
 
-        if not is_valid_symbol(raw_symbol):
+        if not isinstance(raw_symbol, str) or not raw_symbol.strip() or not is_valid_symbol(raw_symbol):
             return jsonify(
                 {
                     "success": False,
@@ -67,13 +70,16 @@ def analyze():
                 }
             ), 400
 
-        report = run_analysis(
+        # Execute in worker thread pool to prevent blocking WSGI request threads
+        future = ANALYSIS_EXECUTOR.submit(
+            run_analysis,
             symbol,
             chain_id=chain_id,
             contract_address=contract_address,
             force_market_refresh=False,
             gemini_max_retries_override=0,
         )
+        report = future.result(timeout=ANALYSIS_JOB_TIMEOUT_SECONDS)
 
         try:
             analysis_id = save_analysis(g.current_user["id"], symbol, report)
@@ -147,6 +153,7 @@ def analyze():
 
 
 @bp.post("/api/analyze/start")
+@bp.post("/api/risk/start")
 @login_required_api
 def start_analysis():
     """Start asynchronous risk analysis in background worker pool."""
@@ -156,7 +163,7 @@ def start_analysis():
         data = request.get_json(silent=True) or {}
         raw_symbol = data.get("token_symbol") or data.get("symbol")
 
-        if not is_valid_symbol(raw_symbol):
+        if not isinstance(raw_symbol, str) or not raw_symbol.strip() or not is_valid_symbol(raw_symbol):
             return jsonify(
                 {
                     "success": False,
@@ -284,6 +291,8 @@ def start_analysis():
 
 
 @bp.get("/api/analyze/status/<job_id>")
+@bp.get("/api/risk/job/<job_id>")
+@bp.get("/api/risk/status/<job_id>")
 @login_required_api
 def analysis_status(job_id):
     """Query progress or result of an asynchronous analysis job."""

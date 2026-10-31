@@ -65,10 +65,16 @@ oauth.register(
     client_kwargs={"scope": "openid email profile"},
 )
 
-# Cross-Origin Resource Sharing for API routes
+# Cross-Origin Resource Sharing for API routes with explicit origin validation
+ALLOWED_CORS_ORIGINS = [
+    "https://cryptorisk-ai.pages.dev",
+    r"https://.*\.pages\.dev",
+    r"http://localhost:\d+",
+    r"http://127\.0\.0\.1:\d+",
+]
 CORS(
     app,
-    resources={r"/api/*": {"origins": "*"}},
+    resources={r"/api/*": {"origins": ALLOWED_CORS_ORIGINS}},
     supports_credentials=True,
 )
 

@@ -6,6 +6,7 @@ OHLC price candle series, multi-level TTL caching, and provider cooldown state.
 """
 
 import logging
+import random
 import re
 import time
 from datetime import datetime, timezone
@@ -56,6 +57,70 @@ def _cache_coin_resolution(
             "coin_id": coin_id,
             "cached_at": time.time(),
         }
+
+
+def _fetch_coingecko_with_retry(
+    url: str,
+    params: Optional[dict] = None,
+    timeout: Optional[int] = None,
+    max_retries: int = COINGECKO_MAX_RETRIES,
+):
+    """
+    Execute HTTP GET to CoinGecko with exponential backoff and jitter.
+    Parses Retry-After headers explicitly, respecting rate limits.
+    """
+    timeout = timeout or MARKET_TIMEOUT
+    last_response = None
+    last_status = None
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        response, status_code, error_reason = _http_get_market(
+            url,
+            params=params,
+            timeout=timeout,
+        )
+
+        if response is not None and (status_code is None or status_code < 400):
+            return response, status_code, None
+
+        last_response = response
+        last_status = status_code
+        last_error = error_reason
+
+        # Non-retryable 4xx client errors (except 429 rate limits)
+        if status_code is not None and 400 <= status_code < 500 and status_code != 429:
+            break
+
+        if attempt >= max_retries:
+            break
+
+        # Calculate exponential backoff with random jitter
+        backoff = 0.5 * (2 ** (attempt - 1)) + random.uniform(0.1, 0.5)
+
+        # Handle 429 Retry-After header explicitly if present
+        if status_code == 429:
+            retry_after_match = re.search(
+                r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or "")
+            )
+            if retry_after_match:
+                try:
+                    retry_after_val = float(retry_after_match.group(1))
+                    if 0 < retry_after_val <= 10.0:
+                        backoff = retry_after_val + random.uniform(0.1, 0.5)
+                except (ValueError, TypeError):
+                    pass
+
+        logger.info(
+            "[COINGECKO] Attempt %d/%d failed (%s). Retrying in %.2fs with jitter...",
+            attempt,
+            max_retries,
+            error_reason or f"HTTP {status_code}",
+            backoff,
+        )
+        time.sleep(backoff)
+
+    return last_response, last_status, last_error
 
 
 def resolve_coin_id(
@@ -109,7 +174,7 @@ def resolve_coin_id(
         return None
 
     try:
-        response, status_code, error_reason = _http_get_market(
+        response, status_code, error_reason = _fetch_coingecko_with_retry(
             f"{COINGECKO_API_URL}/search",
             params={"query": symbol},
             timeout=MARKET_TIMEOUT,
@@ -224,75 +289,22 @@ def fetch_coingecko_market(
             )
         return market
 
-    # Execute request with retry loop for transient transport errors
-    last_error_reason = None
-    last_status_code = None
-    response = None
-    status_code = None
-    error_reason = None
-    for attempt in range(1, COINGECKO_MAX_RETRIES + 1):
-        response, status_code, error_reason = _http_get_market(
-            f"{COINGECKO_API_URL}/coins/markets",
-            params={
-                "vs_currency": "usd",
-                "ids": coin_id,
-                "order": "market_cap_desc",
-                "per_page": 1,
-                "page": 1,
-                "sparkline": "false",
-                "price_change_percentage": "7d",
-            },
-            timeout=MARKET_TIMEOUT,
-        )
-
-        if response is not None and (status_code is None or status_code < 400):
-            # Success (or at least a response we can parse) — break out.
-            break
-
-        last_error_reason = error_reason
-        last_status_code = status_code
-
-        # Decide whether this failure is retryable.
-        retryable = False
-        smart_wait = None
-        if response is None:
-            # No response at all: timeout, connection error, DNS, etc.
-            retryable = True
-        elif status_code is not None and status_code >= 500:
-            # Server-side failure — worth retrying.
-            retryable = True
-        elif status_code == 429:
-            # Check if we can wait out the cooldown within the job timeout
-            match = re.search(
-                r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or "")
-            )
-            if match:
-                retry_after_val = float(match.group(1))
-                if retry_after_val <= 2.0:
-                    retryable = True
-                    smart_wait = retry_after_val + 1.0
-
-        if not retryable or attempt >= COINGECKO_MAX_RETRIES:
-            break
-
-        if smart_wait is not None:
-            backoff = smart_wait
-            logger.info(
-                "[MARKET] CoinGecko rate limited (429) for %s. Smart waiting %.1fs before retry...",
-                symbol,
-                backoff,
-            )
-        else:
-            backoff = 0.5 * (2 ** (attempt - 1))
-            logger.info(
-                "[MARKET] CoinGecko attempt %d/%d for %s after %s, retrying in %.1fs",
-                attempt,
-                COINGECKO_MAX_RETRIES,
-                symbol,
-                error_reason or f"HTTP {status_code}",
-                backoff,
-            )
-        time.sleep(backoff)
+    # Execute request with exponential backoff and jitter
+    response, status_code, error_reason = _fetch_coingecko_with_retry(
+        f"{COINGECKO_API_URL}/coins/markets",
+        params={
+            "vs_currency": "usd",
+            "ids": coin_id,
+            "order": "market_cap_desc",
+            "per_page": 1,
+            "page": 1,
+            "sparkline": "false",
+            "price_change_percentage": "7d",
+        },
+        timeout=MARKET_TIMEOUT,
+    )
+    last_error_reason = error_reason
+    last_status_code = status_code
 
     if response is None:
         _mark_provider_failure(
@@ -421,27 +433,19 @@ def _read_market_number(
     field_errors: dict,
 ):
     """Read one numeric provider field without affecting other fields.
-
-    NOTE: on a missing/unusable field this currently returns 0 rather
-    than None, while also recording the miss in field_errors. Depending
-    on how field_errors is used downstream (risk scoring, frontend
-    display), a silent 0 can be indistinguishable from a real zero
-    value. This was left unchanged because other files (risk scoring,
-    frontend) weren't available to verify what they expect — but it's
-    worth checking whether those consumers should be checking
-    field_errors before trusting a 0.
+    Returns None on missing/unusable values so missing data is not distorted to 0.
     """
 
     try:
         value = optional_numeric(payload.get(key))
         if value is None:
             field_errors[key] = f"{source} returned no usable {key}."
-            return 0
+            return None
         return value
     except Exception as exc:
         field_errors[key] = f"{source} {key} parsing failed: {exc}."
         logger.exception("[MARKET] %s field %s failed", source, key)
-        return 0
+        return None
 
 
 def fetch_market_data(
@@ -884,65 +888,20 @@ def fetch_coingecko_history(
     if not coin_id:
         return []
 
-    # Retry loop — same rationale as fetch_coingecko_market(): a
-    # single transient hiccup shouldn't take down the whole report.
-    last_error_reason = None
-    response = None
-    status_code = None
-    for attempt in range(1, COINGECKO_MAX_RETRIES + 1):
-        response, status_code, error_reason = _http_get_market(
-            f"{COINGECKO_API_URL}/coins/{quote(coin_id, safe='')}/market_chart",
-            params={
-                "vs_currency": "usd",
-                "days": _safe_lookback(
-                    days,
-                    default=SUPPORTED_HISTORY_DAYS,
-                ),
-                "interval": "daily",
-            },
-            timeout=MARKET_TIMEOUT,
-        )
-
-        if response is not None and (status_code is None or status_code < 400):
-            break
-
-        last_error_reason = error_reason
-
-        retryable = False
-        smart_wait = None
-        if response is None or status_code is not None and status_code >= 500:
-            retryable = True
-        elif status_code == 429:
-            match = re.search(
-                r"retry_after=([0-9]+(?:\.[0-9]+)?)", str(error_reason or "")
-            )
-            if match:
-                retry_after_val = float(match.group(1))
-                if retry_after_val <= 2.0:
-                    retryable = True
-                    smart_wait = retry_after_val + 1.0
-
-        if not retryable or attempt >= COINGECKO_MAX_RETRIES:
-            break
-
-        if smart_wait is not None:
-            backoff = smart_wait
-            logger.info(
-                "[HISTORY] CoinGecko rate limited (429) for %s. Smart waiting %.1fs before retry...",
-                symbol,
-                backoff,
-            )
-        else:
-            backoff = 0.5 * (2 ** (attempt - 1))
-            logger.info(
-                "[HISTORY] CoinGecko attempt %d/%d for %s after %s, retrying in %.1fs",
-                attempt,
-                COINGECKO_MAX_RETRIES,
-                symbol,
-                error_reason or f"HTTP {status_code}",
-                backoff,
-            )
-        time.sleep(backoff)
+    # Execute request with exponential backoff and jitter
+    response, status_code, error_reason = _fetch_coingecko_with_retry(
+        f"{COINGECKO_API_URL}/coins/{quote(coin_id, safe='')}/market_chart",
+        params={
+            "vs_currency": "usd",
+            "days": _safe_lookback(
+                days,
+                default=SUPPORTED_HISTORY_DAYS,
+            ),
+            "interval": "daily",
+        },
+        timeout=MARKET_TIMEOUT,
+    )
+    last_error_reason = error_reason
 
     if response is None:
         logger.info(

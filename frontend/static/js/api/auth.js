@@ -60,11 +60,19 @@ export function clearToken() {
 }
 
 export function consumeQueryToken() {
-    const params = new URLSearchParams(
-        window.location.search
-    );
+    let token = null;
 
-    const token = params.get("token");
+    // Ingest OAuth session token from URL fragment (#token=...) to prevent Referer header leakage
+    if (window.location.hash) {
+        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+        token = hashParams.get("token") || hashParams.get("access_token");
+    }
+
+    // Fallback to query parameter (?token=...) for backward compatibility
+    if (!token && window.location.search) {
+        const queryParams = new URLSearchParams(window.location.search);
+        token = queryParams.get("token") || queryParams.get("access_token");
+    }
 
     if (!token) {
         return null;
@@ -72,14 +80,11 @@ export function consumeQueryToken() {
 
     saveToken(token);
 
-    const cleanUrl =
-        window.location.pathname +
-        window.location.hash;
-
+    // Strip sensitive token from browser location bar and history
     window.history.replaceState(
         {},
         document.title,
-        cleanUrl
+        window.location.pathname
     );
 
     return token;

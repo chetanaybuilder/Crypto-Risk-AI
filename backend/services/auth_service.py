@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 def hash_password(password: str) -> str:
-    """Hash a plaintext password using bcrypt."""
+    """Hash a plaintext password using bcrypt with institutional work factor (12 rounds)."""
     if not password:
         raise ValueError("Password cannot be empty.")
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
@@ -65,7 +65,12 @@ def decode_jwt_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        return jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
+        return jwt.decode(
+            token,
+            JWT_SECRET_KEY,
+            algorithms=["HS256"],
+            options={"require": ["exp", "iat"]},
+        )
     except Exception:
         return None
 

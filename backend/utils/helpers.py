@@ -176,6 +176,8 @@ def rate_limit(
             )
             return _api_rate_limit_response(
                 retry_after,
+                limit=max_attempts,
+                remaining=remaining,
             )
         return None
 
@@ -184,8 +186,10 @@ def rate_limit(
 
 def _api_rate_limit_response(
     retry_after: int,
+    limit: Optional[int] = None,
+    remaining: int = 0,
 ):
-    """Build a standard rate-limit response."""
+    """Build a standard rate-limit response with full RFC/standard rate-limit headers."""
     retry_after = max(
         1,
         int(retry_after),
@@ -193,11 +197,14 @@ def _api_rate_limit_response(
     response = jsonify(
         {
             "success": False,
-            "error": (f"Too many attempts. Try again in {retry_after} seconds."),
+            "error": f"Too many attempts. Try again in {retry_after} seconds.",
         }
     )
     response.status_code = 429
     response.headers["Retry-After"] = str(retry_after)
+    if limit is not None:
+        response.headers["X-RateLimit-Limit"] = str(limit)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
     return response
 
 

@@ -5,16 +5,16 @@ const workerCode = `/**
  * CryptoRisk AI — Cloudflare Edge Application & API Gateway.
  * 
  * High-performance edge runtime serving:
- * - Live CoinGecko market telemetry with Edge caching
- * - GoPlus smart contract security audits
- * - Quantitative multi-pillar crypto risk scoring engine
- * - Google Gemini 2.5 Flash AI executive synthesis
- * - WebCrypto JWT authentication & session management
- * - Analysis job polling pipeline & history management
+ * - Live CoinGecko market telemetry with resilient exponential backoff & edge caching
+ * - GoPlus smart contract security audits with strict bytecode verification
+ * - Quantitative multi-pillar crypto risk scoring engine (normalized weights)
+ * - Google Gemini 2.5 Flash AI executive synthesis (secure header auth)
+ * - WebCrypto PBKDF2 password hashing & HS256 JWT session management
+ * - Multi-region async analysis job pipeline & history persistence
  * - Static SPA routing (Landing & Intelligence Terminal)
  */
 
-// Configuration defaults with environment fallback
+// Configuration defaults
 const DEFAULT_CONFIG = {
   APP_NAME: "CryptoRisk AI",
   APP_VERSION: "3.2.0",
@@ -69,49 +69,111 @@ const COIN_ID_MAP = {
   "dai": "dai"
 };
 
+// True Layer-1 native assets (no smart contract attack surface)
 const L1_NATIVES = new Set([
   "btc", "bitcoin", "eth", "ethereum", "sol", "solana",
   "bnb", "binancecoin", "xrp", "ada", "cardano", "avax",
   "dot", "near", "sui", "apt", "trx", "ltc", "bch"
 ]);
 
-// In-Memory edge caches and storage (retained across isolate invocations)
-const marketCache = new Map();
-const jobsStore = new Map();
-const historyStore = new Map();
-const usersStore = new Map();
+// Known stablecoins for fallback pricing
+const STABLECOIN_SET = new Set([
+  "usdt", "usdc", "dai", "tether", "usd-coin", "busd", "fdusd", "tusd", "pyusd", "frax"
+]);
 
-// Seed initial default demo user
-const DEFAULT_USER = {
-  id: "usr_institutional_01",
-  email: "analyst@cryptorisk.ai",
-  name: "Quantitative Risk Lead",
-  picture: null,
-  created_at: new Date(Date.now() - 30 * 86400000).toISOString()
-};
-usersStore.set(DEFAULT_USER.email, DEFAULT_USER);
-usersStore.set(DEFAULT_USER.id, DEFAULT_USER);
+/* ============================================================
+   BOUNDED LRU CACHE WITH TTL EXPIRATION
+   ============================================================ */
+
+class BoundedMap {
+  constructor(maxSize = 500, ttlMs = 0) {
+    this.maxSize = maxSize;
+    this.ttlMs = ttlMs;
+    this.map = new Map();
+  }
+
+  get(key) {
+    if (!this.map.has(key)) return undefined;
+    const entry = this.map.get(key);
+    if (this.ttlMs > 0 && (Date.now() - entry.storedAt > this.ttlMs)) {
+      this.map.delete(key);
+      return undefined;
+    }
+    // Refresh LRU order
+    this.map.delete(key);
+    this.map.set(key, entry);
+    return entry.value;
+  }
+
+  set(key, value) {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.maxSize) {
+      const oldestKey = this.map.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.map.delete(oldestKey);
+      }
+    }
+    this.map.set(key, { value, storedAt: Date.now() });
+    return this;
+  }
+
+  has(key) {
+    return this.get(key) !== undefined;
+  }
+
+  delete(key) {
+    return this.map.delete(key);
+  }
+
+  clear() {
+    this.map.clear();
+  }
+}
+
+// Bounded in-memory edge caches (retained across isolate invocations)
+const marketCache = new BoundedMap(500, 60000); // 1-minute TTL
+const jobsStore = new BoundedMap(500, 3600000); // 1-hour TTL
+const historyStore = new BoundedMap(500, 86400000); // 24-hour TTL
+const usersStore = new BoundedMap(500, 0); // Persistent per isolate
+const oauthStateStore = new BoundedMap(500, 600000); // 10-minute TTL
 
 /* ============================================================
    CORS & UTILITY HELPERS
    ============================================================ */
 
-function corsHeaders(extra = {}) {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Request-ID",
-    "Access-Control-Allow-Credentials": "true",
-    ...extra
-  };
+function isOriginAllowed(origin) {
+  if (!origin) return false;
+  if (origin === "https://cryptorisk-ai.pages.dev") return true;
+  if (origin.endsWith(".pages.dev")) return true;
+  if (/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(origin)) return true;
+  return false;
 }
 
-function jsonResponse(data, status = 200, headers = {}) {
+function corsHeaders(request, extra = {}) {
+  const origin = request?.headers?.get("Origin") || "";
+  const allowed = isOriginAllowed(origin);
+  const headers = {
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Request-ID",
+    ...extra
+  };
+  if (allowed) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers["Access-Control-Allow-Credentials"] = "true";
+    headers["Vary"] = "Origin";
+  } else {
+    headers["Access-Control-Allow-Origin"] = "*";
+  }
+  return headers;
+}
+
+function jsonResponse(data, status = 200, request = null, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      ...corsHeaders(headers)
+      ...corsHeaders(request, extraHeaders)
     }
   });
 }
@@ -122,15 +184,85 @@ function clamp(val, min, max) {
 
 function formatNumber(num) {
   if (num === null || num === undefined || isNaN(num)) return "0";
-  if (num >= 1e9) return (num / 1e9).toFixed(2) + "B";
-  if (num >= 1e6) return (num / 1e6).toFixed(2) + "M";
-  if (num >= 1e3) return (num / 1e3).toFixed(2) + "K";
+  const abs = Math.abs(num);
+  // Micro-cap token formatting (< $0.01) to prevent "$0.00" display
+  if (abs > 0 && abs < 0.01) {
+    return Number(Number(num).toPrecision(4)).toString();
+  }
+  if (abs >= 1e9) return (num / 1e9).toFixed(2) + "B";
+  if (abs >= 1e6) return (num / 1e6).toFixed(2) + "M";
+  if (abs >= 1e3) return (num / 1e3).toFixed(2) + "K";
   return Number(num).toFixed(2);
 }
 
+function sanitizeUser(user) {
+  if (!user) return null;
+  const { password_hash, ...clean } = user;
+  return clean;
+}
+
 /* ============================================================
-   WEBCRYPTO JWT IMPLEMENTATION
+   WEBCRYPTO PBKDF2 PASSWORD HASHING & JWT IMPLEMENTATION
    ============================================================ */
+
+async function hashPassword(password) {
+  const enc = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"]
+  );
+  const derivedKey = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: salt,
+      iterations: 100000,
+      hash: "SHA-256"
+    },
+    keyMaterial,
+    256
+  );
+  const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join('');
+  const hashHex = Array.from(new Uint8Array(derivedKey)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return \`\${saltHex}:\${hashHex}\`;
+}
+
+async function verifyPassword(password, storedHash) {
+  if (!storedHash || typeof storedHash !== "string" || !storedHash.includes(":")) return false;
+  const [saltHex, expectedHashHex] = storedHash.split(":");
+  if (!saltHex || !expectedHashHex) return false;
+  const saltMatch = saltHex.match(/.{1,2}/g);
+  if (!saltMatch) return false;
+  const salt = new Uint8Array(saltMatch.map(byte => parseInt(byte, 16)));
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"]
+  );
+  const derivedKey = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: salt,
+      iterations: 100000,
+      hash: "SHA-256"
+    },
+    keyMaterial,
+    256
+  );
+  const derivedHex = Array.from(new Uint8Array(derivedKey)).map(b => b.toString(16).padStart(2, '0')).join('');
+  if (derivedHex.length !== expectedHashHex.length) return false;
+  let diff = 0;
+  for (let i = 0; i < derivedHex.length; i++) {
+    diff |= derivedHex.charCodeAt(i) ^ expectedHashHex.charCodeAt(i);
+  }
+  return diff === 0;
+}
 
 async function getCryptoKey(secret, usage) {
   const enc = new TextEncoder();
@@ -165,9 +297,15 @@ function base64UrlDecode(str) {
 async function signJwt(payload, secret) {
   const header = { alg: "HS256", typ: "JWT" };
   const enc = new TextEncoder();
+  const now = Math.floor(Date.now() / 1000);
+  const enrichedPayload = {
+    iat: now,
+    exp: now + (7 * 86400), // 7-day expiration claim
+    ...payload
+  };
   
   const headerPart = base64UrlEncode(enc.encode(JSON.stringify(header)));
-  const payloadPart = base64UrlEncode(enc.encode(JSON.stringify(payload)));
+  const payloadPart = base64UrlEncode(enc.encode(JSON.stringify(enrichedPayload)));
   const data = enc.encode(\`\${headerPart}.\${payloadPart}\`);
   
   const key = await getCryptoKey(secret, "sign");
@@ -192,13 +330,19 @@ async function verifyJwt(token, secret) {
     if (!valid) return null;
     
     const payloadJson = new TextDecoder().decode(base64UrlDecode(parts[1]));
-    return JSON.parse(payloadJson);
+    const payload = JSON.parse(payloadJson);
+    
+    // Explicit exp timestamp validation
+    if (payload.exp && Math.floor(Date.now() / 1000) >= payload.exp) {
+      return null;
+    }
+    return payload;
   } catch (err) {
     return null;
   }
 }
 
-function extractBearerUser(request, secret) {
+async function extractBearerUser(request, secret) {
   const authHeader = request.headers.get("Authorization") || "";
   if (!authHeader.startsWith("Bearer ")) return null;
   const token = authHeader.substring(7).trim();
@@ -206,77 +350,100 @@ function extractBearerUser(request, secret) {
 }
 
 /* ============================================================
-   COINGECKO INTEGRATION WITH EDGE CACHING
+   COINGECKO INTEGRATION WITH RETRIES, JITTER & STABLECOIN HANDLING
    ============================================================ */
 
 async function fetchCoinGeckoMarket(symbol, apiKey) {
   const norm = (symbol || "").trim().toLowerCase();
+  const isStable = STABLECOIN_SET.has(norm);
   const coinId = COIN_ID_MAP[norm] || norm;
   
   // Check memory cache
   const cached = marketCache.get(coinId);
-  if (cached && Date.now() - cached.timestamp < 60000) {
-    return cached.data;
+  if (cached) {
+    return cached;
   }
   
-  try {
-    const headers = { "Accept": "application/json" };
-    if (apiKey) {
-      headers["x-cg-demo-api-key"] = apiKey;
-    }
-    
-    const url = \`https://api.coingecko.com/api/v3/coins/\${encodeURIComponent(coinId)}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false\`;
-    const res = await fetch(url, { headers });
-    
-    if (res.ok) {
-      const data = await res.json();
-      const md = data.market_data || {};
-      
-      const market = {
-        name: data.name || symbol.toUpperCase(),
-        symbol: (data.symbol || symbol).toUpperCase(),
-        coin_id: data.id || coinId,
-        price: md.current_price?.usd || 0,
-        current_price_usd: md.current_price?.usd || 0,
-        price_change_percentage_24h: md.price_change_percentage_24h || 0,
-        price_change_percentage_7d: md.price_change_percentage_7d || 0,
-        price_change_percentage_30d: md.price_change_percentage_30d || 0,
-        total_volume: md.total_volume?.usd || 0,
-        market_cap: md.market_cap?.usd || 0,
-        high_24h: md.high_24h?.usd || md.current_price?.usd || 0,
-        low_24h: md.low_24h?.usd || md.current_price?.usd || 0,
-        circulating_supply: md.circulating_supply || 0,
-        ath: md.ath?.usd || 0,
-        ath_change_percentage: md.ath_change_percentage?.usd || 0,
-        source: "CoinGecko",
-        timestamp: new Date().toISOString()
-      };
-      
-      marketCache.set(coinId, { timestamp: Date.now(), data: market });
-      return market;
-    }
-  } catch (err) {
-    console.warn("CoinGecko fetch failed:", err);
+  const headers = { "Accept": "application/json" };
+  if (apiKey) {
+    headers["x-cg-demo-api-key"] = apiKey;
   }
   
-  // Fallback synthetic telemetry if upstream is rate-limited
-  const synthPrice = norm === "btc" ? 77500 : (norm === "eth" ? 2500 : (norm === "sol" ? 175 : 10));
+  const url = \`https://api.coingecko.com/api/v3/coins/\${encodeURIComponent(coinId)}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false\`;
+  
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+      
+      if (res.ok) {
+        const data = await res.json();
+        const md = data.market_data || {};
+        
+        const market = {
+          name: data.name || symbol.toUpperCase(),
+          symbol: (data.symbol || symbol).toUpperCase(),
+          coin_id: data.id || coinId,
+          price: md.current_price?.usd || (isStable ? 1.00 : 0),
+          current_price_usd: md.current_price?.usd || (isStable ? 1.00 : 0),
+          price_change_percentage_24h: isStable ? 0.00 : (md.price_change_percentage_24h || 0),
+          price_change_percentage_7d: isStable ? 0.00 : (md.price_change_percentage_7d || 0),
+          price_change_percentage_30d: isStable ? 0.00 : (md.price_change_percentage_30d || 0),
+          total_volume: md.total_volume?.usd || (isStable ? 25000000000 : 0),
+          market_cap: md.market_cap?.usd || (isStable ? 50000000000 : 0),
+          high_24h: md.high_24h?.usd || (isStable ? 1.001 : (md.current_price?.usd || 0)),
+          low_24h: md.low_24h?.usd || (isStable ? 0.999 : (md.current_price?.usd || 0)),
+          circulating_supply: md.circulating_supply || (isStable ? 50000000000 : 0),
+          ath: md.ath?.usd || (isStable ? 1.05 : 0),
+          ath_change_percentage: isStable ? 0.0 : (md.ath_change_percentage?.usd || 0),
+          source: "CoinGecko",
+          timestamp: new Date().toISOString()
+        };
+        
+        marketCache.set(coinId, market);
+        return market;
+      }
+      
+      if (res.status === 429) {
+        const retryAfterHeader = res.headers.get("Retry-After");
+        let delayMs = 1000 * Math.pow(2, attempt - 1) + Math.random() * 500;
+        if (retryAfterHeader) {
+          const parsed = parseFloat(retryAfterHeader);
+          if (!isNaN(parsed) && parsed > 0 && parsed <= 5) {
+            delayMs = (parsed * 1000) + Math.random() * 500;
+          }
+        }
+        if (attempt < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, delayMs));
+          continue;
+        }
+      }
+    } catch (err) {
+      if (attempt < MAX_RETRIES) {
+        const delayMs = 500 * Math.pow(2, attempt - 1) + Math.random() * 300;
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+  }
+  
+  // Deterministic fallback snapshot if provider is exhausted
+  const synthPrice = isStable ? 1.00 : (norm === "btc" ? 77500 : (norm === "eth" ? 2500 : (norm === "sol" ? 175 : 10)));
   const fallback = {
     name: symbol.toUpperCase(),
     symbol: symbol.toUpperCase(),
     coin_id: coinId,
     price: synthPrice,
     current_price_usd: synthPrice,
-    price_change_percentage_24h: 1.25,
-    price_change_percentage_7d: 3.5,
-    price_change_percentage_30d: 8.2,
-    total_volume: synthPrice * 150000,
-    market_cap: synthPrice * 19000000,
-    high_24h: synthPrice * 1.03,
-    low_24h: synthPrice * 0.98,
-    circulating_supply: 19000000,
-    ath: synthPrice * 1.3,
-    ath_change_percentage: -23.0,
+    price_change_percentage_24h: isStable ? 0.00 : 1.25,
+    price_change_percentage_7d: isStable ? 0.00 : 3.5,
+    price_change_percentage_30d: isStable ? 0.00 : 8.2,
+    total_volume: isStable ? 25000000000 : synthPrice * 150000,
+    market_cap: isStable ? 50000000000 : synthPrice * 19000000,
+    high_24h: isStable ? 1.001 : synthPrice * 1.03,
+    low_24h: isStable ? 0.999 : synthPrice * 0.98,
+    circulating_supply: isStable ? 50000000000 : 19000000,
+    ath: isStable ? 1.05 : synthPrice * 1.3,
+    ath_change_percentage: isStable ? 0.0 : -23.0,
     source: "CoinGecko (Edge Snapshot)",
     timestamp: new Date().toISOString()
   };
@@ -290,7 +457,7 @@ async function fetchCoinGeckoMarket(symbol, apiKey) {
 async function fetchGoPlusSecurity(chainId, contractAddress) {
   if (!chainId || !contractAddress) {
     return {
-      status: "N/A",
+      status: "UNAUDITED",
       label: "Not Checked",
       is_honeypot: false,
       buy_tax: 0,
@@ -298,16 +465,34 @@ async function fetchGoPlusSecurity(chainId, contractAddress) {
       is_blacklisted: false,
       is_mintable: false,
       owner_privileges: false,
+      is_open_source: true,
       red_flags: []
     };
   }
   
   try {
     const url = \`https://api.gopluslabs.io/api/v1/token_security/\${encodeURIComponent(chainId)}?contract_addresses=\${encodeURIComponent(contractAddress)}\`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (res.ok) {
       const data = await res.json();
-      const result = data.result?.[contractAddress.toLowerCase()] || {};
+      const addrKey = contractAddress.toLowerCase();
+      const result = data.result?.[addrKey];
+      
+      // If result is missing or empty, do NOT falsely classify as clean
+      if (!result || Object.keys(result).length === 0) {
+        return {
+          status: "UNVERIFIED",
+          label: "Contract Not Found",
+          is_honeypot: false,
+          buy_tax: 0,
+          sell_tax: 0,
+          is_blacklisted: false,
+          is_mintable: false,
+          owner_privileges: false,
+          is_open_source: false,
+          red_flags: ["Smart contract security audit not found on target chain. Bytecode unverified."]
+        };
+      }
       
       const flags = [];
       const isHoneypot = result.is_honeypot === "1";
@@ -327,15 +512,41 @@ async function fetchGoPlusSecurity(chainId, contractAddress) {
       const canTakeBack = result.can_take_back_ownership === "1";
       if (canTakeBack) flags.push("Owner can reclaim ownership after renouncement");
       
+      const isOpenSource = result.is_open_source === "1";
+      if (!isOpenSource) flags.push("Unverified bytecode: source code not verified on block explorer");
+      
+      const hiddenOwner = result.hidden_owner === "1";
+      if (hiddenOwner) flags.push("Hidden owner function detected in bytecode");
+      
+      const selfDestruct = result.selfdestruct === "1";
+      if (selfDestruct) flags.push("Self-destruct mechanism detected in contract");
+      
+      const cannotSellAll = result.cannot_sell_all === "1";
+      if (cannotSellAll) flags.push("Balance restriction: holder cannot sell full balance");
+      
+      let status = "AUDITED";
+      let label = "Clean";
+      if (isHoneypot) {
+        status = "CRITICAL VULNERABILITY";
+        label = "Malicious";
+      } else if (!isOpenSource || hiddenOwner || selfDestruct) {
+        status = "CRITICAL VULNERABILITY";
+        label = "High Risk Contract";
+      } else if (flags.length > 0) {
+        status = "WARNING";
+        label = "Elevated Risk";
+      }
+      
       return {
-        status: isHoneypot ? "CRITICAL VULNERABILITY" : (flags.length > 0 ? "WARNING" : "AUDITED"),
-        label: isHoneypot ? "Malicious" : (flags.length > 0 ? "Elevated Risk" : "Clean"),
+        status,
+        label,
         is_honeypot: isHoneypot,
         buy_tax: buyTax,
         sell_tax: sellTax,
         is_blacklisted: isBlacklisted,
         is_mintable: isMintable,
         owner_privileges: canTakeBack || result.owner_change_balance === "1",
+        is_open_source: isOpenSource,
         red_flags: flags,
         chain_id: chainId,
         contract_address: contractAddress
@@ -354,6 +565,7 @@ async function fetchGoPlusSecurity(chainId, contractAddress) {
     is_blacklisted: false,
     is_mintable: false,
     owner_privileges: false,
+    is_open_source: false,
     red_flags: ["Could not retrieve security audit telemetry"]
   };
 }
@@ -362,7 +574,7 @@ async function fetchGoPlusSecurity(chainId, contractAddress) {
    QUANTITATIVE RISK ENGINE SCORING
    ============================================================ */
 
-function computeRiskReport(symbol, market, contractAudit, isNative) {
+function computeRiskReport(symbol, market, contractAudit, isL1Native, hasContractParams) {
   const norm = (symbol || "").toLowerCase();
   
   // 1. Volatility Pillar (annualized based on 24h & 30d movement)
@@ -405,15 +617,23 @@ function computeRiskReport(symbol, market, contractAudit, isNative) {
   let contractLabel = "Clean / Verified";
   let contractDetail = "Layer-1 native asset with no smart contract attack surface.";
   
-  if (!isNative) {
-    if (contractAudit.is_honeypot) {
+  if (!isL1Native) {
+    if (!hasContractParams) {
+      contractScore = 50;
+      contractLabel = "Not Audited (No Contract Provided)";
+      contractDetail = "Token analyzed by market symbol only. Contract address was not provided for bytecode verification.";
+    } else if (contractAudit.is_honeypot) {
       contractScore = 100;
       contractLabel = "CRITICAL HONEYPOT";
       contractDetail = "Honeypot logic verified in bytecode. Capital cannot be withdrawn.";
+    } else if (contractAudit.status === "UNVERIFIED") {
+      contractScore = 70;
+      contractLabel = contractAudit.label || "Unverified Bytecode";
+      contractDetail = contractAudit.red_flags.join("; ") || "Contract not verified on target chain.";
     } else if (contractAudit.buy_tax > 10 || contractAudit.sell_tax > 10) {
       contractScore = 82;
       contractLabel = "High Tax Extraction";
-      contractDetail = \`High trading taxes (\${contractAudit.buy_tax}% buy / \${contractAudit.sell_tax}% sell).\`;
+      contractDetail = \`High trading taxes (\${contractAudit.buy_tax.toFixed(1)}% buy / \${contractAudit.sell_tax.toFixed(1)}% sell).\`;
     } else if (contractAudit.red_flags.length > 0) {
       contractScore = 65;
       contractLabel = "Elevated Security Risk";
@@ -425,7 +645,7 @@ function computeRiskReport(symbol, market, contractAudit, isNative) {
     }
   }
   
-  // 5. Composite Risk Index (Weighted Matrix)
+  // 5. Composite Risk Index (Normalized Weights: 0.30 + 0.25 + 0.20 + 0.25 = 1.00)
   const compositeScore = Math.round(
     (volScore * 0.30) +
     (liqScore * 0.25) +
@@ -542,10 +762,15 @@ Return ONLY a direct JSON object (no markdown, no backticks, no preamble) with t
 \`;
 
   try {
-    const url = \`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=\${apiKey}\`;
+    // Send API key via header rather than URL query parameter to avoid log leakage
+    const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      },
+      signal: AbortSignal.timeout(8000),
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: "application/json" }
@@ -557,7 +782,11 @@ Return ONLY a direct JSON object (no markdown, no backticks, no preamble) with t
       const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (rawText) {
         const parsed = JSON.parse(rawText.replace(/\`\`\`json/g, "").replace(/\`\`\`/g, "").trim());
-        return { ...parsed, fallback_used: false };
+        return {
+          ...parsed,
+          secondary_risk_drivers: parsed.secondary_risk_drivers || [],
+          fallback_used: false
+        };
       }
     }
   } catch (err) {
@@ -599,18 +828,68 @@ function buildFallbackNarrative(symbol, quant, market) {
 
 async function assembleFullReport(symbol, chainId, contractAddress, env) {
   const norm = (symbol || "BTC").trim().toUpperCase();
-  const isNative = L1_NATIVES.has(norm.toLowerCase()) || (!chainId && !contractAddress);
+  const isL1Native = L1_NATIVES.has(norm.toLowerCase());
+  const hasContractParams = Boolean(chainId && contractAddress);
   
   const apiKey = env.COINGECKO_API_KEY || "";
   const geminiKey = env.GEMINI_API_KEY || "";
   
   const [market, contractAudit] = await Promise.all([
     fetchCoinGeckoMarket(norm, apiKey),
-    isNative ? Promise.resolve({ red_flags: [] }) : fetchGoPlusSecurity(chainId, contractAddress)
+    (isL1Native || !hasContractParams)
+      ? Promise.resolve({
+          status: isL1Native ? "verified" : "UNAUDITED",
+          label: isL1Native ? "Clean" : "Not Audited (No Contract Provided)",
+          is_honeypot: false,
+          buy_tax: 0,
+          sell_tax: 0,
+          is_blacklisted: false,
+          is_mintable: false,
+          owner_privileges: false,
+          red_flags: isL1Native ? [] : ["No contract address provided for security audit."]
+        })
+      : fetchGoPlusSecurity(chainId, contractAddress)
   ]);
   
-  const quant = computeRiskReport(norm, market, contractAudit, isNative);
+  const quant = computeRiskReport(norm, market, contractAudit, isL1Native, hasContractParams);
   const ai = await generateGeminiReport(norm, quant, market, contractAudit, geminiKey);
+  
+  // Dynamic Data Quality Completeness Calculation
+  const missingSignals = [];
+  let availableSignalWeight = 0;
+  
+  if (market.source === "CoinGecko") {
+    availableSignalWeight += 35;
+  } else {
+    availableSignalWeight += 20;
+    missingSignals.push("Real-time live market API (Edge snapshot fallback used)");
+  }
+  
+  if (market.market_cap > 0 && market.total_volume > 0) {
+    availableSignalWeight += 25;
+  } else {
+    missingSignals.push("Complete liquidity / market-cap data");
+  }
+  
+  if (isL1Native) {
+    availableSignalWeight += 25;
+  } else if (hasContractParams && contractAudit.status === "AUDITED") {
+    availableSignalWeight += 25;
+  } else if (hasContractParams && contractAudit.status !== "UNVERIFIED") {
+    availableSignalWeight += 20;
+  } else {
+    availableSignalWeight += 10;
+    missingSignals.push(hasContractParams ? "Verified contract bytecode audit" : "Contract address for security audit");
+  }
+  
+  if (!ai.fallback_used) {
+    availableSignalWeight += 15;
+  } else {
+    availableSignalWeight += 10;
+    missingSignals.push("AI generative narrative synthesis (deterministic model used)");
+  }
+  
+  const completenessScore = clamp(availableSignalWeight, 20, 100);
   
   const reportId = "rep_" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
   
@@ -636,7 +915,7 @@ async function assembleFullReport(symbol, chainId, contractAddress, env) {
       label: quant.riskLabel,
       severity: quant.riskLabel,
       confidence: ai.confidence || 90,
-      partial_data: false,
+      partial_data: missingSignals.length > 0,
       pillars: {
         volatility: {
           score: quant.volScore,
@@ -669,12 +948,6 @@ async function assembleFullReport(symbol, chainId, contractAddress, env) {
           is_mintable: Boolean(contractAudit.is_mintable),
           owner_privileges: Boolean(contractAudit.owner_privileges),
           detail: quant.contractDetail
-        },
-        leverage: {
-          score: 45,
-          risk_score: 45,
-          label: "Moderate Risk",
-          detail: "Derivatives open interest within stable historical bounds."
         }
       }
     },
@@ -683,23 +956,24 @@ async function assembleFullReport(symbol, chainId, contractAddress, env) {
       scenarios: quant.scenarios
     },
     security: {
-      status: isNative ? "verified" : (contractAudit.is_honeypot ? "CRITICAL VULNERABILITY" : "AUDITED"),
-      label: isNative ? "Native Asset" : (contractAudit.is_honeypot ? "Malicious" : "Clean"),
+      status: isL1Native ? "verified" : (hasContractParams ? (contractAudit.is_honeypot ? "CRITICAL VULNERABILITY" : (contractAudit.red_flags.length > 0 ? "WARNING" : "AUDITED")) : "UNAUDITED"),
+      label: isL1Native ? "Native Asset" : (hasContractParams ? (contractAudit.is_honeypot ? "Malicious" : (contractAudit.red_flags.length > 0 ? "Elevated Risk" : "Clean")) : "Not Audited (No Contract Provided)"),
       red_flags: contractAudit.red_flags || [],
       chain_id: chainId || null,
       contract_address: contractAddress || null
     },
     data_quality: {
-      completeness_score: 95,
-      score: 95,
-      missing_signals: [],
-      freshness: "Real-time Edge Telemetry"
+      completeness_score: completenessScore,
+      score: completenessScore,
+      missing_signals: missingSignals,
+      freshness: market.source === "CoinGecko" ? "Real-time Edge Telemetry" : "Edge Snapshot Fallback"
     },
     ai: {
       provider: "Google Gemini 2.5 Flash",
       executive_summary: ai.executive_summary,
       risk_regime: ai.risk_regime,
       primary_risk_driver: ai.primary_risk_driver,
+      secondary_risk_drivers: ai.secondary_risk_drivers || [],
       what_changed: ai.what_changed,
       what_matters_now: ai.what_matters_now,
       watch_next: ai.watch_next,
@@ -725,11 +999,17 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
-    const secret = env.JWT_SECRET || env.JWT_SECRET_KEY || "institutional_crypto_secret";
+    
+    // Validate JWT Secret from environment (never fall back to public default string)
+    const secret = env.JWT_SECRET || env.JWT_SECRET_KEY;
+    if (!secret && path.startsWith("/api/")) {
+      console.error("FATAL: JWT_SECRET or JWT_SECRET_KEY environment variable is not configured.");
+      return jsonResponse({ success: false, error: "Server authentication misconfiguration." }, 500, request);
+    }
     
     // Handle CORS pre-flight
     if (method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders() });
+      return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
     
     // Correlation ID
@@ -753,7 +1033,7 @@ export default {
         market_data_provider: "CoinGecko",
         analysis_workers: 5,
         analysis_job_timeout_seconds: 150
-      }, 200, { "X-Request-ID": requestId });
+      }, 200, request, { "X-Request-ID": requestId });
     }
     
     /* ------------------------------------------------------------
@@ -762,7 +1042,7 @@ export default {
     if (path.startsWith("/api/market/")) {
       const symbol = decodeURIComponent(path.replace("/api/market/", "")).trim();
       if (!symbol) {
-        return jsonResponse({ success: false, error: "Token symbol required" }, 400);
+        return jsonResponse({ success: false, error: "Token symbol required." }, 400, request);
       }
       
       const apiKey = env.COINGECKO_API_KEY || "";
@@ -771,7 +1051,7 @@ export default {
         success: true,
         symbol: symbol.toUpperCase(),
         market
-      }, 200, { "X-Request-ID": requestId });
+      }, 200, request, { "X-Request-ID": requestId });
     }
     
     /* ------------------------------------------------------------
@@ -782,29 +1062,37 @@ export default {
         const body = await request.json();
         const email = (body.email || "").trim().toLowerCase();
         const name = (body.name || body.username || email.split("@")[0] || "Trader").trim();
-        const password = body.password || "";
+        const password = typeof body.password === "string" ? body.password : "";
         
         if (!email || !email.includes("@")) {
-          return jsonResponse({ success: false, error: "Enter a valid email address." }, 400);
+          return jsonResponse({ success: false, error: "Enter a valid email address." }, 400, request);
         }
         if (password.length < 6) {
-          return jsonResponse({ success: false, error: "Password must be at least 6 characters." }, 400);
+          return jsonResponse({ success: false, error: "Password must be at least 6 characters." }, 400, request);
         }
         
+        // Prevent duplicate accounts
+        if (usersStore.has(email)) {
+          return jsonResponse({ success: false, error: "An account with this email already exists." }, 409, request);
+        }
+        
+        const passwordHash = await hashPassword(password);
+        
         const user = {
-          id: "usr_" + crypto.randomUUID().substring(0, 12),
+          id: "usr_" + crypto.randomUUID().replace(/-/g, "").substring(0, 12),
           email,
           name,
           picture: null,
+          password_hash: passwordHash,
           created_at: new Date().toISOString()
         };
         usersStore.set(email, user);
         usersStore.set(user.id, user);
         
         const token = await signJwt({ id: user.id, email: user.email, name: user.name }, secret);
-        return jsonResponse({ success: true, token, user }, 200, { "X-Request-ID": requestId });
+        return jsonResponse({ success: true, token, user: sanitizeUser(user) }, 200, request, { "X-Request-ID": requestId });
       } catch (err) {
-        return jsonResponse({ success: false, error: "Invalid signup payload." }, 400);
+        return jsonResponse({ success: false, error: "Invalid signup payload." }, 400, request);
       }
     }
     
@@ -812,41 +1100,40 @@ export default {
       try {
         const body = await request.json();
         const email = (body.email || "").trim().toLowerCase();
-        const password = body.password || "";
+        const password = typeof body.password === "string" ? body.password : "";
         
         if (!email || !password) {
-          return jsonResponse({ success: false, error: "Email and password are required." }, 400);
+          return jsonResponse({ success: false, error: "Email and password are required." }, 400, request);
         }
         
-        let user = usersStore.get(email);
-        if (!user) {
-          // Provision authenticated profile seamlessly
-          user = {
-            id: "usr_" + crypto.randomUUID().substring(0, 12),
-            email,
-            name: email.split("@")[0] || "Institutional Analyst",
-            picture: null,
-            created_at: new Date().toISOString()
-          };
-          usersStore.set(email, user);
-          usersStore.set(user.id, user);
+        const user = usersStore.get(email);
+        if (!user || !user.password_hash) {
+          return jsonResponse({ success: false, error: "Invalid email or password." }, 401, request);
+        }
+        
+        const passwordValid = await verifyPassword(password, user.password_hash);
+        if (!passwordValid) {
+          return jsonResponse({ success: false, error: "Invalid email or password." }, 401, request);
         }
         
         const token = await signJwt({ id: user.id, email: user.email, name: user.name }, secret);
-        return jsonResponse({ success: true, token, user }, 200, { "X-Request-ID": requestId });
+        return jsonResponse({ success: true, token, user: sanitizeUser(user) }, 200, request, { "X-Request-ID": requestId });
       } catch (err) {
-        return jsonResponse({ success: false, error: "Invalid login payload." }, 400);
+        return jsonResponse({ success: false, error: "Invalid login payload." }, 400, request);
       }
     }
     
     if (path === "/api/auth/me") {
       const userPayload = await extractBearerUser(request, secret);
-      const user = userPayload ? (usersStore.get(userPayload.id) || userPayload) : DEFAULT_USER;
-      return jsonResponse({ success: true, user }, 200, { "X-Request-ID": requestId });
+      if (!userPayload) {
+        return jsonResponse({ success: false, error: "Authentication required." }, 401, request);
+      }
+      const user = usersStore.get(userPayload.id) || usersStore.get(userPayload.email) || userPayload;
+      return jsonResponse({ success: true, user: sanitizeUser(user) }, 200, request, { "X-Request-ID": requestId });
     }
     
     if (path === "/api/auth/logout" && method === "POST") {
-      return jsonResponse({ success: true, message: "Logged out successfully." }, 200);
+      return jsonResponse({ success: true, message: "Logged out successfully." }, 200, request);
     }
     
     if (path === "/api/auth/google") {
@@ -855,16 +1142,49 @@ export default {
       if (!clientId) {
         return Response.redirect(new URL("/?error=google_not_configured", request.url), 302);
       }
+      
+      // Generate cryptographically random state nonce for CSRF protection
+      const stateNonce = crypto.randomUUID().replace(/-/g, "");
+      oauthStateStore.set(stateNonce, Date.now());
+      
       const callbackUrl = \`\${url.origin}/api/auth/google/callback\`;
-      const authUrl = \`https://accounts.google.com/o/oauth2/v2/auth?client_id=\${encodeURIComponent(clientId)}&redirect_uri=\${encodeURIComponent(callbackUrl)}&response_type=code&scope=openid%20email%20profile&access_type=offline&prompt=consent\`;
-      return Response.redirect(authUrl, 302);
+      const authUrl = \`https://accounts.google.com/o/oauth2/v2/auth?client_id=\${encodeURIComponent(clientId)}&redirect_uri=\${encodeURIComponent(callbackUrl)}&response_type=code&scope=openid%20email%20profile&access_type=offline&prompt=consent&state=\${encodeURIComponent(stateNonce)}\`;
+      
+      return new Response(null, {
+        status: 302,
+        headers: {
+          "Location": authUrl,
+          "Set-Cookie": \`oauth_state=\${stateNonce}; Path=/api/auth/google; HttpOnly; SameSite=Lax; Max-Age=600; Secure\`
+        }
+      });
     }
     
     if (path === "/api/auth/google/callback") {
       const code = url.searchParams.get("code");
+      const incomingState = url.searchParams.get("state");
+      
+      // Verify CSRF state token
+      const cookieHeader = request.headers.get("Cookie") || "";
+      const stateCookieMatch = cookieHeader.match(/oauth_state=([a-zA-Z0-9]+)/);
+      const cookieState = stateCookieMatch ? stateCookieMatch[1] : null;
+      
+      const isStateValid = incomingState && (
+        (cookieState && incomingState === cookieState) ||
+        oauthStateStore.has(incomingState)
+      );
+      
+      if (!isStateValid) {
+        console.warn("Google OAuth CSRF validation failed");
+        return Response.redirect(new URL("/?error=oauth_csrf_detected", request.url), 302);
+      }
+      if (incomingState) {
+        oauthStateStore.delete(incomingState);
+      }
+      
       if (!code) {
         return Response.redirect(new URL("/?error=google_auth_failed", request.url), 302);
       }
+      
       const rawClientId = env.GOOGLE_CLIENT_ID || "";
       const clientId = (rawClientId || "").trim();
       const rawSecret = env.GOOGLE_CLIENT_SECRET || "";
@@ -875,6 +1195,7 @@ export default {
         const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          signal: AbortSignal.timeout(8000),
           body: new URLSearchParams({
             code,
             client_id: clientId,
@@ -903,7 +1224,8 @@ export default {
         const accessToken = tokenData.access_token;
         
         const userinfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-          headers: { "Authorization": \`Bearer \${accessToken}\` }
+          headers: { "Authorization": \`Bearer \${accessToken}\` },
+          signal: AbortSignal.timeout(8000)
         });
         
         if (!userinfoRes.ok) {
@@ -911,6 +1233,12 @@ export default {
         }
         
         const profile = await userinfoRes.json();
+        
+        // Enforce verified Google email
+        if (!profile.email_verified && profile.email_verified !== "true") {
+          return Response.redirect(new URL("/?error=google_email_not_verified", request.url), 302);
+        }
+        
         const googleId = profile.sub;
         const email = profile.email;
         const name = profile.name || email.split("@")[0] || "Google Trader";
@@ -919,7 +1247,7 @@ export default {
         let user = usersStore.get(email);
         if (!user) {
           user = {
-            id: "usr_" + crypto.randomUUID().substring(0, 12),
+            id: "usr_" + crypto.randomUUID().replace(/-/g, "").substring(0, 12),
             email,
             name,
             picture,
@@ -935,7 +1263,15 @@ export default {
         usersStore.set(user.id, user);
         
         const jwtToken = await signJwt({ id: user.id, email: user.email, name: user.name }, secret);
-        return Response.redirect(new URL(\`/dashboard?token=\${encodeURIComponent(jwtToken)}\`, request.url), 302);
+        
+        // Return session token in URL fragment (#token=...) to avoid Referer header leakage
+        return new Response(null, {
+          status: 302,
+          headers: {
+            "Location": \`\${url.origin}/dashboard#token=\${encodeURIComponent(jwtToken)}\`,
+            "Set-Cookie": "oauth_state=; Path=/api/auth/google; Max-Age=0; HttpOnly; SameSite=Lax; Secure"
+          }
+        });
       } catch (err) {
         console.error("OAuth callback error:", err);
         return Response.redirect(new URL("/?error=google_auth_failed", request.url), 302);
@@ -945,23 +1281,33 @@ export default {
     /* ------------------------------------------------------------
        4. ASYNC RISK ANALYSIS PIPELINE
        ------------------------------------------------------------ */
-    if (path === "/api/analyze/start" && method === "POST") {
+    if ((path === "/api/analyze/start" || path === "/api/risk/start") && method === "POST") {
       try {
+        const userPayload = await extractBearerUser(request, secret);
+        if (!userPayload) {
+          return jsonResponse({ success: false, error: "Authentication required." }, 401, request);
+        }
+        
         const body = await request.json();
-        const rawSymbol = body.token_symbol || body.symbol || "BTC";
-        const chainId = body.chain_id || body.chain || "";
-        const contractAddress = body.contract_address || "";
+        let rawSymbol = (typeof body.token_symbol === "string" ? body.token_symbol : null) ||
+                        (typeof body.symbol === "string" ? body.symbol : null);
+        if (!rawSymbol || !rawSymbol.trim()) {
+          rawSymbol = "BTC";
+        }
         const symbol = rawSymbol.trim().toUpperCase();
+        const chainId = typeof body.chain_id === "string" ? body.chain_id : (typeof body.chain === "string" ? body.chain : "");
+        const contractAddress = typeof body.contract_address === "string" ? body.contract_address : "";
         
-        // Deterministic multi-region edge job ID
-        const jobId = \`job_\${symbol}_\${Date.now()}_\${crypto.randomUUID().replace(/-/g, "").substring(0, 8)}\`;
+        // Encode parameters into jobId to guarantee no telemetry loss across Anycast edge isolates
+        const encodedChain = chainId ? encodeURIComponent(chainId) : "none";
+        const encodedContract = contractAddress ? encodeURIComponent(contractAddress) : "none";
+        const jobId = \`job_\${symbol}_\${encodedChain}_\${encodedContract}_\${Date.now()}_\${crypto.randomUUID().replace(/-/g, "").substring(0, 8)}\`;
         
-        // Assemble report directly to eliminate anycast race conditions
+        // Assemble report directly
         const report = await assembleFullReport(symbol, chainId, contractAddress, env);
         
-        // Hydrate user history
-        const userPayload = await extractBearerUser(request, secret);
-        const userId = userPayload?.id || DEFAULT_USER.id;
+        // Persist report to authenticated user history
+        const userId = userPayload.id;
         const userHistory = historyStore.get(userId) || [];
         userHistory.unshift({
           id: report.id,
@@ -994,21 +1340,28 @@ export default {
           success: true,
           job_id: jobId,
           job: completedJob
-        }, 202, { "X-Request-ID": requestId });
+        }, 202, request, { "X-Request-ID": requestId });
       } catch (err) {
-        return jsonResponse({ success: false, error: "Invalid analysis request." }, 400);
+        return jsonResponse({ success: false, error: "Invalid analysis request." }, 400, request);
       }
     }
     
-    if (path.startsWith("/api/analyze/status/")) {
-      const jobId = decodeURIComponent(path.replace("/api/analyze/status/", "")).trim();
+    if ((path.startsWith("/api/analyze/status/") || path.startsWith("/api/risk/job/") || path.startsWith("/api/risk/status/")) && method === "GET") {
+      let jobId = "";
+      if (path.startsWith("/api/analyze/status/")) jobId = decodeURIComponent(path.replace("/api/analyze/status/", "")).trim();
+      else if (path.startsWith("/api/risk/job/")) jobId = decodeURIComponent(path.replace("/api/risk/job/", "")).trim();
+      else jobId = decodeURIComponent(path.replace("/api/risk/status/", "")).trim();
+      
       let job = jobsStore.get(jobId);
       
-      // Global multi-region edge fallback: if routed to another data center isolate, synthesize on-demand
+      // Global multi-region edge fallback: if routed to another data center isolate, synthesize with full parameters
       if (!job) {
         const parts = jobId.split("_");
         const fallbackSymbol = (parts.length >= 2 && parts[1]) ? parts[1].toUpperCase() : "BTC";
-        const report = await assembleFullReport(fallbackSymbol, "", "", env);
+        const fallbackChain = (parts.length >= 4 && parts[2] !== "none") ? decodeURIComponent(parts[2]) : "";
+        const fallbackContract = (parts.length >= 4 && parts[3] !== "none") ? decodeURIComponent(parts[3]) : "";
+        
+        const report = await assembleFullReport(fallbackSymbol, fallbackChain, fallbackContract, env);
         job = {
           id: jobId,
           token_symbol: fallbackSymbol,
@@ -1026,9 +1379,9 @@ export default {
       }
       
       const userPayload = await extractBearerUser(request, secret);
-      const userId = userPayload?.id || DEFAULT_USER.id;
-      const history = historyStore.get(userId) || [];
-      const user = userPayload ? (usersStore.get(userPayload.id) || userPayload) : DEFAULT_USER;
+      const userId = userPayload?.id || null;
+      const history = userId ? (historyStore.get(userId) || []) : [];
+      const user = userPayload ? (usersStore.get(userPayload.id) || userPayload) : null;
       
       return jsonResponse({
         success: true,
@@ -1036,28 +1389,37 @@ export default {
         report: job.report || null,
         latest: job.report || null,
         history,
-        user,
+        user: sanitizeUser(user),
         analysis: job.report ? {
           id: job.report.id,
           token_symbol: job.token_symbol,
           report: job.report,
           created_at: job.report.created_at
         } : null
-      }, 200, { "X-Request-ID": requestId });
+      }, 200, request, { "X-Request-ID": requestId });
     }
     
-    if (path === "/api/analyze" && method === "POST") {
+    if ((path === "/api/analyze" || path === "/api/risk/analyze" || path === "/api/risk") && method === "POST") {
       try {
+        const userPayload = await extractBearerUser(request, secret);
+        if (!userPayload) {
+          return jsonResponse({ success: false, error: "Authentication required." }, 401, request);
+        }
+        
         const body = await request.json();
-        const symbol = (body.token_symbol || body.symbol || "BTC").trim().toUpperCase();
-        const chainId = body.chain_id || body.chain || "";
-        const contractAddress = body.contract_address || "";
+        let rawSymbol = (typeof body.token_symbol === "string" ? body.token_symbol : null) ||
+                        (typeof body.symbol === "string" ? body.symbol : null);
+        if (!rawSymbol || !rawSymbol.trim()) {
+          rawSymbol = "BTC";
+        }
+        const symbol = rawSymbol.trim().toUpperCase();
+        const chainId = typeof body.chain_id === "string" ? body.chain_id : (typeof body.chain === "string" ? body.chain : "");
+        const contractAddress = typeof body.contract_address === "string" ? body.contract_address : "";
         
         const report = await assembleFullReport(symbol, chainId, contractAddress, env);
         
-        const userPayload = await extractBearerUser(request, secret);
-        const userId = userPayload?.id || DEFAULT_USER.id;
-        const user = userPayload ? (usersStore.get(userPayload.id) || userPayload) : DEFAULT_USER;
+        const userId = userPayload.id;
+        const user = usersStore.get(userId) || userPayload;
         
         const userHistory = historyStore.get(userId) || [];
         userHistory.unshift({
@@ -1069,6 +1431,7 @@ export default {
           market: report.market,
           report: report
         });
+        if (userHistory.length > 50) userHistory.pop();
         historyStore.set(userId, userHistory);
         
         return jsonResponse({
@@ -1081,24 +1444,28 @@ export default {
           },
           latest: report,
           history: userHistory,
-          user: user
-        }, 200, { "X-Request-ID": requestId });
+          user: sanitizeUser(user)
+        }, 200, request, { "X-Request-ID": requestId });
       } catch (err) {
-        return jsonResponse({ success: false, error: "Analysis failed." }, 500);
+        return jsonResponse({ success: false, error: "Analysis failed." }, 500, request);
       }
     }
     
     /* ------------------------------------------------------------
        5. DASHBOARD & HISTORY MANAGEMENT
        ------------------------------------------------------------ */
-    if (path === "/api/dashboard") {
+    if (path === "/api/dashboard" && method === "GET") {
       const userPayload = await extractBearerUser(request, secret);
-      const userId = userPayload?.id || DEFAULT_USER.id;
-      const user = userPayload ? (usersStore.get(userPayload.id) || userPayload) : DEFAULT_USER;
+      if (!userPayload) {
+        return jsonResponse({ success: false, error: "Authentication required." }, 401, request);
+      }
+      
+      const userId = userPayload.id;
+      const user = usersStore.get(userId) || userPayload;
       
       let userHistory = historyStore.get(userId);
       if (!userHistory || userHistory.length === 0) {
-        // Pre-populate with initial institutional BTC report
+        // Pre-populate with initial institutional BTC report for new authenticated session
         const initialReport = await assembleFullReport("BTC", null, null, env);
         userHistory = [{
           id: initialReport.id,
@@ -1115,50 +1482,71 @@ export default {
       const latest = userHistory[0]?.report || null;
       return jsonResponse({
         success: true,
-        user,
+        user: sanitizeUser(user),
         latest,
         history: userHistory
-      }, 200, { "X-Request-ID": requestId });
+      }, 200, request, { "X-Request-ID": requestId });
+    }
+    
+    // GET /api/history list endpoint
+    if (path === "/api/history" && method === "GET") {
+      const userPayload = await extractBearerUser(request, secret);
+      if (!userPayload) {
+        return jsonResponse({ success: false, error: "Authentication required." }, 401, request);
+      }
+      const userHistory = historyStore.get(userPayload.id) || [];
+      return jsonResponse({
+        success: true,
+        history: userHistory
+      }, 200, request, { "X-Request-ID": requestId });
     }
     
     if (path.startsWith("/api/history/") && method === "GET") {
-      const id = decodeURIComponent(path.replace("/api/history/", "")).trim();
       const userPayload = await extractBearerUser(request, secret);
-      const userId = userPayload?.id || DEFAULT_USER.id;
-      const userHistory = historyStore.get(userId) || [];
+      if (!userPayload) {
+        return jsonResponse({ success: false, error: "Authentication required." }, 401, request);
+      }
+      
+      const id = decodeURIComponent(path.replace("/api/history/", "")).trim();
+      const userHistory = historyStore.get(userPayload.id) || [];
       
       const item = userHistory.find(h => h.id === id);
       if (!item) {
-        return jsonResponse({ success: false, error: "Analysis record not found." }, 404);
+        return jsonResponse({ success: false, error: "Analysis record not found." }, 404, request);
       }
       return jsonResponse({
         success: true,
         analysis: item,
         report: item.report
-      }, 200, { "X-Request-ID": requestId });
+      }, 200, request, { "X-Request-ID": requestId });
     }
     
     if (path.startsWith("/api/history/") && method === "DELETE") {
-      const id = decodeURIComponent(path.replace("/api/history/", "")).trim();
       const userPayload = await extractBearerUser(request, secret);
-      const userId = userPayload?.id || DEFAULT_USER.id;
-      let userHistory = historyStore.get(userId) || [];
+      if (!userPayload) {
+        return jsonResponse({ success: false, error: "Authentication required." }, 401, request);
+      }
+      
+      const id = decodeURIComponent(path.replace("/api/history/", "")).trim();
+      let userHistory = historyStore.get(userPayload.id) || [];
       
       userHistory = userHistory.filter(h => h.id !== id);
-      historyStore.set(userId, userHistory);
+      historyStore.set(userPayload.id, userHistory);
       
       return jsonResponse({
         success: true,
         message: "Analysis deleted.",
         history: userHistory
-      }, 200, { "X-Request-ID": requestId });
+      }, 200, request, { "X-Request-ID": requestId });
     }
     
     if (path === "/api/history" && method === "DELETE") {
       const userPayload = await extractBearerUser(request, secret);
-      const userId = userPayload?.id || DEFAULT_USER.id;
-      historyStore.set(userId, []);
-      return jsonResponse({ success: true, deleted: true, history: [] }, 200);
+      if (!userPayload) {
+        return jsonResponse({ success: false, error: "Authentication required." }, 401, request);
+      }
+      historyStore.set(userPayload.id, []);
+      return jsonResponse({ success: true, deleted: true, history: [] }, 200, request);
     }
     
     /* ------------------------------------------------------------
@@ -1168,8 +1556,6 @@ export default {
     return env.ASSETS.fetch(request);
   }
 };
-
-
 `;
 
 const distWorkerPath = path.join(__dirname, 'dist', '_worker.js');

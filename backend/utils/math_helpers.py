@@ -1072,6 +1072,23 @@ def calculate_beta(
 # ---------------------------------------------------------------------------
 
 
+def calculate_turnover(
+    volume_24h: Any,
+    market_cap: Any,
+) -> Optional[float]:
+    """Calculate liquidity turnover ratio (volume / market_cap).
+    Guards strictly against division by zero: if not market_cap or market_cap <= 0: return None.
+    """
+    vol = _finite_float(volume_24h)
+    mcap = _finite_float(market_cap)
+    if not mcap or mcap <= 0:
+        return None
+    if vol is None or vol < 0:
+        return None
+    ratio = vol / mcap
+    return ratio if math.isfinite(ratio) else None
+
+
 def calculate_liquidity_metrics(
     market: dict,
 ) -> dict:
@@ -1102,12 +1119,9 @@ def calculate_liquidity_metrics(
 
         turnover = None
 
-        if (
-            volume is not None
-            and volume >= 0
-            and market_cap is not None
-            and market_cap > 0
-        ):
+        if not market_cap or market_cap <= 0:
+            turnover = None
+        elif volume is not None and volume >= 0:
             turnover_value = (volume / market_cap) * 100.0
 
             if math.isfinite(turnover_value):
