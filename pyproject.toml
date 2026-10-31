@@ -27,3 +27,7 @@ target-version = ['py39']
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["backend"]
+
+[tool.pyright]
+include = ["backend", "app.py"]
+extraPaths = ["backend"]
