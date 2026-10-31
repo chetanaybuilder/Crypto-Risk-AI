@@ -1,5 +1,5 @@
 # ============================================================
-# CryptoRisk AI — Root Dependency Manifest
-# Points to backend production dependencies for Render root builds.
+# CryptoRisk AI — Root Python Dependency Manifest
+# Points to backend production dependencies.
 # ============================================================
 -r backend/requirements.txt

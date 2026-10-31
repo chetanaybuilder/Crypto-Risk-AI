@@ -1,8 +1,8 @@
 """
-Root Application Gateway Bridge.
+CryptoRisk AI — Local Development Gateway.
 
-Provides zero-downtime deployment compatibility for WSGI hosts (e.g. Render, Heroku)
-configured to launch from the repository root via 'gunicorn app:app'.
+Serves as the local development launcher from repository root:
+    python app.py
 """
 
 import sys
