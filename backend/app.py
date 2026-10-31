@@ -51,9 +51,12 @@ app.secret_key = SECRET_KEY
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 31536000
 app.config["COMPRESS_ALGORITHM"] = ["br", "gzip"]
 
-from flask_compress import Compress
+try:
+    from flask_compress import Compress
 
-Compress(app)
+    Compress(app)
+except ImportError:
+    pass
 
 # Register Google OAuth 2.0 OpenID Connect client
 oauth.init_app(app)
